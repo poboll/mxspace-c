@@ -69,6 +69,7 @@ jobs:
         run: |
           sh apps/core/zip-asset.sh
           mv release.zip release-linux.zip
+          unzip -l release-linux.zip | grep 'src/database/migrations/meta/_journal.json'
 
       - name: Upload release artifact
         uses: actions/upload-artifact@v7

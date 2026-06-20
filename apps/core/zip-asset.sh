@@ -6,6 +6,11 @@ cp -r ./apps/core/out ./out
 # Copy core ecosystem.config.cjs to $root/out
 cp ./apps/core/ecosystem.config.cjs out
 
+# Runtime startup verifies the PostgreSQL schema against the Drizzle migration
+# journal, so the release bundle must carry the migration files too.
+mkdir -p out/src/database
+cp -R ./apps/core/src/database/migrations out/src/database/migrations
+
 # Build the admin SPA locally and place it under out/admin.
 # The layout contract is: index.html sits at the root of the admin asset dir
 # (out/admin/index.html, out/admin/assets/..., out/admin/js/...), NOT under a dist/ subdir.
