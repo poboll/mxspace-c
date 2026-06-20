@@ -1,0 +1,98 @@
+name: Caiths Safe Deploy
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - master
+
+permissions:
+  contents: read
+
+concurrency:
+  group: caiths-safe-deploy
+  cancel-in-progress: false
+
+env:
+  REDISMS_DISABLE_POSTINSTALL: 1
+  MONGOMS_DISABLE_POSTINSTALL: 1
+
+jobs:
+  build-and-deploy:
+    if: ${{ github.repository == 'poboll/mxspace-c' }}
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: mx
+          POSTGRES_PASSWORD: mx
+          POSTGRES_DB: mx_core
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U mx -d mx_core"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js and pnpm
+        uses: ./.github/actions/setup-node
+        with:
+          node-version: '22.x'
+
+      - name: Build bundle
+        run: pnpm run bundle
+
+      - name: Smoke test bundle
+        env:
+          SNOWFLAKE_WORKER_ID: 1
+          PG_HOST: 127.0.0.1
+          PG_PORT: 5432
+          PG_USER: mx
+          PG_PASSWORD: mx
+          PG_DATABASE: mx_core
+          REDIS_HOST: 127.0.0.1
+          REDIS_PORT: 6379
+          JWT_SECRET: test-bundle-server-jwt-secret
+          MIGRATIONS_DIR: ${{ github.workspace }}/apps/core/src/database/migrations
+        run: bash scripts/workflow/test-server.sh
+
+      - name: Package release
+        run: |
+          sh apps/core/zip-asset.sh
+          mv release.zip release-linux.zip
+
+      - name: Upload release artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-linux
+          path: release-linux.zip
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Deploy to 8.218
+        env:
+          DEPLOY_HOST: ${{ secrets.CAITHS_DEPLOY_HOST }}
+          DEPLOY_PORT: ${{ secrets.CAITHS_DEPLOY_PORT }}
+          DEPLOY_USER: ${{ secrets.CAITHS_DEPLOY_USER }}
+          DEPLOY_KEY: ${{ secrets.CAITHS_DEPLOY_KEY }}
+        run: |
+          set -euo pipefail
+          DEPLOY_PORT="${DEPLOY_PORT:-22}"
+          DEPLOY_USER="${DEPLOY_USER:-root}"
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/caiths_deploy
+          chmod 600 ~/.ssh/caiths_deploy
+          ssh-keyscan -p "$DEPLOY_PORT" "$DEPLOY_HOST" >> ~/.ssh/known_hosts
+          remote_zip="/tmp/mx-core-${GITHUB_SHA}.zip"
+          scp -P "$DEPLOY_PORT" -i ~/.ssh/caiths_deploy release-linux.zip "${DEPLOY_USER}@${DEPLOY_HOST}:${remote_zip}"
+          scp -P "$DEPLOY_PORT" -i ~/.ssh/caiths_deploy scripts/caiths-safe-deploy.sh "${DEPLOY_USER}@${DEPLOY_HOST}:/root/mx-space/caiths-safe-deploy.sh"
+          ssh -p "$DEPLOY_PORT" -i ~/.ssh/caiths_deploy "${DEPLOY_USER}@${DEPLOY_HOST}" "chmod 700 /root/mx-space/caiths-safe-deploy.sh && /root/mx-space/caiths-safe-deploy.sh '${remote_zip}'"
