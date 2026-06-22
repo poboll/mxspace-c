@@ -290,6 +290,7 @@ export class AiTranslationService
                   context.signal,
                   langPush,
                   context.incrementCost,
+                  { force: payload.force },
                 ),
                 abortPromise,
               ])
@@ -350,7 +351,7 @@ export class AiTranslationService
   ) {
     this.checkAborted(context)
 
-    const { refIds, targetLanguages } = payload
+    const { force, refIds, targetLanguages } = payload
     const total = refIds.length
 
     await context.appendLog(
@@ -370,6 +371,7 @@ export class AiTranslationService
       const result = await this.createTranslationSubTask(
         refId,
         targetLanguages,
+        force,
         articleInfo,
         context.taskId,
       )
@@ -456,6 +458,7 @@ export class AiTranslationService
       const result = await this.createTranslationSubTask(
         refId,
         languages,
+        payload.force,
         articleInfo,
         context.taskId,
       )
@@ -491,12 +494,14 @@ export class AiTranslationService
   private async createTranslationSubTask(
     refId: string,
     targetLanguages: string[] | undefined,
+    force: boolean | undefined,
     articleInfo: { title: string; type: CollectionRefTypes } | undefined,
     groupId: string,
   ) {
     const taskPayload: TranslationTaskPayload = {
       refId,
       targetLanguages,
+      force,
       title: articleInfo?.title,
       refType: articleInfo?.type,
     }
@@ -719,6 +724,7 @@ export class AiTranslationService
     signal?: AbortSignal,
     push?: (event: AiStreamEvent) => Promise<void>,
     onCost?: (usd: number) => Promise<void>,
+    options?: { force?: boolean },
   ): Promise<AITranslationModel> {
     const startedAt = Date.now()
     const aiConfig = await this.configService.get('ai')
@@ -743,6 +749,7 @@ export class AiTranslationService
         signal,
         push,
         onCost,
+        options,
       )
       const translated = await result
       this.logger.log(
@@ -774,10 +781,20 @@ export class AiTranslationService
     signal?: AbortSignal,
     taskPush?: (event: AiStreamEvent) => Promise<void>,
     onCost?: (usd: number) => Promise<void>,
+    options?: { force?: boolean },
   ) {
     const content = this.toArticleContent(document)
     const sourceModified = document.modifiedAt ?? undefined
-    const key = this.buildTranslationKey(articleId, targetLang, content)
+    const key = options?.force
+      ? md5(
+          JSON.stringify({
+            feature: 'translation.force',
+            articleId,
+            targetLang,
+            nonce: Date.now(),
+          }),
+        )
+      : this.buildTranslationKey(articleId, targetLang, content)
 
     return this.aiInFlightService.runWithStream<AITranslationModel>({
       key,
@@ -1065,6 +1082,26 @@ export class AiTranslationService
       data: groupedData,
       pagination: grouped.pagination,
     }
+  }
+
+  async getTranslationCandidates() {
+    const { posts, notes, pages } =
+      await this.databaseService.findAllArticlesForTranslation()
+    const articleMap = buildRefArticleMap({ posts, notes, pages })
+    const refIds = Object.keys(articleMap)
+    const translations = await this.aiTranslationRepository.listByRefIds(refIds)
+    const countByRefId = translations.reduce(
+      (acc, translation) => {
+        acc[translation.refId] = (acc[translation.refId] || 0) + 1
+        return acc
+      },
+      {} as Record<string, number>,
+    )
+
+    return refIds.map((refId) => ({
+      article: articleMap[refId],
+      translationCount: countByRefId[refId] || 0,
+    }))
   }
 
   async updateTranslation(

@@ -7,10 +7,18 @@ import { TranslationEntryService } from '~/modules/ai/ai-translation/translation
 const createService = () => {
   const repository = createPgRepositoryMock<TranslationEntryRepository>()
   const categoryService = { findAllCategory: vi.fn().mockResolvedValue([]) }
-  const noteService = { findRecent: vi.fn().mockResolvedValue([]) }
+  const noteService = {
+    findRecent: vi.fn().mockResolvedValue([]),
+    listPaginated: vi.fn().mockResolvedValue({
+      data: [],
+      pagination: { totalPage: 1 },
+    }),
+  }
   const topicRepository = { findAll: vi.fn().mockResolvedValue([]) }
   const aiService = {}
-  const configService = {}
+  const configService = {
+    get: vi.fn(async () => ({ translationTargetLanguages: ['en'] })),
+  }
   const pipeline = {
     hset: vi.fn().mockReturnThis(),
     hdel: vi.fn().mockReturnThis(),
@@ -31,7 +39,7 @@ const createService = () => {
     configService as any,
     redisService as any,
   )
-  return { pipeline, redis, repository, service }
+  return { noteService, pipeline, redis, repository, service }
 }
 
 describe('TranslationEntryService', () => {
@@ -92,5 +100,91 @@ describe('TranslationEntryService', () => {
       'Happy',
     )
     expect(pipeline.exec).toHaveBeenCalled()
+  })
+
+  it('collects dictionary entry candidates from all visible notes', async () => {
+    const { noteService, repository, service } = createService() as any
+    noteService.listPaginated.mockResolvedValue({
+      data: [
+        { mood: '开心', weather: '晴' },
+        { mood: '开心', weather: '雨' },
+      ],
+      pagination: { totalPage: 1 },
+    })
+    repository.listByKeyPathLookupKeys.mockResolvedValue([
+      {
+        keyPath: 'note.mood',
+        lookupKey: TranslationEntryService.hashSourceText('开心'),
+        lang: 'en',
+      },
+    ])
+
+    const candidates = await service.getEntryCandidates({
+      keyPaths: ['note.mood', 'note.weather'],
+      targetLangs: ['en', 'ja'],
+    })
+
+    expect(noteService.listPaginated).toHaveBeenCalledWith(1, 100, {
+      metaOnly: true,
+      visibleOnly: true,
+    })
+    expect(candidates).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          keyPath: 'note.mood',
+          sourceText: '开心',
+          existingLanguages: ['en'],
+          missingLanguages: ['ja'],
+        }),
+        expect.objectContaining({
+          keyPath: 'note.weather',
+          sourceText: '晴',
+          missingLanguages: ['en', 'ja'],
+        }),
+      ]),
+    )
+  })
+
+  it('regenerates existing dictionary entries when forced', async () => {
+    const { noteService, repository, service } = createService() as any
+    noteService.listPaginated.mockResolvedValue({
+      data: [{ mood: '开心', weather: null }],
+      pagination: { totalPage: 1 },
+    })
+    repository.listFiltered.mockResolvedValue([
+      {
+        keyPath: 'note.mood',
+        lookupKey: TranslationEntryService.hashSourceText('开心'),
+        sourceText: '开心',
+      },
+    ])
+
+    const aiService = (service as any).aiService
+    aiService.getTranslationModel = vi.fn(async () => ({
+      generateStructured: vi.fn(async () => ({
+        output: {
+          translations: {
+            [`note.mood::${TranslationEntryService.hashSourceText('开心')}`]:
+              'happy',
+          },
+        },
+      })),
+    }))
+
+    await expect(
+      service.generateTranslations({
+        force: true,
+        keyPaths: ['note.mood'],
+        targetLangs: ['en'],
+      }),
+    ).resolves.toEqual({ created: 1, skipped: 0 })
+
+    expect(repository.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        keyPath: 'note.mood',
+        sourceText: '开心',
+        translatedText: 'happy',
+      }),
+    )
   })
 })

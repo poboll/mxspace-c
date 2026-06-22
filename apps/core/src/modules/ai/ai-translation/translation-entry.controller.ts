@@ -25,6 +25,12 @@ export class TranslationEntryController {
     return this.translationEntryService.generateTranslations(body ?? {})
   }
 
+  @Get('/candidates')
+  @Auth()
+  getEntryCandidates(@Query() query: GenerateEntriesDto) {
+    return this.translationEntryService.getEntryCandidates(query ?? {})
+  }
+
   @Get('/')
   @Auth()
   async queryEntries(@Query() query: QueryEntriesDto) {

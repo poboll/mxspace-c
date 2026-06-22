@@ -5,6 +5,7 @@ import { Injectable, Logger } from '@nestjs/common'
 import { RedisKeys } from '~/constants/cache.constant'
 import { CategoryService } from '~/modules/category/category.service'
 import { NoteService } from '~/modules/note/note.service'
+import type { NoteRow } from '~/modules/note/note.types'
 import { TopicRepository } from '~/modules/topic/topic.repository'
 import { RedisService } from '~/processors/redis/redis.service'
 import { normalizeLanguageCode } from '~/utils/lang.util'
@@ -52,6 +53,11 @@ type DictCacheEntry = Pick<
   TranslationEntryModel,
   'keyPath' | 'lang' | 'lookupKey' | 'translatedText'
 >
+
+type TranslationEntryCandidate = CollectedValue & {
+  existingLanguages: string[]
+  missingLanguages: string[]
+}
 
 @Injectable()
 export class TranslationEntryService {
@@ -242,7 +248,7 @@ export class TranslationEntryService {
       }
     }
 
-    const notes = await this.noteService.findRecent(100)
+    const notes = await this.collectAllVisibleNotes()
     const moods = [...new Set(notes.map((note) => note.mood).filter(Boolean))]
     for (const mood of moods) {
       if (mood) {
@@ -272,18 +278,72 @@ export class TranslationEntryService {
     return values
   }
 
+  private async collectAllVisibleNotes(): Promise<NoteRow[]> {
+    const notes: NoteRow[] = []
+    let page = 1
+    const size = 100
+
+    while (true) {
+      const result = await this.noteService.listPaginated(page, size, {
+        metaOnly: true,
+        visibleOnly: true,
+      })
+      notes.push(...result.data)
+      if (page >= result.pagination.totalPage) break
+      page++
+    }
+
+    return notes
+  }
+
+  async getEntryCandidates(options: {
+    keyPaths?: TranslationEntryKeyPath[]
+    targetLangs?: string[]
+  }): Promise<TranslationEntryCandidate[]> {
+    const targetLangs = await this.resolveTargetLangs(options.targetLangs)
+    let values = await this.collectSourceValues()
+    if (options.keyPaths?.length) {
+      values = values.filter((value) =>
+        options.keyPaths!.includes(value.keyPath),
+      )
+    }
+
+    if (!values.length) return []
+
+    const entries = await this.entryRepository.listByKeyPathLookupKeys(
+      values.map((value) => ({
+        keyPath: value.keyPath,
+        lookupKey: value.lookupKey,
+      })),
+    )
+    const entryLangsByKey = entries.reduce(
+      (acc, entry) => {
+        const key = `${entry.keyPath}:${entry.lookupKey}`
+        ;(acc[key] ||= new Set<string>()).add(entry.lang)
+        return acc
+      },
+      {} as Record<string, Set<string>>,
+    )
+
+    return values.map((value) => {
+      const key = `${value.keyPath}:${value.lookupKey}`
+      const existingLanguages = [...(entryLangsByKey[key] ?? new Set())]
+      return {
+        ...value,
+        existingLanguages,
+        missingLanguages: targetLangs.filter(
+          (lang) => !existingLanguages.includes(lang),
+        ),
+      }
+    })
+  }
+
   async generateTranslations(options: {
     keyPaths?: TranslationEntryKeyPath[]
     targetLangs?: string[]
+    force?: boolean
   }): Promise<{ created: number; skipped: number }> {
-    const aiConfig = await this.configService.get('ai')
-    const rawLangs = options.targetLangs?.length
-      ? options.targetLangs
-      : aiConfig.translationTargetLanguages || []
-
-    const targetLangs = rawLangs
-      .map((l) => normalizeLanguageCode(l))
-      .filter(Boolean) as string[]
+    const targetLangs = await this.resolveTargetLangs(options.targetLangs)
 
     if (!targetLangs.length) {
       return { created: 0, skipped: 0 }
@@ -303,6 +363,7 @@ export class TranslationEntryService {
       targetLangs,
       (lang) => this.entryRepository.listFiltered({ lang }),
       'Field translation failed',
+      { force: options.force },
     )
   }
 
@@ -311,11 +372,7 @@ export class TranslationEntryService {
   ): Promise<{ created: number; skipped: number }> {
     if (!values.length) return { created: 0, skipped: 0 }
 
-    const aiConfig = await this.configService.get('ai')
-    const rawLangs = aiConfig.translationTargetLanguages || []
-    const targetLangs = rawLangs
-      .map((l) => normalizeLanguageCode(l))
-      .filter(Boolean) as string[]
+    const targetLangs = await this.resolveTargetLangs()
 
     if (!targetLangs.length) return { created: 0, skipped: 0 }
 
@@ -330,6 +387,16 @@ export class TranslationEntryService {
     )
   }
 
+  private async resolveTargetLangs(targetLangs?: string[]): Promise<string[]> {
+    const aiConfig = await this.configService.get('ai')
+    const rawLangs = targetLangs?.length
+      ? targetLangs
+      : aiConfig.translationTargetLanguages || []
+    return rawLangs
+      .map((l) => normalizeLanguageCode(l))
+      .filter((lang): lang is string => Boolean(lang))
+  }
+
   private async translateValuesForLangs(
     values: CollectedValue[],
     targetLangs: string[],
@@ -339,6 +406,7 @@ export class TranslationEntryService {
       Array<Pick<TranslationEntryModel, 'keyPath' | 'lookupKey' | 'sourceText'>>
     >,
     errorLabel: string,
+    options?: { force?: boolean },
   ): Promise<{ created: number; skipped: number }> {
     let created = 0
     let skipped = 0
@@ -358,7 +426,11 @@ export class TranslationEntryService {
       for (const value of values) {
         const key = `${value.keyPath}:${value.lookupKey}`
         const existing = existingMap.get(key)
-        if (existing === undefined || existing !== value.sourceText) {
+        if (
+          options?.force ||
+          existing === undefined ||
+          existing !== value.sourceText
+        ) {
           toTranslate.push(value)
         } else {
           skipped++

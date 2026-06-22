@@ -68,8 +68,47 @@ function buildController(opts: BuildOpts = {}) {
         }),
     ),
   }
-  const controller = new AiController(configsService as any, aiService as any)
-  return { controller, configsService, aiService }
+  const aiTaskService = {
+    createSummaryAllTask: vi.fn(async () => ({
+      taskId: 'summary-task',
+      created: true,
+    })),
+    createInsightsAllTask: vi.fn(async () => ({
+      taskId: 'insights-task',
+      created: true,
+    })),
+    createTranslationAllTask: vi.fn(async () => ({
+      taskId: 'translation-task',
+      created: true,
+    })),
+  }
+  const translationEntryService = {
+    generateTranslations: vi.fn(async () => ({ created: 1, skipped: 0 })),
+  }
+  const searchService = {
+    rebuildSearchDocuments: vi.fn(async () => ({
+      total: 1,
+      created: 1,
+      updated: 0,
+      deleted: 0,
+      skipped: 0,
+    })),
+  }
+  const controller = new AiController(
+    configsService as any,
+    aiService as any,
+    aiTaskService as any,
+    translationEntryService as any,
+    searchService as any,
+  )
+  return {
+    aiService,
+    aiTaskService,
+    configsService,
+    controller,
+    searchService,
+    translationEntryService,
+  }
 }
 
 const torn: Array<() => void> = []
@@ -78,6 +117,60 @@ afterEach(() => {
 })
 
 describe('AiController test endpoints (faux)', () => {
+  it('reconciles search only when no AI feature is selected', async () => {
+    const { aiTaskService, controller, searchService } = buildController()
+
+    await expect(controller.reconcile({})).resolves.toMatchObject({
+      search: { total: 1 },
+    })
+
+    expect(searchService.rebuildSearchDocuments).toHaveBeenCalledWith()
+    expect(aiTaskService.createSummaryAllTask).not.toHaveBeenCalled()
+    expect(aiTaskService.createInsightsAllTask).not.toHaveBeenCalled()
+    expect(aiTaskService.createTranslationAllTask).not.toHaveBeenCalled()
+  })
+
+  it('reconciles search and selected AI features for DB-side changes', async () => {
+    const {
+      aiTaskService,
+      controller,
+      searchService,
+      translationEntryService,
+    } = buildController()
+
+    await expect(
+      controller.reconcile({
+        features: ['summary', 'insights', 'translation', 'translation-entries'],
+        force: true,
+        targetLanguages: ['en'],
+      }),
+    ).resolves.toMatchObject({
+      search: { total: 1 },
+      summary: { taskId: 'summary-task' },
+      insights: { taskId: 'insights-task' },
+      translation: { taskId: 'translation-task' },
+      translationEntries: { created: 1 },
+    })
+
+    expect(searchService.rebuildSearchDocuments).toHaveBeenCalledWith()
+    expect(aiTaskService.createSummaryAllTask).toHaveBeenCalledWith({
+      force: true,
+      targetLanguages: ['en'],
+    })
+    expect(aiTaskService.createInsightsAllTask).toHaveBeenCalledWith({
+      force: true,
+    })
+    expect(aiTaskService.createTranslationAllTask).toHaveBeenCalledWith({
+      force: true,
+      targetLanguages: ['en'],
+    })
+    expect(translationEntryService.generateTranslations).toHaveBeenCalledWith({
+      force: true,
+      keyPaths: undefined,
+      targetLangs: ['en'],
+    })
+  })
+
   describe('POST /ai/test (testProviderConnection)', () => {
     it('succeeds when adapter generates text via faux', async () => {
       const handle = mountFaux([fauxAssistantMessage('ok')])

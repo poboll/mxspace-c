@@ -14,6 +14,7 @@ export const GenerateEntriesSchema = z
   .object({
     keyPaths: z.array(z.enum(validKeyPaths)).optional(),
     targetLangs: z.array(z.string()).optional(),
+    force: z.boolean().optional(),
   })
   .default({})
 

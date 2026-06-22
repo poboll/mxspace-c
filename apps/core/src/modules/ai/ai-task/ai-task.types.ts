@@ -36,6 +36,7 @@ export interface SummaryAllTaskPayload {
 export interface TranslationTaskPayload {
   refId: string
   targetLanguages?: string[]
+  force?: boolean
   // Human-readable info
   title?: string
   refType?: string
@@ -44,11 +45,13 @@ export interface TranslationTaskPayload {
 export interface TranslationBatchTaskPayload {
   refIds: string[]
   targetLanguages?: string[]
+  force?: boolean
   // Human-readable info (count is derived from refIds.length)
 }
 
 export interface TranslationAllTaskPayload {
   targetLanguages?: string[]
+  force?: boolean
   // Human-readable info
   articleCount?: number
 }

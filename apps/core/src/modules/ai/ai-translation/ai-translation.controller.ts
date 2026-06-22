@@ -73,6 +73,12 @@ export class AiTranslationController {
     )
   }
 
+  @Get('/candidates')
+  @Auth()
+  getTranslationCandidates() {
+    return this.service.getTranslationCandidates()
+  }
+
   @Patch('/:id')
   @Auth()
   updateTranslation(

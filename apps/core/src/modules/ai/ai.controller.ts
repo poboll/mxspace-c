@@ -1,19 +1,31 @@
 import type { Api, Model } from '@earendil-works/pi-ai'
 import { getModels } from '@earendil-works/pi-ai'
-import { Body, Get, Logger, Param, Post, Query } from '@nestjs/common'
+import {
+  Body,
+  forwardRef,
+  Get,
+  Inject,
+  Logger,
+  Param,
+  Post,
+  Query,
+} from '@nestjs/common'
 
 import { ApiController } from '~/common/decorators/api-controller.decorator'
 import { Auth } from '~/common/decorators/auth.decorator'
 import { AppErrorCode, createAppException } from '~/common/errors'
 import { OK_DATA } from '~/common/response/envelope.types'
+import { SearchService } from '~/modules/search/search.service'
 
 import { ConfigsService } from '../configs/configs.service'
 import { AI_PROMPTS } from './ai.prompts'
-import { RegistryModelsQueryDto } from './ai.schema'
+import { ReconcileAiDto, RegistryModelsQueryDto } from './ai.schema'
 import { AiService } from './ai.service'
 import { AIProviderType } from './ai.types'
 import type { RegistryModelView } from './ai.views'
 import { AiViews } from './ai.views'
+import { AiTaskService } from './ai-task/ai-task.service'
+import { TranslationEntryService } from './ai-translation/translation-entry.service'
 import type { IModelRuntime, ModelInfo } from './runtime'
 import { createModelRuntime, createRuntimeForModelList } from './runtime'
 
@@ -61,6 +73,10 @@ export class AiController {
   constructor(
     private readonly configsService: ConfigsService,
     private readonly aiService: AiService,
+    private readonly aiTaskService: AiTaskService,
+    private readonly translationEntryService: TranslationEntryService,
+    @Inject(forwardRef(() => SearchService))
+    private readonly searchService: SearchService,
   ) {}
 
   @Get('/models')
@@ -249,6 +265,48 @@ export class AiController {
         message: error?.message || 'AI comment review test failed',
       })
     }
+  }
+
+  @Post('/reconcile')
+  @Auth()
+  async reconcile(@Body() body: ReconcileAiDto) {
+    const features = body.features ?? []
+    const result: Record<string, unknown> = {}
+
+    if (body.rebuildSearch ?? true) {
+      result.search = await this.searchService.rebuildSearchDocuments()
+    }
+
+    if (features.includes('summary')) {
+      result.summary = await this.aiTaskService.createSummaryAllTask({
+        targetLanguages: body.targetLanguages,
+        force: body.force,
+      })
+    }
+
+    if (features.includes('insights')) {
+      result.insights = await this.aiTaskService.createInsightsAllTask({
+        force: body.force,
+      })
+    }
+
+    if (features.includes('translation')) {
+      result.translation = await this.aiTaskService.createTranslationAllTask({
+        targetLanguages: body.targetLanguages,
+        force: body.force,
+      })
+    }
+
+    if (features.includes('translation-entries')) {
+      result.translationEntries =
+        await this.translationEntryService.generateTranslations({
+          keyPaths: body.translationEntryKeyPaths,
+          targetLangs: body.targetLanguages,
+          force: body.force,
+        })
+    }
+
+    return result
   }
 
   private async resolveModelListConfig(body: FetchModelsDto) {

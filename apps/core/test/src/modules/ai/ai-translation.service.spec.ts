@@ -174,6 +174,35 @@ describe('AiTranslationService', () => {
     })
   })
 
+  it('lists translation candidates even when an article has no translation rows', async () => {
+    const { databaseService, repository, service } = createService()
+    databaseService.findAllArticlesForTranslation.mockResolvedValue({
+      posts: [{ id: 'post-1', title: 'Post' }],
+      notes: [{ id: 'note-1', title: 'Note' }],
+      pages: [],
+    })
+    repository.listByRefIds.mockResolvedValue([row({ refId: 'post-1' as any })])
+
+    await expect(service.getTranslationCandidates()).resolves.toEqual([
+      {
+        article: {
+          id: 'post-1',
+          title: 'Post',
+          type: CollectionRefTypes.Post,
+        },
+        translationCount: 1,
+      },
+      {
+        article: {
+          id: 'note-1',
+          title: 'Note',
+          type: CollectionRefTypes.Note,
+        },
+        translationCount: 0,
+      },
+    ])
+  })
+
   it('updates lexical content by storing markdown text alongside content JSON', async () => {
     const { lexicalService, repository, service } = createService()
     repository.findById.mockResolvedValue(row())

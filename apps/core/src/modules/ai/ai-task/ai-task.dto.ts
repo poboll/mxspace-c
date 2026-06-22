@@ -33,6 +33,7 @@ export class CreateSummaryAllTaskDto extends createZodDto(
 export const CreateTranslationTaskSchema = z.object({
   refId: z.string(),
   targetLanguages: z.array(z.string()).optional(),
+  force: z.boolean().optional(),
 })
 
 export class CreateTranslationTaskDto extends createZodDto(
@@ -42,6 +43,7 @@ export class CreateTranslationTaskDto extends createZodDto(
 export const CreateTranslationBatchTaskSchema = z.object({
   refIds: z.array(z.string()).min(1).max(100),
   targetLanguages: z.array(z.string()).optional(),
+  force: z.boolean().optional(),
 })
 
 export class CreateTranslationBatchTaskDto extends createZodDto(
@@ -50,6 +52,7 @@ export class CreateTranslationBatchTaskDto extends createZodDto(
 
 export const CreateTranslationAllTaskSchema = z.object({
   targetLanguages: z.array(z.string()).optional(),
+  force: z.boolean().optional(),
 })
 
 export class CreateTranslationAllTaskDto extends createZodDto(
