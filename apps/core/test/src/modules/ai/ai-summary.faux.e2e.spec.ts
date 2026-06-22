@@ -86,6 +86,7 @@ function createService(runtime: PiRuntimeAdapter) {
     }),
   }
   const taskProcessor = { registerHandler: vi.fn() }
+  const taskQueueService = { createTask: vi.fn() }
   const aiTaskService = { createSummaryTask: vi.fn() }
 
   repository.findByHash.mockResolvedValue(null)
@@ -113,6 +114,7 @@ function createService(runtime: PiRuntimeAdapter) {
     aiService as any,
     aiInFlightService as any,
     taskProcessor as any,
+    taskQueueService as any,
     aiTaskService as any,
   )
   return {

@@ -24,9 +24,25 @@ export class UpdateInsightsDto extends createZodDto(UpdateInsightsSchema) {}
 
 export const CreateInsightsTaskSchema = z.object({
   refId: z.string(),
+  force: z.boolean().optional(),
 })
 export class CreateInsightsTaskDto extends createZodDto(
   CreateInsightsTaskSchema,
+) {}
+
+export const CreateInsightsBatchTaskSchema = z.object({
+  refIds: z.array(z.string()).min(1).max(100),
+  force: z.boolean().optional(),
+})
+export class CreateInsightsBatchTaskDto extends createZodDto(
+  CreateInsightsBatchTaskSchema,
+) {}
+
+export const CreateInsightsAllTaskSchema = z.object({
+  force: z.boolean().optional(),
+})
+export class CreateInsightsAllTaskDto extends createZodDto(
+  CreateInsightsAllTaskSchema,
 ) {}
 
 export const CreateInsightsTranslationTaskSchema = z.object({
@@ -49,6 +65,12 @@ export class GetInsightsGroupedQueryDto extends createZodDto(
 // Type exports
 export type GetInsightsQueryInput = z.infer<typeof GetInsightsQuerySchema>
 export type UpdateInsightsInput = z.infer<typeof UpdateInsightsSchema>
+export type CreateInsightsBatchTaskInput = z.infer<
+  typeof CreateInsightsBatchTaskSchema
+>
+export type CreateInsightsAllTaskInput = z.infer<
+  typeof CreateInsightsAllTaskSchema
+>
 export type GetInsightsGroupedQueryInput = z.infer<
   typeof GetInsightsGroupedQuerySchema
 >

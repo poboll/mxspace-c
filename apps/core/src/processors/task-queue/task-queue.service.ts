@@ -35,7 +35,14 @@ import {
   TaskStatus,
 } from './task-queue.types'
 
-const BATCH_TASK_TYPES = ['ai:translation:batch', 'ai:translation:all']
+const BATCH_TASK_TYPES = [
+  'ai:summary:batch',
+  'ai:summary:all',
+  'ai:translation:batch',
+  'ai:translation:all',
+  'ai:insights:batch',
+  'ai:insights:all',
+]
 
 const TERMINAL_STATUSES: ReadonlySet<TaskStatus> = new Set([
   TaskStatus.Completed,

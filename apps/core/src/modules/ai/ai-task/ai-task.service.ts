@@ -8,9 +8,13 @@ import {
   type AITaskPayload,
   AITaskType,
   computeAITaskDedupKey,
+  type InsightsAllTaskPayload,
+  type InsightsBatchTaskPayload,
   type InsightsTaskPayload,
   type InsightsTranslationTaskPayload,
   type SlugBackfillTaskPayload,
+  type SummaryAllTaskPayload,
+  type SummaryBatchTaskPayload,
   type SummaryTaskPayload,
   type TranslationAllTaskPayload,
   type TranslationBatchTaskPayload,
@@ -29,6 +33,18 @@ export class AiTaskService {
   ): Promise<{ taskId: string; created: boolean }> {
     await this.fillArticleInfo(payload)
     return this.createTask(AITaskType.Summary, payload)
+  }
+
+  async createSummaryBatchTask(
+    payload: SummaryBatchTaskPayload,
+  ): Promise<{ taskId: string; created: boolean }> {
+    return this.createTask(AITaskType.SummaryBatch, payload)
+  }
+
+  async createSummaryAllTask(
+    payload: SummaryAllTaskPayload,
+  ): Promise<{ taskId: string; created: boolean }> {
+    return this.createTask(AITaskType.SummaryAll, payload)
   }
 
   async createTranslationTask(
@@ -61,6 +77,18 @@ export class AiTaskService {
   ): Promise<{ taskId: string; created: boolean }> {
     await this.fillArticleInfo(payload)
     return this.createTask(AITaskType.Insights, payload)
+  }
+
+  async createInsightsBatchTask(
+    payload: InsightsBatchTaskPayload,
+  ): Promise<{ taskId: string; created: boolean }> {
+    return this.createTask(AITaskType.InsightsBatch, payload)
+  }
+
+  async createInsightsAllTask(
+    payload: InsightsAllTaskPayload,
+  ): Promise<{ taskId: string; created: boolean }> {
+    return this.createTask(AITaskType.InsightsAll, payload)
   }
 
   async createInsightsTranslationTask(

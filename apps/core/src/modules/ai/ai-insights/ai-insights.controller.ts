@@ -25,6 +25,8 @@ import { DEFAULT_SUMMARY_LANG } from '../ai.constants'
 import { parseLanguageCode } from '../ai-language.util'
 import { AiTaskService } from '../ai-task/ai-task.service'
 import {
+  CreateInsightsAllTaskDto,
+  CreateInsightsBatchTaskDto,
   CreateInsightsTaskDto,
   CreateInsightsTranslationTaskDto,
   GetInsightsGroupedQueryDto,
@@ -45,6 +47,18 @@ export class AiInsightsController {
   @Auth()
   createInsightsTask(@Body() body: CreateInsightsTaskDto) {
     return this.taskService.createInsightsTask(body)
+  }
+
+  @Post('/task/batch')
+  @Auth()
+  createInsightsBatchTask(@Body() body: CreateInsightsBatchTaskDto) {
+    return this.taskService.createInsightsBatchTask(body)
+  }
+
+  @Post('/task/all')
+  @Auth()
+  createInsightsAllTask(@Body() body: CreateInsightsAllTaskDto) {
+    return this.taskService.createInsightsAllTask(body)
   }
 
   @Post('/task/translate')
@@ -96,6 +110,12 @@ export class AiInsightsController {
       result.data,
       new MetaObjectBuilder().pagination(result.pagination).build(),
     )
+  }
+
+  @Get('/candidates')
+  @Auth()
+  getInsightsCandidates() {
+    return this.service.getInsightsCandidates()
   }
 
   @Patch('/:id')

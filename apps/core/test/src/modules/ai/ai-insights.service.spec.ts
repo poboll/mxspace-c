@@ -5,6 +5,7 @@ import { AppException } from '~/common/errors/exception.types'
 import { CollectionRefTypes } from '~/constants/db.constant'
 import type { AiInsightsRepository } from '~/modules/ai/ai-insights/ai-insights.repository'
 import { AiInsightsService } from '~/modules/ai/ai-insights/ai-insights.service'
+import { AITaskType } from '~/modules/ai/ai-task/ai-task.types'
 
 const row = {
   id: 'insights-1',
@@ -24,11 +25,13 @@ const createService = () => {
   const databaseService = {
     findGlobalById: vi.fn(),
     getRefArticleMap: vi.fn().mockResolvedValue({}),
+    findAllArticlesForAIText: vi.fn(),
   }
   const configService = { get: vi.fn() }
   const aiService = {}
   const aiInFlightService = {}
   const taskProcessor = { registerHandler: vi.fn() }
+  const taskQueueService = { createTask: vi.fn() }
   const aiTaskService = {}
   const eventEmitter = { emit: vi.fn() }
   const service = new AiInsightsService(
@@ -38,10 +41,17 @@ const createService = () => {
     aiService as any,
     aiInFlightService as any,
     taskProcessor as any,
+    taskQueueService as any,
     aiTaskService as any,
     eventEmitter as any,
   )
-  return { databaseService, repository, service }
+  return {
+    databaseService,
+    repository,
+    service,
+    taskProcessor,
+    taskQueueService,
+  }
 }
 
 describe('AiInsightsService', () => {
@@ -95,5 +105,51 @@ describe('AiInsightsService', () => {
       data: [{ article: { id: 'post-1', title: 'Post' } }],
       pagination: { total: 1, currentPage: 1, size: 10 },
     })
+  })
+
+  it('creates one insights task per visible article in the insights-all task', async () => {
+    const { databaseService, service, taskProcessor, taskQueueService } =
+      createService()
+    databaseService.findAllArticlesForAIText.mockResolvedValue({
+      posts: [{ id: 'post-1', title: 'Post' }],
+      notes: [{ id: 'note-1', title: 'Note' }],
+    })
+    taskQueueService.createTask.mockImplementation(
+      async ({ payload }: any) => ({
+        created: true,
+        taskId: `task-${payload.refId}`,
+      }),
+    )
+
+    service.onModuleInit()
+    const handler = taskProcessor.registerHandler.mock.calls
+      .map(([registered]) => registered)
+      .find((registered: any) => registered.type === AITaskType.InsightsAll)
+
+    const context = {
+      taskId: 'group-1',
+      isAborted: () => false,
+      appendLog: vi.fn(),
+      updateProgress: vi.fn(),
+      setResult: vi.fn(),
+    }
+    await handler.execute({ force: true }, context as any)
+
+    expect(databaseService.findAllArticlesForAIText).toHaveBeenCalled()
+    expect(taskQueueService.createTask).toHaveBeenCalledTimes(2)
+    expect(taskQueueService.createTask).toHaveBeenCalledWith(
+      expect.objectContaining({
+        groupId: 'group-1',
+        payload: expect.objectContaining({
+          force: true,
+          refId: 'post-1',
+          refType: CollectionRefTypes.Post,
+        }),
+        type: AITaskType.Insights,
+      }),
+    )
+    expect(context.setResult).toHaveBeenCalledWith(
+      expect.objectContaining({ total: 2, createdCount: 2 }),
+    )
   })
 })

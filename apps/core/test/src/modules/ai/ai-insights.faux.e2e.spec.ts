@@ -81,6 +81,7 @@ function createService(runtime: PiRuntimeAdapter) {
     }),
   }
   const taskProcessor = { registerHandler: vi.fn() }
+  const taskQueueService = { createTask: vi.fn() }
   const aiTaskService = {}
   const eventEmitter = { emit: vi.fn() }
 
@@ -116,6 +117,7 @@ function createService(runtime: PiRuntimeAdapter) {
     aiService as any,
     aiInFlightService as any,
     taskProcessor as any,
+    taskQueueService as any,
     aiTaskService as any,
     eventEmitter as any,
   )

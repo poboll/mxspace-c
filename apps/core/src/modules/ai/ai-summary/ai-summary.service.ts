@@ -7,10 +7,14 @@ import { AppException } from '~/common/errors/exception.types'
 import { BusinessEvents } from '~/constants/business-event.constant'
 import { CollectionRefTypes } from '~/constants/db.constant'
 import { paginationOf } from '~/processors/database/base.repository'
-import { DatabaseService } from '~/processors/database/database.service'
+import {
+  buildRefArticleMap,
+  DatabaseService,
+} from '~/processors/database/database.service'
 import {
   type TaskExecuteContext,
   TaskQueueProcessor,
+  TaskQueueService,
   TaskStatus,
 } from '~/processors/task-queue'
 import type { BasicPagerInput } from '~/shared/dto/pager.dto'
@@ -33,7 +37,13 @@ import { AiInFlightService } from '../ai-inflight/ai-inflight.service'
 import type { AiStreamEvent } from '../ai-inflight/ai-inflight.types'
 import { resolveTargetLanguages } from '../ai-language.util'
 import { AiTaskService } from '../ai-task/ai-task.service'
-import { AITaskType, type SummaryTaskPayload } from '../ai-task/ai-task.types'
+import {
+  AITaskType,
+  computeAITaskDedupKey,
+  type SummaryAllTaskPayload,
+  type SummaryBatchTaskPayload,
+  type SummaryTaskPayload,
+} from '../ai-task/ai-task.types'
 import { AiSummaryRepository } from './ai-summary.repository'
 import type { GetSummariesGroupedQueryInput } from './ai-summary.schema'
 import type { AiSummaryRow } from './ai-summary.types'
@@ -50,6 +60,7 @@ export class AiSummaryService implements OnModuleInit {
     private readonly aiService: AiService,
     private readonly aiInFlightService: AiInFlightService,
     private readonly taskProcessor: TaskQueueProcessor,
+    private readonly taskQueueService: TaskQueueService,
     private readonly aiTaskService: AiTaskService,
   ) {
     this.logger = new Logger(AiSummaryService.name)
@@ -109,6 +120,7 @@ export class AiSummaryService implements OnModuleInit {
               lang,
               context.incrementTokens,
               context.incrementCost,
+              { force: payload.force },
             )
             summaries.push({
               summaryId: result.id!,
@@ -143,7 +155,190 @@ export class AiSummaryService implements OnModuleInit {
       },
     })
 
+    this.taskProcessor.registerHandler({
+      type: AITaskType.SummaryBatch,
+      execute: async (
+        payload: SummaryBatchTaskPayload,
+        context: TaskExecuteContext,
+      ) => {
+        await this.executeSummaryBatchTask(payload, context)
+      },
+    })
+
+    this.taskProcessor.registerHandler({
+      type: AITaskType.SummaryAll,
+      execute: async (
+        payload: SummaryAllTaskPayload,
+        context: TaskExecuteContext,
+      ) => {
+        await this.executeSummaryAllTask(payload, context)
+      },
+    })
+
     this.logger.log('AI summary task handler registered')
+  }
+
+  private async executeSummaryBatchTask(
+    payload: SummaryBatchTaskPayload,
+    context: TaskExecuteContext,
+  ) {
+    this.checkAborted(context)
+
+    const { force, refIds, targetLanguages } = payload
+    const total = refIds.length
+
+    await context.appendLog('info', `Creating ${total} summary tasks for batch`)
+
+    const articleMap = await this.databaseService.getRefArticleMap(refIds)
+    const createdTaskIds: string[] = []
+
+    for (const refId of refIds) {
+      this.checkAborted(context)
+
+      const articleInfo = articleMap[refId]
+      const result = await this.createSummarySubTask(
+        refId,
+        targetLanguages,
+        force,
+        articleInfo,
+        context.taskId,
+      )
+
+      if (result.created) {
+        createdTaskIds.push(result.taskId)
+        await context.appendLog(
+          'info',
+          `Created task for "${articleInfo?.title || refId}"`,
+        )
+      } else {
+        await context.appendLog(
+          'info',
+          `Task already exists for "${articleInfo?.title || refId}": ${result.taskId}`,
+        )
+      }
+    }
+
+    await context.setResult({
+      total,
+      createdCount: createdTaskIds.length,
+      taskIds: createdTaskIds,
+      groupId: context.taskId,
+    })
+
+    await context.appendLog(
+      'info',
+      `Batch task completed: created ${createdTaskIds.length}/${total} tasks (groupId: ${context.taskId})`,
+    )
+  }
+
+  private async executeSummaryAllTask(
+    payload: SummaryAllTaskPayload,
+    context: TaskExecuteContext,
+  ) {
+    this.checkAborted(context)
+
+    const aiConfig = await this.configService.get('ai')
+    const languages = resolveTargetLanguages(
+      payload.targetLanguages,
+      aiConfig.summaryTargetLanguages,
+    )
+
+    if (!languages.length) {
+      await context.appendLog('warn', 'No target languages specified')
+      return
+    }
+
+    await context.appendLog('info', 'Fetching all articles for summary')
+
+    const { posts, notes } =
+      await this.databaseService.findAllArticlesForAIText()
+    const articleMap = buildRefArticleMap({ posts, notes, pages: [] })
+    const allArticleIds = Object.keys(articleMap)
+    const total = allArticleIds.length
+
+    if (total === 0) {
+      await context.appendLog('info', 'No articles found for summary')
+      await context.setResult({ total: 0, createdCount: 0 })
+      return
+    }
+
+    await context.appendLog(
+      'info',
+      `Found ${total} articles to summarize in ${languages.join(', ')}`,
+    )
+    await context.updateProgress(
+      0,
+      `Creating tasks for ${total} articles`,
+      0,
+      total,
+    )
+
+    const createdTaskIds: string[] = []
+
+    for (let i = 0; i < allArticleIds.length; i++) {
+      this.checkAborted(context)
+
+      const refId = allArticleIds[i]
+      const articleInfo = articleMap[refId]
+      const result = await this.createSummarySubTask(
+        refId,
+        languages,
+        payload.force,
+        articleInfo,
+        context.taskId,
+      )
+
+      if (result.created) {
+        createdTaskIds.push(result.taskId)
+      }
+
+      if ((i + 1) % 10 === 0 || i === allArticleIds.length - 1) {
+        const progress = Math.round(((i + 1) / total) * 100)
+        await context.updateProgress(
+          progress,
+          `Created ${createdTaskIds.length} tasks`,
+          i + 1,
+          total,
+        )
+      }
+    }
+
+    await context.setResult({
+      total,
+      createdCount: createdTaskIds.length,
+      taskIds: createdTaskIds,
+      groupId: context.taskId,
+    })
+
+    await context.appendLog(
+      'info',
+      `All task completed: created ${createdTaskIds.length}/${total} summary tasks (groupId: ${context.taskId})`,
+    )
+  }
+
+  private async createSummarySubTask(
+    refId: string,
+    targetLanguages: string[] | undefined,
+    force: boolean | undefined,
+    articleInfo: { title: string; type: CollectionRefTypes } | undefined,
+    groupId: string,
+  ) {
+    const taskPayload: SummaryTaskPayload = {
+      refId,
+      targetLanguages,
+      force,
+      title: articleInfo?.title,
+      refType: articleInfo?.type,
+    }
+
+    const dedupKey = computeAITaskDedupKey(AITaskType.Summary, taskPayload)
+    return this.taskQueueService.createTask({
+      type: AITaskType.Summary,
+      payload: taskPayload as unknown as Record<string, unknown>,
+      dedupKey,
+      groupId,
+      scope: 'ai',
+    })
   }
 
   private checkAborted(context: TaskExecuteContext) {
@@ -335,9 +530,14 @@ export class AiSummaryService implements OnModuleInit {
     document: { text: string },
     onToken?: (count?: number) => Promise<void>,
     onCost?: (usd: number) => Promise<void>,
+    options?: { force?: boolean },
   ) {
     const text = this.serializeText(document.text)
-    const key = this.buildSummaryKey(articleId, lang, text)
+    const key = this.buildSummaryKey(
+      articleId,
+      lang,
+      options?.force ? `${text}:${Date.now()}` : text,
+    )
 
     return this.aiInFlightService.runWithStream<AISummaryModel>({
       key,
@@ -384,6 +584,7 @@ export class AiSummaryService implements OnModuleInit {
     lang: string,
     onToken?: (count?: number) => Promise<void>,
     onCost?: (usd: number) => Promise<void>,
+    options?: { force?: boolean },
   ) {
     const {
       ai: { enableSummary },
@@ -402,6 +603,7 @@ export class AiSummaryService implements OnModuleInit {
         document,
         onToken,
         onCost,
+        options,
       )
       return await result
     } catch (error) {
@@ -532,6 +734,28 @@ export class AiSummaryService implements OnModuleInit {
       data: groupedData,
       pagination: paginationOf(total, page, size),
     }
+  }
+
+  async getSummaryCandidates() {
+    const { posts, notes } =
+      await this.databaseService.findAllArticlesForAIText()
+    const articleMap = buildRefArticleMap({ posts, notes, pages: [] })
+    const refIds = Object.keys(articleMap)
+    const summaries = this.toSummaryDocs(
+      await this.aiSummaryRepository.listByRefIds(refIds),
+    )
+    const countByRefId = summaries.reduce(
+      (acc, summary) => {
+        acc[summary.refId] = (acc[summary.refId] || 0) + 1
+        return acc
+      },
+      {} as Record<string, number>,
+    )
+
+    return refIds.map((refId) => ({
+      article: articleMap[refId],
+      summaryCount: countByRefId[refId] || 0,
+    }))
   }
 
   private async getRefArticles(docs: AISummaryModel[]) {

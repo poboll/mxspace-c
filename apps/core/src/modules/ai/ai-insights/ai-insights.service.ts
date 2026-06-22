@@ -7,10 +7,14 @@ import { AppException } from '~/common/errors/exception.types'
 import { BusinessEvents } from '~/constants/business-event.constant'
 import { CollectionRefTypes } from '~/constants/db.constant'
 import { paginationOf } from '~/processors/database/base.repository'
-import { DatabaseService } from '~/processors/database/database.service'
+import {
+  buildRefArticleMap,
+  DatabaseService,
+} from '~/processors/database/database.service'
 import {
   type TaskExecuteContext,
   TaskQueueProcessor,
+  TaskQueueService,
 } from '~/processors/task-queue'
 import type { BasicPagerInput } from '~/shared/dto/pager.dto'
 import { createAbortError } from '~/utils/abort.util'
@@ -31,7 +35,13 @@ import { isGlobalArticleVisible } from '../ai-article-visibility.util'
 import { AiInFlightService } from '../ai-inflight/ai-inflight.service'
 import type { AiStreamEvent } from '../ai-inflight/ai-inflight.types'
 import { AiTaskService } from '../ai-task/ai-task.service'
-import { AITaskType, type InsightsTaskPayload } from '../ai-task/ai-task.types'
+import {
+  AITaskType,
+  computeAITaskDedupKey,
+  type InsightsAllTaskPayload,
+  type InsightsBatchTaskPayload,
+  type InsightsTaskPayload,
+} from '../ai-task/ai-task.types'
 import { AiInsightsRepository } from './ai-insights.repository'
 import type { GetInsightsGroupedQueryInput } from './ai-insights.schema'
 import type { AiInsightsRow } from './ai-insights.types'
@@ -57,6 +67,7 @@ export class AiInsightsService implements OnModuleInit {
     private readonly aiService: AiService,
     private readonly aiInFlightService: AiInFlightService,
     private readonly taskProcessor: TaskQueueProcessor,
+    private readonly taskQueueService: TaskQueueService,
     private readonly aiTaskService: AiTaskService,
     private readonly eventEmitter: EventEmitter2,
   ) {}
@@ -78,12 +89,182 @@ export class AiInsightsService implements OnModuleInit {
           payload.refId,
           context.incrementTokens,
           context.incrementCost,
+          { force: payload.force },
         )
         await context.setResult({ insightsId: result.id, lang: result.lang })
         await context.updateProgress(100, 'Done', 1, 1)
       },
     })
+    this.taskProcessor.registerHandler({
+      type: AITaskType.InsightsBatch,
+      execute: async (
+        payload: InsightsBatchTaskPayload,
+        context: TaskExecuteContext,
+      ) => {
+        await this.executeInsightsBatchTask(payload, context)
+      },
+    })
+    this.taskProcessor.registerHandler({
+      type: AITaskType.InsightsAll,
+      execute: async (
+        payload: InsightsAllTaskPayload,
+        context: TaskExecuteContext,
+      ) => {
+        await this.executeInsightsAllTask(payload, context)
+      },
+    })
     this.logger.log('AI insights task handler registered')
+  }
+
+  private async executeInsightsBatchTask(
+    payload: InsightsBatchTaskPayload,
+    context: TaskExecuteContext,
+  ) {
+    this.checkAborted(context)
+
+    const { force, refIds } = payload
+    const total = refIds.length
+
+    await context.appendLog(
+      'info',
+      `Creating ${total} insights tasks for batch`,
+    )
+
+    const articleMap = await this.databaseService.getRefArticleMap(refIds)
+    const createdTaskIds: string[] = []
+
+    for (const refId of refIds) {
+      this.checkAborted(context)
+
+      const articleInfo = articleMap[refId]
+      const result = await this.createInsightsSubTask(
+        refId,
+        force,
+        articleInfo,
+        context.taskId,
+      )
+
+      if (result.created) {
+        createdTaskIds.push(result.taskId)
+        await context.appendLog(
+          'info',
+          `Created task for "${articleInfo?.title || refId}"`,
+        )
+      } else {
+        await context.appendLog(
+          'info',
+          `Task already exists for "${articleInfo?.title || refId}": ${result.taskId}`,
+        )
+      }
+    }
+
+    await context.setResult({
+      total,
+      createdCount: createdTaskIds.length,
+      taskIds: createdTaskIds,
+      groupId: context.taskId,
+    })
+
+    await context.appendLog(
+      'info',
+      `Batch task completed: created ${createdTaskIds.length}/${total} tasks (groupId: ${context.taskId})`,
+    )
+  }
+
+  private async executeInsightsAllTask(
+    _payload: InsightsAllTaskPayload,
+    context: TaskExecuteContext,
+  ) {
+    this.checkAborted(context)
+
+    await context.appendLog('info', 'Fetching all articles for insights')
+
+    const { posts, notes } =
+      await this.databaseService.findAllArticlesForAIText()
+    const articleMap = buildRefArticleMap({ posts, notes, pages: [] })
+    const allArticleIds = Object.keys(articleMap)
+    const total = allArticleIds.length
+
+    if (total === 0) {
+      await context.appendLog('info', 'No articles found for insights')
+      await context.setResult({ total: 0, createdCount: 0 })
+      return
+    }
+
+    await context.appendLog(
+      'info',
+      `Found ${total} articles to generate insights`,
+    )
+    await context.updateProgress(
+      0,
+      `Creating tasks for ${total} articles`,
+      0,
+      total,
+    )
+
+    const createdTaskIds: string[] = []
+
+    for (let i = 0; i < allArticleIds.length; i++) {
+      this.checkAborted(context)
+
+      const refId = allArticleIds[i]
+      const articleInfo = articleMap[refId]
+      const result = await this.createInsightsSubTask(
+        refId,
+        _payload.force,
+        articleInfo,
+        context.taskId,
+      )
+
+      if (result.created) {
+        createdTaskIds.push(result.taskId)
+      }
+
+      if ((i + 1) % 10 === 0 || i === allArticleIds.length - 1) {
+        const progress = Math.round(((i + 1) / total) * 100)
+        await context.updateProgress(
+          progress,
+          `Created ${createdTaskIds.length} tasks`,
+          i + 1,
+          total,
+        )
+      }
+    }
+
+    await context.setResult({
+      total,
+      createdCount: createdTaskIds.length,
+      taskIds: createdTaskIds,
+      groupId: context.taskId,
+    })
+
+    await context.appendLog(
+      'info',
+      `All task completed: created ${createdTaskIds.length}/${total} insights tasks (groupId: ${context.taskId})`,
+    )
+  }
+
+  private async createInsightsSubTask(
+    refId: string,
+    force: boolean | undefined,
+    articleInfo: { title: string; type: CollectionRefTypes } | undefined,
+    groupId: string,
+  ) {
+    const taskPayload: InsightsTaskPayload = {
+      refId,
+      force,
+      title: articleInfo?.title,
+      refType: articleInfo?.type,
+    }
+
+    const dedupKey = computeAITaskDedupKey(AITaskType.Insights, taskPayload)
+    return this.taskQueueService.createTask({
+      type: AITaskType.Insights,
+      payload: taskPayload as unknown as Record<string, unknown>,
+      dedupKey,
+      groupId,
+      scope: 'ai',
+    })
   }
 
   private checkAborted(context: TaskExecuteContext) {
@@ -247,9 +428,14 @@ export class AiInsightsService implements OnModuleInit {
     article: ArticleForInsights,
     onToken?: (count?: number) => Promise<void>,
     onCost?: (usd: number) => Promise<void>,
+    options?: { force?: boolean },
   ) {
     const text = this.serializeText(article.text)
-    const key = this.buildInsightsKey(articleId, lang, text)
+    const key = this.buildInsightsKey(
+      articleId,
+      lang,
+      options?.force ? `${text}:${Date.now()}` : text,
+    )
 
     return this.aiInFlightService.runWithStream<AIInsightsModel>({
       key,
@@ -310,6 +496,7 @@ export class AiInsightsService implements OnModuleInit {
     articleId: string,
     onToken?: (count?: number) => Promise<void>,
     onCost?: (usd: number) => Promise<void>,
+    options?: { force?: boolean },
   ): Promise<AIInsightsModel> {
     const {
       ai: { enableInsights },
@@ -326,6 +513,7 @@ export class AiInsightsService implements OnModuleInit {
         article,
         onToken,
         onCost,
+        options,
       )
       return await result
     } catch (error) {
@@ -484,6 +672,28 @@ export class AiInsightsService implements OnModuleInit {
       data: groupedData,
       pagination: paginationOf(total, page, size),
     }
+  }
+
+  async getInsightsCandidates() {
+    const { posts, notes } =
+      await this.databaseService.findAllArticlesForAIText()
+    const articleMap = buildRefArticleMap({ posts, notes, pages: [] })
+    const refIds = Object.keys(articleMap)
+    const insights = this.toInsightsDocs(
+      await this.aiInsightsRepository.listByRefIds(refIds),
+    )
+    const countByRefId = insights.reduce(
+      (acc, item) => {
+        acc[item.refId] = (acc[item.refId] || 0) + 1
+        return acc
+      },
+      {} as Record<string, number>,
+    )
+
+    return refIds.map((refId) => ({
+      article: articleMap[refId],
+      insightsCount: countByRefId[refId] || 0,
+    }))
   }
 
   private async getRefArticles(docs: AIInsightsModel[]) {

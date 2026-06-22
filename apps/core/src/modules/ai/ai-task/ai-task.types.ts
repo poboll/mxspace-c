@@ -1,19 +1,36 @@
 export enum AITaskType {
   Summary = 'ai:summary',
+  SummaryBatch = 'ai:summary:batch',
+  SummaryAll = 'ai:summary:all',
   Translation = 'ai:translation',
   TranslationBatch = 'ai:translation:batch',
   TranslationAll = 'ai:translation:all',
   SlugBackfill = 'ai:slug:backfill',
   Insights = 'ai:insights',
+  InsightsBatch = 'ai:insights:batch',
+  InsightsAll = 'ai:insights:all',
   InsightsTranslation = 'ai:insights:translation',
 }
 
 export interface SummaryTaskPayload {
   refId: string
   targetLanguages?: string[]
+  force?: boolean
   // Human-readable info
   title?: string
   refType?: string
+}
+
+export interface SummaryBatchTaskPayload {
+  refIds: string[]
+  targetLanguages?: string[]
+  force?: boolean
+}
+
+export interface SummaryAllTaskPayload {
+  targetLanguages?: string[]
+  force?: boolean
+  articleCount?: number
 }
 
 export interface TranslationTaskPayload {
@@ -44,8 +61,19 @@ export interface SlugBackfillTaskPayload {
 
 export interface InsightsTaskPayload {
   refId: string
+  force?: boolean
   title?: string
   refType?: string
+}
+
+export interface InsightsBatchTaskPayload {
+  refIds: string[]
+  force?: boolean
+}
+
+export interface InsightsAllTaskPayload {
+  force?: boolean
+  articleCount?: number
 }
 
 export interface InsightsTranslationTaskPayload {
@@ -58,11 +86,15 @@ export interface InsightsTranslationTaskPayload {
 
 export type AITaskPayload =
   | SummaryTaskPayload
+  | SummaryBatchTaskPayload
+  | SummaryAllTaskPayload
   | TranslationTaskPayload
   | TranslationBatchTaskPayload
   | TranslationAllTaskPayload
   | SlugBackfillTaskPayload
   | InsightsTaskPayload
+  | InsightsBatchTaskPayload
+  | InsightsAllTaskPayload
   | InsightsTranslationTaskPayload
 
 export function computeAITaskDedupKey(
@@ -73,6 +105,14 @@ export function computeAITaskDedupKey(
     case AITaskType.Summary: {
       const p = payload as SummaryTaskPayload
       return `${p.refId}:${(p.targetLanguages || []).slice().sort().join(',')}`
+    }
+    case AITaskType.SummaryBatch: {
+      const p = payload as SummaryBatchTaskPayload
+      return `${(p.refIds || []).slice().sort().join(',')}:${(p.targetLanguages || []).slice().sort().join(',')}`
+    }
+    case AITaskType.SummaryAll: {
+      const p = payload as SummaryAllTaskPayload
+      return `all:${(p.targetLanguages || []).slice().sort().join(',')}`
     }
     case AITaskType.Translation: {
       const p = payload as TranslationTaskPayload
@@ -96,6 +136,13 @@ export function computeAITaskDedupKey(
     case AITaskType.Insights: {
       const p = payload as InsightsTaskPayload
       return `${p.refId}`
+    }
+    case AITaskType.InsightsBatch: {
+      const p = payload as InsightsBatchTaskPayload
+      return `${(p.refIds || []).slice().sort().join(',')}`
+    }
+    case AITaskType.InsightsAll: {
+      return 'all'
     }
     case AITaskType.InsightsTranslation: {
       const p = payload as InsightsTranslationTaskPayload

@@ -4,10 +4,30 @@ import { z } from 'zod'
 export const CreateSummaryTaskSchema = z.object({
   refId: z.string(),
   targetLanguages: z.array(z.string()).optional(),
+  force: z.boolean().optional(),
 })
 
 export class CreateSummaryTaskDto extends createZodDto(
   CreateSummaryTaskSchema,
+) {}
+
+export const CreateSummaryBatchTaskSchema = z.object({
+  refIds: z.array(z.string()).min(1).max(100),
+  targetLanguages: z.array(z.string()).optional(),
+  force: z.boolean().optional(),
+})
+
+export class CreateSummaryBatchTaskDto extends createZodDto(
+  CreateSummaryBatchTaskSchema,
+) {}
+
+export const CreateSummaryAllTaskSchema = z.object({
+  targetLanguages: z.array(z.string()).optional(),
+  force: z.boolean().optional(),
+})
+
+export class CreateSummaryAllTaskDto extends createZodDto(
+  CreateSummaryAllTaskSchema,
 ) {}
 
 export const CreateTranslationTaskSchema = z.object({
@@ -37,6 +57,12 @@ export class CreateTranslationAllTaskDto extends createZodDto(
 ) {}
 
 export type CreateSummaryTaskInput = z.infer<typeof CreateSummaryTaskSchema>
+export type CreateSummaryBatchTaskInput = z.infer<
+  typeof CreateSummaryBatchTaskSchema
+>
+export type CreateSummaryAllTaskInput = z.infer<
+  typeof CreateSummaryAllTaskSchema
+>
 export type CreateTranslationTaskInput = z.infer<
   typeof CreateTranslationTaskSchema
 >
