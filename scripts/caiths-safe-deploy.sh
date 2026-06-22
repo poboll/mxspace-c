@@ -6,6 +6,7 @@ APP_DIR="${MX_SPACE_APP_DIR:-$INSTALL_DIR/core-v10}"
 APP_NAME="${MX_SPACE_PM2_APP_NAME:-mx-server}"
 HEALTH_URL="${MX_SPACE_HEALTH_URL:-http://127.0.0.1:2333/api/v3/health}"
 ROLLBACK_KEEP="${MX_SPACE_ROLLBACK_KEEP:-3}"
+NODE_MODULES_LINK="${MX_SPACE_NODE_MODULES_LINK:-/root/.mx-space/node_modules}"
 ZIP_PATH="${1:-}"
 
 if [[ -z "$ZIP_PATH" || ! -f "$ZIP_PATH" ]]; then
@@ -64,6 +65,10 @@ rollback() {
   pm2 stop "$APP_NAME" || true
   rm -rf "$APP_DIR"
   mv "$backup_dir" "$APP_DIR"
+  if [[ -d "$NODE_MODULES_LINK" && ! -e "$APP_DIR/node_modules" ]]; then
+    ln -s "$NODE_MODULES_LINK" "$APP_DIR/node_modules"
+  fi
+
   if [[ -f "$APP_DIR/ecosystem.config.cjs" ]]; then
     (cd "$APP_DIR" && pm2 delete "$APP_NAME" || true)
     (cd "$APP_DIR" && pm2 start ecosystem.config.cjs --only "$APP_NAME")
@@ -87,8 +92,15 @@ for file in ecosystem.config.cjs .env; do
   fi
 done
 
+if [[ ! -f "$staging_dir/src/database/migrations/meta/_journal.json" ]]; then
+  log "release bundle is missing src/database/migrations/meta/_journal.json"
+  exit 65
+fi
+
 if [[ -L "$APP_DIR/node_modules" && ! -e "$staging_dir/node_modules" ]]; then
   cp -P "$APP_DIR/node_modules" "$staging_dir/node_modules"
+elif [[ -d "$NODE_MODULES_LINK" && ! -e "$staging_dir/node_modules" ]]; then
+  ln -s "$NODE_MODULES_LINK" "$staging_dir/node_modules"
 fi
 
 if [[ -f "$staging_dir/migrate.mjs" ]]; then
@@ -113,13 +125,17 @@ mv "$staging_dir" "$APP_DIR"
 
 log "reloading pm2 app $APP_NAME"
 if [[ -f "$APP_DIR/ecosystem.config.cjs" ]]; then
-  (cd "$APP_DIR" && pm2 reload ecosystem.config.cjs --only "$APP_NAME")
+  (cd "$APP_DIR" && pm2 delete "$APP_NAME" || true)
+  (cd "$APP_DIR" && pm2 start ecosystem.config.cjs --only "$APP_NAME")
 else
-  pm2 reload "$APP_NAME"
+  pm2 restart "$APP_NAME"
 fi
 
 log "waiting for health check"
-health_check 18 5
+if ! health_check 18 5; then
+  log "health check did not pass; aborting deployment"
+  exit 70
+fi
 
 pm2 save
 rm -f "$ZIP_PATH"
