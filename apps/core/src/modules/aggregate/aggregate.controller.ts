@@ -387,6 +387,11 @@ export class AggregateController {
     return await this.aggregateService.getSiteInfo()
   }
 
+  @Get('/proxy/site_info')
+  async getProxySiteInfo() {
+    return await this.aggregateService.getSiteInfo()
+  }
+
   @Get('/stat/category-distribution')
   @Auth()
   async getCategoryDistribution() {
