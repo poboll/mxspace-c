@@ -258,4 +258,20 @@ describe('Admin contract — /aggregate/stat & /aggregate/site_info family', () 
     ])
     expect(body.data.first_publish_date).toBe('2024-01-01T00:00:00.000Z')
   })
+
+  test('GET /aggregate/proxy/site_info', async () => {
+    const res = await proxy.app.inject({
+      method: 'GET',
+      url: `${apiRoutePrefix}/aggregate/proxy/site_info`,
+    })
+    expect(res.statusCode).toBe(200)
+    const body = res.json()
+    assertHasKeys(body.data, [
+      'post_count',
+      'note_count',
+      'total_word_count',
+      'first_publish_date',
+    ])
+    expect(body.data.post_count).toBe(8)
+  })
 })
