@@ -166,6 +166,74 @@ describe('S3Uploader.uploadToS3 transport diagnostics', () => {
     })
   })
 
+  it('reads allowlisted fields when fetch rejects with a transport error directly', async () => {
+    const directError = Object.assign(new Error('ignored'), {
+      code: 'UND_ERR_SOCKET',
+      name: 'SocketError',
+      syscall: 'read',
+    })
+
+    const error = await rejectUpload(directError)
+
+    expectTransportDiagnostic(error, {
+      category: 'socket_failure',
+      code: 'UND_ERR_SOCKET',
+      name: 'SocketError',
+      syscall: 'read',
+    })
+  })
+
+  it('finds an allowlisted transport error inside nested aggregate causes', async () => {
+    const nestedError = Object.assign(new Error('nested secret'), {
+      code: 'ECONNRESET',
+      name: 'SocketError',
+      syscall: 'read',
+    })
+    const aggregate = new AggregateError(
+      [new Error('unrelated secret'), nestedError],
+      'aggregate secret',
+    )
+    const middle = new Error('middle secret', { cause: aggregate })
+    const outer = new TypeError('fetch failed', { cause: middle })
+
+    const error = await rejectUpload(outer)
+
+    expectTransportDiagnostic(error, {
+      category: 'socket_failure',
+      code: 'ECONNRESET',
+      name: 'SocketError',
+      syscall: 'read',
+    })
+    for (const fragment of [
+      'nested secret',
+      'unrelated secret',
+      'aggregate secret',
+      'middle secret',
+      'fetch failed',
+    ]) {
+      expect(error?.message).not.toContain(fragment)
+    }
+  })
+
+  it('bounds cyclic cause traversal and ignores unsafe nested getters', async () => {
+    const cyclic: Record<string, unknown> = {}
+    cyclic.cause = cyclic
+    Object.defineProperty(cyclic, 'errors', {
+      get: () => {
+        throw new Error('errors must remain unreadable')
+      },
+    })
+
+    const error = await rejectUpload(cyclic)
+
+    expectTransportDiagnostic(error, {
+      category: 'unknown',
+      code: 'UNKNOWN',
+      name: 'UnknownError',
+      syscall: 'unknown',
+    })
+  })
+
   it('binds a valid deployment nonce to the diagnostic', async () => {
     const nonce = '0123456789abcdef0123456789abcdef'
     vi.stubEnv(TRANSPORT_DIAGNOSTIC_NONCE_ENV, nonce)
