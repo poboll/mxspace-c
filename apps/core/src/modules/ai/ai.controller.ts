@@ -7,16 +7,26 @@ import { Auth } from '~/common/decorators/auth.decorator'
 import { AppErrorCode, createAppException } from '~/common/errors'
 import { OK_DATA } from '~/common/response/envelope.types'
 
+import {
+  commentDecisionQuestions,
+  resolveCommentDecision,
+} from '../comment/comment-decision'
 import { ConfigsService } from '../configs/configs.service'
 import { AI_PROMPTS } from './ai.prompts'
-import { RegistryModelsQueryDto } from './ai.schema'
+import {
+  type RegistryModelsQueryDto,
+  RegistryModelsQuerySchema,
+} from './ai.schema'
 import { AiService } from './ai.service'
-import type { AIProviderCapability } from './ai.types'
-import { AIProviderType } from './ai.types'
-import type { RegistryModelView } from './ai.views'
-import { AiViews } from './ai.views'
-import type { IModelRuntime, ModelInfo } from './runtime'
-import { createModelRuntime, createRuntimeForModelList } from './runtime'
+import { type AIProviderCapability, AIProviderType } from './ai.types'
+import { AiViews, type RegistryModelView } from './ai.views'
+import { listDecisionModels, requestDecision } from './decision/typesafe'
+import {
+  createModelRuntime,
+  createRuntimeForModelList,
+  type IModelRuntime,
+  type ModelInfo,
+} from './runtime'
 
 const REGISTRY_CACHE_TTL_MS = 5 * 60 * 1000
 
@@ -73,7 +83,11 @@ export class AiController {
   ): Promise<ProviderModelsResponse[]> {
     const aiConfig = await this.configsService.get('ai')
     const requestedCapability: AIProviderCapability =
-      capability === 'image' || capability === 'speech' ? capability : 'text'
+      capability === 'image' ||
+      capability === 'speech' ||
+      capability === 'decision'
+        ? capability
+        : 'text'
 
     if (!aiConfig.providers?.length) {
       return []
@@ -93,6 +107,15 @@ export class AiController {
       }
 
       try {
+        if (requestedCapability === 'decision') {
+          results.push({
+            providerId: provider.id,
+            providerName: provider.name,
+            providerType: provider.type,
+            models: await listDecisionModels(provider),
+          })
+          continue
+        }
         const runtime = createModelRuntime(provider)
         const models = await this.fetchModelsFromRuntime(
           runtime,
@@ -140,6 +163,8 @@ export class AiController {
     }
 
     try {
+      if (type === AIProviderType.TypeSafe)
+        return { models: await listDecisionModels({ apiKey, endpoint }) }
       const runtime = createRuntimeForModelList(
         type,
         apiKey,
@@ -185,6 +210,21 @@ export class AiController {
     }
 
     try {
+      if (type === AIProviderType.TypeSafe) {
+        await requestDecision(
+          { apiKey, endpoint, defaultModel: model },
+          'Hello',
+          {
+            language: {
+              type: 'choice',
+              instructions: 'Which language is this greeting?',
+              criteria: { english: 'English', other: 'Another language' },
+            },
+          },
+          AbortSignal.timeout(10000),
+        )
+        return OK_DATA
+      }
       const runtime = createModelRuntime({
         id: providerId || 'test',
         name: providerId || 'test',
@@ -228,6 +268,25 @@ export class AiController {
       throw createAppException(AppErrorCode.AI_REVIEW_NOT_ENABLED)
     }
 
+    if (commentConfig.decisionReview) {
+      try {
+        const answers = await this.aiService.decide(
+          { text },
+          commentDecisionQuestions(commentConfig.aiReviewType || 'binary'),
+          AbortSignal.timeout(commentConfig.decisionTimeoutMs ?? 1000),
+        )
+        const decision = resolveCommentDecision(
+          answers,
+          commentConfig.decisionConfidence ?? 0.9,
+          commentConfig.aiReviewThreshold ?? 5,
+        )
+        if (decision !== 'pending')
+          return { isSpam: decision === 'rejected', reason: 'Decision model' }
+      } catch {
+        /* Unavailable decisions fall back to the configured language model. */
+      }
+    }
+
     try {
       const runtime = await this.aiService.getCommentReviewModel()
 
@@ -242,7 +301,7 @@ export class AiController {
         })
 
         const { score, hasSensitiveContent } = result.output
-        const isSpam = score >= threshold || hasSensitiveContent === true
+        const isSpam = score > threshold || hasSensitiveContent === true
 
         let reason: string | undefined
         if (hasSensitiveContent) {
@@ -371,7 +430,7 @@ export class AiController {
   @Get('/registry/models')
   @Auth()
   async getRegistryModels(
-    @Query() query: RegistryModelsQueryDto,
+    @Query({ schema: RegistryModelsQuerySchema }) query: RegistryModelsQueryDto,
   ): Promise<RegistryModelView[]> {
     const { providerId } = query
     const now = Date.now()

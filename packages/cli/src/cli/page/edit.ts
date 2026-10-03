@@ -1,6 +1,7 @@
-import { Args, Command } from '@effect/cli'
 import { Effect } from 'effect'
+import { Argument, Command } from 'effect/cli'
 
+import { openAdminDraftEdit } from '../../domain/admin-link'
 import { coerceMeta, parseEnvelope } from '../../domain/envelope'
 import { ResourceNotFound, ValidationXml } from '../../domain/errors'
 import { buildPagePayload } from '../../domain/payload'
@@ -9,9 +10,14 @@ import { Editor } from '../../services/Editor'
 import { Lexical } from '../../services/Lexical'
 import { Renderer } from '../../services/Renderer'
 import { isSnowflakeId } from '../../services/Resolver'
+import {
+  normalizeData,
+  publishSavedDraft,
+  saveDraftPayload,
+} from '../draft/_shared'
 import { pageWriteOptions, toPageFlagInputs } from './create'
 
-const slugOrId = Args.text({ name: 'slugOrId' })
+const slugOrId = Argument.String('slugOrId')
 
 const escapeXml = (s: string): string =>
   s.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
@@ -37,7 +43,7 @@ const resolvePageId = (
         id?: string
         data?: { id?: string }
       }>(`/pages/slug/${encodeURIComponent(ref)}`)
-      .pipe(Effect.catchAll(() => Effect.succeed(null)))
+      .pipe(Effect.catch(() => Effect.succeed(null)))
     const id =
       (res && (res as { id?: string }).id) ??
       (res && (res as { data?: { id?: string } }).data?.id)
@@ -60,9 +66,9 @@ const materializeForEditor = (ref: string) =>
     const path = isSnowflakeId(ref)
       ? `/pages/${ref}`
       : `/pages/slug/${encodeURIComponent(ref)}`
-    const page = (yield* api.request(path, {
-      query: { prefer: 'lexical' },
-    })) as PageForEditor
+    const page = normalizeData<PageForEditor>(
+      yield* api.request(path, { query: { prefer: 'lexical' } }),
+    )
     const isLexical = page.contentFormat === 'lexical'
     let innerXml: string
     if (isLexical && page.content) {
@@ -105,6 +111,7 @@ export const edit = Command.make(
       const api = yield* Api
       const editor = yield* Editor
       const renderer = yield* Renderer
+      const id = yield* resolvePageId(api, slugOrId)
 
       // Editor round-trip path: no --file and no --content → spawn $EDITOR.
       if (!flags.file && flags.content === undefined) {
@@ -130,22 +137,22 @@ export const edit = Command.make(
           format: flags.format ?? 'lexical',
         })
         const payload = overlayPageMeta(built.payload, parsed.meta)
-        const id = yield* resolvePageId(api, slugOrId)
-        const res = yield* api.request(`/pages/${id}`, {
-          method: 'PUT',
-          body: payload,
-        })
-        yield* renderer.emitSuccess(res)
+        const saved = yield* saveDraftPayload(api, 'page', payload, id)
+        const response = yield* publishSavedDraft(api, saved.draft)
+        yield* renderer.emitSuccess(response)
+        if (rest.open && saved.draft.id) {
+          yield* openAdminDraftEdit('pages', saved.draft.id, id)
+        }
         return
       }
 
       // Non-interactive path: build from flags / file.
       const built = yield* buildPagePayload(flags)
-      const id = yield* resolvePageId(api, slugOrId)
-      const res = yield* api.request(`/pages/${id}`, {
-        method: 'PUT',
-        body: built.payload,
-      })
-      yield* renderer.emitSuccess(res)
+      const saved = yield* saveDraftPayload(api, 'page', built.payload, id)
+      const response = yield* publishSavedDraft(api, saved.draft)
+      yield* renderer.emitSuccess(response)
+      if (rest.open && saved.draft.id) {
+        yield* openAdminDraftEdit('pages', saved.draft.id, id)
+      }
     }),
 )

@@ -2,11 +2,13 @@ import { sql } from 'drizzle-orm'
 import type { AnyPgColumn } from 'drizzle-orm/pg-core'
 import {
   boolean,
+  check,
   index,
   integer,
   jsonb,
   pgTable,
   text,
+  unique,
   uniqueIndex,
 } from 'drizzle-orm/pg-core'
 
@@ -209,14 +211,44 @@ export const recentlies = pgTable(
   ],
 )
 
-export const drafts = pgTable(
-  'drafts',
+export const contentDocuments = pgTable(
+  'content_documents',
   {
     id: pkText(),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
     refType: text('ref_type').notNull(),
     refId: refText('ref_id'),
+    publishedRevisionId: refText('published_revision_id').references(
+      (): AnyPgColumn => contentRevisions.id,
+      { onDelete: 'set null' },
+    ),
+    publishAiResources: jsonb('publish_ai_resources').$type<
+      {
+        mode: 'sync' | 'async'
+        resource: 'insights' | 'summary' | 'translation' | 'tts'
+      }[]
+    >(),
+  },
+  (table) => [
+    uniqueIndex('content_documents_ref_uniq')
+      .on(table.refType, table.refId)
+      .where(sql`${table.refId} is not null`),
+  ],
+)
+
+export const contentRevisions = pgTable(
+  'content_revisions',
+  {
+    id: pkText(),
+    documentId: refText('document_id')
+      .notNull()
+      .references(() => contentDocuments.id, { onDelete: 'cascade' }),
+    parentRevisionId: refText('parent_revision_id').references(
+      (): AnyPgColumn => contentRevisions.id,
+      { onDelete: 'restrict' },
+    ),
+    createdAt: createdAt(),
     title: text('title').notNull().default(''),
     text: text('text').notNull().default(''),
     content: text('content'),
@@ -227,51 +259,89 @@ export const drafts = pgTable(
       string,
       unknown
     > | null>(),
-    history: jsonb('history').$type<unknown[] | null>(),
-    version: integer('version').notNull().default(1),
-    publishedVersion: integer('published_version'),
   },
   (table) => [
-    uniqueIndex('drafts_ref_uniq')
-      .on(table.refType, table.refId)
-      .where(sql`${table.refId} is not null`)
-      .concurrently(),
-    index('drafts_ref_idx')
-      .on(table.refType, table.refId)
-      .where(sql`${table.refId} is not null`),
+    index('content_revisions_document_idx').on(table.documentId),
+    index('content_revisions_parent_idx').on(table.parentRevisionId),
+  ],
+)
+
+export const drafts = pgTable(
+  'drafts',
+  {
+    id: pkText(),
+    documentId: refText('document_id')
+      .notNull()
+      .references(() => contentDocuments.id, { onDelete: 'cascade' }),
+    baseRevisionId: refText('base_revision_id')
+      .notNull()
+      .references(() => contentRevisions.id, { onDelete: 'restrict' }),
+    headRevisionId: refText('head_revision_id')
+      .notNull()
+      .references(() => contentRevisions.id, { onDelete: 'restrict' }),
+    status: text('status').notNull().default('active'),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (table) => [
+    check(
+      'drafts_status_check',
+      sql`${table.status} in ('active', 'archived')`,
+    ),
+    index('drafts_document_status_idx').on(table.documentId, table.status),
     index('drafts_updated_at_idx').on(table.updatedAt),
   ],
 )
 
-/**
- * Optional separate-table form for draft history. Only populated when
- * indexed lookup across drafts is required (Phase 0 deferred).
- */
-export const draftHistories = pgTable(
-  'draft_histories',
+export const contentDocumentShares = pgTable(
+  'content_document_shares',
   {
     id: pkText(),
-    draftId: refText('draft_id')
+    documentId: refText('document_id')
       .notNull()
-      .references(() => drafts.id, { onDelete: 'cascade' }),
-    version: integer('version').notNull(),
-    title: text('title').notNull(),
-    text: text('text'),
-    content: text('content'),
-    contentFormat: text('content_format').notNull(),
-    typeSpecificData: jsonb('type_specific_data').$type<Record<
-      string,
-      unknown
-    > | null>(),
-    savedAt: tsCol('saved_at').notNull(),
-    isFullSnapshot: boolean('is_full_snapshot').notNull(),
-    refVersion: integer('ref_version'),
-    baseVersion: integer('base_version'),
+      .references(() => contentDocuments.id, { onDelete: 'cascade' }),
+    token: text('token').notNull(),
+    mode: text('mode').notNull(),
+    revisionId: refText('revision_id').references(() => contentRevisions.id, {
+      onDelete: 'restrict',
+    }),
+    draftId: refText('draft_id').references(() => drafts.id, {
+      onDelete: 'cascade',
+    }),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
   },
   (table) => [
-    uniqueIndex('draft_histories_draft_version_uniq').on(
-      table.draftId,
-      table.version,
+    unique('content_document_shares_document_uniq').on(table.documentId),
+    unique('content_document_shares_token_uniq').on(table.token),
+    check(
+      'content_document_shares_target_check',
+      sql`(${table.mode} = 'pinned' and ${table.revisionId} is not null and ${table.draftId} is null)
+        or (${table.mode} = 'follow' and ${table.draftId} is not null and ${table.revisionId} is null)`,
+    ),
+  ],
+)
+
+export const contentPublicationEvents = pgTable(
+  'content_publication_events',
+  {
+    id: pkText(),
+    documentId: refText('document_id')
+      .notNull()
+      .references(() => contentDocuments.id, { onDelete: 'cascade' }),
+    revisionId: refText('revision_id')
+      .notNull()
+      .references(() => contentRevisions.id, { onDelete: 'restrict' }),
+    previousRevisionId: refText('previous_revision_id').references(
+      () => contentRevisions.id,
+      { onDelete: 'restrict' },
+    ),
+    createdAt: createdAt(),
+  },
+  (table) => [
+    index('content_publication_events_document_idx').on(
+      table.documentId,
+      table.createdAt,
     ),
   ],
 )
@@ -291,6 +361,9 @@ export const comments = pgTable(
     url: text('url'),
     text: text('text').notNull(),
     state: integer('state').notNull().default(0),
+    moderationStatus: text('moderation_status'),
+    moderationReceiptHash: text('moderation_receipt_hash'),
+    moderationAttempts: integer('moderation_attempts').notNull().default(0),
     parentCommentId: refText('parent_comment_id').references(
       (): AnyPgColumn => comments.id,
       { onDelete: 'cascade' },

@@ -10,10 +10,14 @@ import { Button } from '~/ui/primitives/button'
 import { Combobox } from '~/ui/primitives/combobox'
 import { Scroll } from '~/ui/primitives/scroll'
 import { SelectField } from '~/ui/primitives/select'
-import { Switch } from '~/ui/primitives/switch'
+import { FormSwitch } from '~/ui/primitives/switch'
 import { TextInput } from '~/ui/primitives/text-field'
 
-import { findAIProviderPreset } from '../../config/aiProviderPresets'
+import {
+  aiProviderPresets,
+  findAIProviderPreset,
+  interpolatePresetTemplate,
+} from '../../config/aiProviderPresets'
 import { aiProviderTypeOptions } from '../../constants'
 import type {
   AIProviderConfig,
@@ -50,8 +54,10 @@ export function AIProviderDrawer(props: {
   const [fetching, setFetching] = useState(false)
   const [testing, setTesting] = useState(false)
   const provider = props.provider
+  const decisionEnabled = provider?.type === 'typesafe'
   const textEnabled = provider?.capabilities?.text ?? true
   const matchedPreset = provider ? findAIProviderPreset(provider) : undefined
+  const isGoogleVertex = provider?.type === 'google-vertex'
 
   const showEndpoint = Boolean(provider)
   const piProviderId =
@@ -64,12 +70,24 @@ export function AIProviderDrawer(props: {
     staleTime: REGISTRY_STALE_MS,
   })
 
-  const registryModels = registryQuery.data ?? []
+  const registryModels = useMemo(
+    () =>
+      isGoogleVertex
+        ? (registryQuery.data ?? []).map((model) => ({
+            ...model,
+            id: model.id.startsWith('google/')
+              ? model.id
+              : `google/${model.id}`,
+          }))
+        : (registryQuery.data ?? []),
+    [isGoogleVertex, registryQuery.data],
+  )
   const modelOptions = useMemo(
     () => mergeModelOptions(props.providerModels, registryModels),
     [props.providerModels, registryModels],
   )
-  const modelsDisabled = piProviderId === null && modelOptions.length === 0
+  const modelsDisabled =
+    !decisionEnabled && piProviderId === null && modelOptions.length === 0
   const modelMatch = useMemo(
     () =>
       provider
@@ -78,7 +96,7 @@ export function AIProviderDrawer(props: {
     [registryModels, provider],
   )
   const showCustomTokenFields = Boolean(
-    provider && provider.defaultModel.trim() && !modelMatch,
+    provider && !decisionEnabled && provider.defaultModel.trim() && !modelMatch,
   )
 
   const refreshModels = async () => {
@@ -147,7 +165,7 @@ export function AIProviderDrawer(props: {
       footer={
         provider ? (
           <>
-            {textEnabled ? (
+            {textEnabled || decisionEnabled ? (
               <>
                 <Button
                   disabled={fetching}
@@ -193,54 +211,62 @@ export function AIProviderDrawer(props: {
     >
       {provider ? (
         <div className="space-y-5 overflow-y-auto p-4">
-          <Switch
+          <FormSwitch
             checked={provider.enabled}
             label={t('settings.oauth.switch.enabled')}
             onCheckedChange={(enabled) => props.onChange({ enabled })}
           />
           <div className="space-y-3 rounded-xl border border-neutral-200 p-3 dark:border-neutral-800">
-            <div className="text-sm font-medium text-fg">
-              {t('settings.ai.field.capabilities')}
-            </div>
-            <Switch
-              checked={provider.capabilities?.text ?? true}
-              label={t('settings.ai.capability.text')}
-              onCheckedChange={(text) =>
-                props.onChange({
-                  capabilities: {
-                    text,
-                    image: provider.capabilities?.image ?? false,
-                    speech: provider.capabilities?.speech ?? false,
-                  },
-                })
-              }
-            />
-            <Switch
-              checked={provider.capabilities?.image ?? false}
-              label={t('settings.ai.capability.image')}
-              onCheckedChange={(image) =>
-                props.onChange({
-                  capabilities: {
-                    text: provider.capabilities?.text ?? true,
-                    image,
-                    speech: provider.capabilities?.speech ?? false,
-                  },
-                })
-              }
-            />
-            <Switch
-              checked={provider.capabilities?.speech ?? false}
-              label={t('settings.ai.capability.speech')}
-              onCheckedChange={(speech) =>
-                props.onChange({
-                  capabilities: {
-                    text: provider.capabilities?.text ?? true,
-                    image: provider.capabilities?.image ?? false,
-                    speech,
-                  },
-                })
-              }
-            />
+            {decisionEnabled ? (
+              <p className="text-sm text-fg">
+                {t('settings.ai.capability.decision')}
+              </p>
+            ) : (
+              <>
+                <div className="text-sm font-medium text-fg">
+                  {t('settings.ai.field.capabilities')}
+                </div>
+                <FormSwitch
+                  checked={provider.capabilities?.text ?? true}
+                  label={t('settings.ai.capability.text')}
+                  onCheckedChange={(text) =>
+                    props.onChange({
+                      capabilities: {
+                        text,
+                        image: provider.capabilities?.image ?? false,
+                        speech: provider.capabilities?.speech ?? false,
+                      },
+                    })
+                  }
+                />
+                <FormSwitch
+                  checked={provider.capabilities?.image ?? false}
+                  label={t('settings.ai.capability.image')}
+                  onCheckedChange={(image) =>
+                    props.onChange({
+                      capabilities: {
+                        text: provider.capabilities?.text ?? true,
+                        image,
+                        speech: provider.capabilities?.speech ?? false,
+                      },
+                    })
+                  }
+                />
+                <FormSwitch
+                  checked={provider.capabilities?.speech ?? false}
+                  label={t('settings.ai.capability.speech')}
+                  onCheckedChange={(speech) =>
+                    props.onChange({
+                      capabilities: {
+                        text: provider.capabilities?.text ?? true,
+                        image: provider.capabilities?.image ?? false,
+                        speech,
+                      },
+                    })
+                  }
+                />
+              </>
+            )}
           </div>
           <FieldShell label={t('settings.ai.field.providerType')}>
             <SelectField<AIProviderType>
@@ -249,6 +275,15 @@ export function AIProviderDrawer(props: {
                 props.onChange({
                   defaultModel: getDefaultAIModel(type),
                   type,
+                  capabilities: {
+                    text: type !== 'typesafe',
+                    decision: type === 'typesafe',
+                    image: false,
+                    speech: false,
+                  },
+                  ...(type === 'typesafe'
+                    ? { endpoint: 'https://api.typesafe.ai/v1' }
+                    : {}),
                 })
               }
               options={aiProviderTypeOptions.map((option) => ({
@@ -297,19 +332,39 @@ export function AIProviderDrawer(props: {
               ) : null}
             </div>
           ) : null}
+          {isGoogleVertex ? (
+            <TextInput
+              label={t('settings.ai.field.projectId')}
+              onChange={(projectId) => {
+                const preset = aiProviderPresets.find(
+                  (item) => item.id === 'googleVertex',
+                )
+                props.onChange({
+                  projectId,
+                  endpoint:
+                    interpolatePresetTemplate(preset?.endpoint, {
+                      projectId,
+                    }) ?? provider.endpoint,
+                })
+              }}
+              placeholder={t('settings.ai.preset.modal.projectIdPlaceholder')}
+              spellCheck={false}
+              value={provider.projectId ?? ''}
+            />
+          ) : null}
           {showEndpoint ? (
             <TextInput
               label={t('settings.ai.field.endpoint')}
               onChange={(endpoint) => props.onChange({ endpoint })}
               placeholder={
-                provider.type === 'openai-compatible'
+                provider.type === 'openai-compatible' || isGoogleVertex
                   ? t('settings.ai.placeholder.endpointCompatible')
                   : t('settings.ai.placeholder.endpointDefault')
               }
               value={provider.endpoint ?? ''}
             />
           ) : null}
-          {textEnabled && provider.type !== 'anthropic' ? (
+          {textEnabled && provider.type !== 'anthropic' && !isGoogleVertex ? (
             <>
               <TextInput
                 label={t('settings.ai.field.modelListUrl')}
@@ -317,14 +372,14 @@ export function AIProviderDrawer(props: {
                 placeholder={t('settings.ai.placeholder.modelListUrl')}
                 value={provider.modelListUrl ?? ''}
               />
-              <Switch
+              <FormSwitch
                 checked={provider.appendV1 ?? true}
                 label={t('settings.ai.field.appendV1')}
                 onCheckedChange={(appendV1) => props.onChange({ appendV1 })}
               />
             </>
           ) : null}
-          {provider.capabilities?.speech ? (
+          {provider.capabilities?.speech && !isGoogleVertex ? (
             <TextInput
               label={t('settings.ai.field.voiceListUrl')}
               onChange={(voiceListUrl) => props.onChange({ voiceListUrl })}
@@ -332,7 +387,7 @@ export function AIProviderDrawer(props: {
               value={provider.voiceListUrl ?? ''}
             />
           ) : null}
-          {textEnabled ? (
+          {textEnabled || decisionEnabled ? (
             <>
               <FieldShell label={t('settings.ai.field.defaultModel')}>
                 <ModelCombobox

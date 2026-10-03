@@ -1,16 +1,18 @@
-import { Injectable } from '@nestjs/common'
+import { Injectable, Logger } from '@nestjs/common'
 import type DodoPayments from 'dodopayments'
 import { Webhook } from 'standardwebhooks'
 
 import { AppErrorCode, createAppException } from '~/common/errors'
+import { isEntityIdString } from '~/shared/id/entity-id'
 
 import { ConfigsService } from '../../configs/configs.service'
 import type { MembershipPlan } from '../membership.types'
 import type {
+  BillingWebhookResult,
   NormalizedBillingEvent,
   NormalizedPlanPricing,
   PaymentProviderAdapter,
-  VerifiedBillingEvent,
+  ReaderIdentity,
 } from './provider.interface'
 
 const PRICING_TTL_MS = 10 * 60 * 1000
@@ -30,14 +32,11 @@ const normalizeInterval = (
   return null
 }
 
+type DodoSubscriptionStatus =
+  'pending' | 'active' | 'on_hold' | 'cancelled' | 'failed' | 'expired'
+
 type DodoSubscriptionEvent = {
-  type:
-    | 'subscription.active'
-    | 'subscription.renewed'
-    | 'subscription.on_hold'
-    | 'subscription.cancelled'
-    | 'subscription.expired'
-    | 'subscription.plan_changed'
+  type: string
   business_id: string
   timestamp: string
   data: {
@@ -46,8 +45,29 @@ type DodoSubscriptionEvent = {
     metadata?: Record<string, string>
     next_billing_date: string
     payment_frequency_interval?: 'Day' | 'Week' | 'Month' | 'Year'
+    status?: DodoSubscriptionStatus
   }
 }
+
+type DodoPaymentEvent = {
+  type: string
+  business_id: string
+  timestamp: string
+  data: {
+    payment_id: string
+    customer?: { customer_id: string }
+    metadata?: Record<string, string>
+    product_cart?: Array<{ product_id: string; quantity: number }> | null
+    total_amount?: number
+    currency?: string
+  }
+}
+
+const DODO_ARTICLE_REFUND_EVENTS = new Set([
+  'refund.succeeded',
+  'dispute.accepted',
+  'dispute.lost',
+])
 
 const DODO_EVENT_TYPE_MAP: Record<
   string,
@@ -58,7 +78,36 @@ const DODO_EVENT_TYPE_MAP: Record<
   'subscription.on_hold': 'on_hold',
   'subscription.cancelled': 'cancelled',
   'subscription.expired': 'cancelled',
+  'subscription.failed': 'cancelled',
   'subscription.plan_changed': 'plan_changed',
+}
+
+const DODO_STATUS_TYPE_MAP: Record<
+  DodoSubscriptionStatus,
+  NormalizedBillingEvent['type'] | undefined
+> = {
+  pending: undefined,
+  active: 'activated',
+  on_hold: 'on_hold',
+  cancelled: 'cancelled',
+  failed: 'cancelled',
+  expired: 'cancelled',
+}
+
+// These two name no transition — the resulting state lives in `data.status`,
+// so it is resolved there instead of from the event name.
+const DODO_STATUS_DERIVED_EVENTS = new Set([
+  'subscription.updated',
+  'subscription.update_payment_method',
+])
+
+const resolveEventType = (
+  event: DodoSubscriptionEvent,
+): NormalizedBillingEvent['type'] | undefined => {
+  if (!DODO_STATUS_DERIVED_EVENTS.has(event.type)) {
+    return DODO_EVENT_TYPE_MAP[event.type]
+  }
+  return event.data.status ? DODO_STATUS_TYPE_MAP[event.data.status] : undefined
 }
 
 const planFromInterval = (
@@ -81,12 +130,21 @@ const planFromEvent = (
 
 @Injectable()
 export class DodoProvider implements PaymentProviderAdapter {
+  private readonly logger = new Logger(DodoProvider.name)
   private client: DodoPayments | null = null
   private cachedApiKey: string | null = null
   private cachedEnvironment: 'test_mode' | 'live_mode' | null = null
   private readonly pricingCache = new Map<
     string,
     { value: NormalizedPlanPricing | null; expiresAt: number }
+  >()
+
+  private readonly productCache = new Map<
+    string,
+    {
+      value: Awaited<ReturnType<DodoPayments['products']['retrieve']>> | null
+      expiresAt: number
+    }
   >()
 
   constructor(private readonly configsService: ConfigsService) {}
@@ -109,7 +167,7 @@ export class DodoProvider implements PaymentProviderAdapter {
   }
 
   async createCheckout(input: {
-    reader: { id: string; email?: string | null; name?: string | null }
+    reader: ReaderIdentity
     plan: MembershipPlan
     returnUrl?: string
   }): Promise<{ checkoutUrl: string }> {
@@ -123,6 +181,39 @@ export class DodoProvider implements PaymentProviderAdapter {
       throw createAppException(AppErrorCode.MEMBERSHIP_PROVIDER_NOT_CONFIGURED)
     }
 
+    return this.createCheckoutSession({
+      productId,
+      reader: input.reader,
+      metadata: { readerId: input.reader.id, plan: input.plan },
+      returnUrl: input.returnUrl,
+    })
+  }
+
+  async createArticleCheckout(input: {
+    reader: ReaderIdentity
+    postId: string
+    productId: string
+    returnUrl?: string
+  }): Promise<{ checkoutUrl: string }> {
+    return this.createCheckoutSession({
+      productId: input.productId,
+      reader: input.reader,
+      metadata: {
+        readerId: input.reader.id,
+        postId: input.postId,
+        kind: 'article',
+      },
+      returnUrl: input.returnUrl,
+    })
+  }
+
+  private async createCheckoutSession(input: {
+    productId: string
+    reader: ReaderIdentity
+    metadata: Record<string, string>
+    returnUrl?: string
+  }): Promise<{ checkoutUrl: string }> {
+    const membershipConfig = await this.configsService.get('membership')
     if (!membershipConfig.apiKey) {
       throw createAppException(AppErrorCode.MEMBERSHIP_PROVIDER_NOT_CONFIGURED)
     }
@@ -133,8 +224,8 @@ export class DodoProvider implements PaymentProviderAdapter {
     )
 
     const session = await client.checkoutSessions.create({
-      product_cart: [{ product_id: productId, quantity: 1 }],
-      metadata: { readerId: input.reader.id, plan: input.plan },
+      product_cart: [{ product_id: input.productId, quantity: 1 }],
+      metadata: input.metadata,
       customer: input.reader.email
         ? { email: input.reader.email, name: input.reader.name ?? undefined }
         : undefined,
@@ -148,10 +239,10 @@ export class DodoProvider implements PaymentProviderAdapter {
     return { checkoutUrl: session.checkout_url }
   }
 
-  async getPlanPricing(
+  private async retrieveProduct(
     productId: string,
-  ): Promise<NormalizedPlanPricing | null> {
-    const cached = this.pricingCache.get(productId)
+  ): Promise<Awaited<ReturnType<DodoPayments['products']['retrieve']>> | null> {
+    const cached = this.productCache.get(productId)
     if (cached && cached.expiresAt > Date.now()) return cached.value
 
     const membershipConfig = await this.configsService.get('membership')
@@ -162,34 +253,45 @@ export class DodoProvider implements PaymentProviderAdapter {
       membershipConfig.environment,
     )
 
-    let value: NormalizedPlanPricing | null = null
+    let value: Awaited<ReturnType<DodoPayments['products']['retrieve']>> | null
     try {
-      const product = await client.products.retrieve(productId)
-      const price = product.price as
-        | {
-            price?: number
-            currency?: string
-            payment_frequency_interval?: unknown
-            payment_frequency_count?: number
-          }
-        | undefined
-      const interval = normalizeInterval(price?.payment_frequency_interval)
-      if (
-        price &&
-        typeof price.price === 'number' &&
-        price.currency &&
-        interval
-      ) {
-        value = {
-          amount: price.price,
-          currency: price.currency,
-          interval,
-          intervalCount: price.payment_frequency_count ?? 1,
-        }
-      }
+      value = await client.products.retrieve(productId)
     } catch {
       value = null
     }
+
+    this.productCache.set(productId, {
+      value,
+      expiresAt: Date.now() + PRICING_TTL_MS,
+    })
+    return value
+  }
+
+  async getPlanPricing(
+    productId: string,
+  ): Promise<NormalizedPlanPricing | null> {
+    const cached = this.pricingCache.get(productId)
+    if (cached && cached.expiresAt > Date.now()) return cached.value
+
+    const product = await this.retrieveProduct(productId)
+    const price = product?.price as
+      | {
+          price?: number
+          currency?: string
+          payment_frequency_interval?: unknown
+          payment_frequency_count?: number
+        }
+      | undefined
+    const interval = normalizeInterval(price?.payment_frequency_interval)
+    const value: NormalizedPlanPricing | null =
+      price && typeof price.price === 'number' && price.currency && interval
+        ? {
+            amount: price.price,
+            currency: price.currency,
+            interval,
+            intervalCount: price.payment_frequency_count ?? 1,
+          }
+        : null
 
     this.pricingCache.set(productId, {
       value,
@@ -198,10 +300,21 @@ export class DodoProvider implements PaymentProviderAdapter {
     return value
   }
 
+  async getProductPricing(
+    productId: string,
+  ): Promise<{ amount: number; currency: string } | null> {
+    const product = await this.retrieveProduct(productId)
+    const price = product?.price as
+      { price?: number; currency?: string } | undefined
+    if (!price || typeof price.price !== 'number' || !price.currency)
+      return null
+    return { amount: price.price, currency: price.currency }
+  }
+
   async verifyAndParseWebhook(
     rawBody: Buffer | string,
     headers: Record<string, string>,
-  ): Promise<VerifiedBillingEvent> {
+  ): Promise<BillingWebhookResult> {
     const membershipConfig = await this.configsService.get('membership')
     if (!membershipConfig.webhookSigningKey) {
       throw createAppException(AppErrorCode.MEMBERSHIP_PROVIDER_NOT_CONFIGURED)
@@ -214,21 +327,50 @@ export class DodoProvider implements PaymentProviderAdapter {
     let event: DodoSubscriptionEvent
     try {
       event = webhook.verify(payload, headers) as DodoSubscriptionEvent
-    } catch {
-      throw createAppException(AppErrorCode.WEBHOOK_VERIFY_FAILED)
+    } catch (error) {
+      this.logger.warn(
+        `Webhook signature verification failed for ${headers['webhook-id']}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      )
+      throw createAppException(AppErrorCode.WEBHOOK_SIGNATURE_INVALID)
     }
 
-    const type = DODO_EVENT_TYPE_MAP[event.type]
+    const articleResult = this.parseArticleEvent(
+      event as unknown as DodoPaymentEvent,
+      headers['webhook-id'],
+      membershipConfig.articleProductId,
+    )
+    if (articleResult) return articleResult
+
+    const type = resolveEventType(event)
     if (!type) {
-      throw createAppException(AppErrorCode.WEBHOOK_VERIFY_FAILED)
+      this.logger.log(
+        `Ignoring unsupported Dodo event ${event.type}${
+          event.data?.status ? ` (status: ${event.data.status})` : ''
+        }`,
+      )
+      return {
+        kind: 'ignored',
+        rawType: event.type,
+        reason: 'unsupported_event',
+      }
     }
 
     const readerId = event.data.metadata?.readerId
     if (!readerId) {
-      throw createAppException(AppErrorCode.WEBHOOK_VERIFY_FAILED)
+      this.logger.warn(
+        `Ignoring Dodo event ${event.type} for subscription ${event.data.subscription_id}: metadata.readerId is missing`,
+      )
+      return {
+        kind: 'ignored',
+        rawType: event.type,
+        reason: 'missing_reader_metadata',
+      }
     }
 
     return {
+      kind: 'membership',
       event: {
         eventId: headers['webhook-id'],
         provider: 'dodo',
@@ -238,6 +380,98 @@ export class DodoProvider implements PaymentProviderAdapter {
         plan: planFromEvent(event),
         currentPeriodEnd: new Date(event.data.next_billing_date),
         readerId,
+      },
+      rawType: event.type,
+      rawPayload: event,
+    }
+  }
+
+  private parseArticleEvent(
+    event: DodoPaymentEvent,
+    eventId: string,
+    articleProductId: string | undefined,
+  ): BillingWebhookResult | null {
+    if (DODO_ARTICLE_REFUND_EVENTS.has(event.type)) {
+      if (typeof event.data.payment_id !== 'string') {
+        this.logger.warn(
+          `Ignoring Dodo ${event.type} event: payment_id is missing or malformed`,
+        )
+        return {
+          kind: 'ignored',
+          rawType: event.type,
+          reason: 'missing_reader_metadata',
+        }
+      }
+      return {
+        kind: 'article',
+        event: {
+          type: 'refunded',
+          eventId,
+          occurredAt: new Date(event.timestamp),
+          providerPaymentId: event.data.payment_id,
+          providerCustomerId: event.data.customer?.customer_id,
+        },
+        rawType: event.type,
+        rawPayload: event,
+      }
+    }
+
+    if (
+      event.type !== 'payment.succeeded' ||
+      event.data.metadata?.kind !== 'article'
+    ) {
+      return null
+    }
+
+    const { readerId, postId } = event.data.metadata
+    if (
+      !isEntityIdString(readerId) ||
+      !isEntityIdString(postId) ||
+      typeof event.data.payment_id !== 'string' ||
+      typeof event.data.total_amount !== 'number' ||
+      !event.data.currency
+    ) {
+      this.logger.warn(
+        `Ignoring Dodo article payment ${event.data.payment_id}: metadata.readerId/postId, payment_id or amount is missing or malformed`,
+      )
+      return {
+        kind: 'ignored',
+        rawType: event.type,
+        reason: 'missing_reader_metadata',
+      }
+    }
+
+    const cart = event.data.product_cart
+    if (
+      !articleProductId ||
+      !Array.isArray(cart) ||
+      cart.length !== 1 ||
+      cart[0]?.product_id !== articleProductId ||
+      cart[0]?.quantity !== 1 ||
+      event.data.total_amount <= 0
+    ) {
+      this.logger.warn(
+        `Ignoring Dodo article payment ${event.data.payment_id}: product_cart does not match the configured article product or amount is not positive`,
+      )
+      return {
+        kind: 'ignored',
+        rawType: event.type,
+        reason: 'article_product_mismatch',
+      }
+    }
+
+    return {
+      kind: 'article',
+      event: {
+        type: 'paid',
+        eventId,
+        occurredAt: new Date(event.timestamp),
+        readerId,
+        postId,
+        providerPaymentId: event.data.payment_id,
+        providerCustomerId: event.data.customer?.customer_id,
+        amount: event.data.total_amount,
+        currency: event.data.currency,
       },
       rawType: event.type,
       rawPayload: event,

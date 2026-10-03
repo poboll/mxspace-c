@@ -5,6 +5,7 @@ import { NoteService } from '~/modules/note/note.service'
 import { OwnerService } from '~/modules/owner/owner.service'
 import { PageService } from '~/modules/page/page.service'
 import { PostService } from '~/modules/post/post.service'
+import { isInFreeWindow } from '~/modules/post/post-paywall.util'
 import { ReaderService } from '~/modules/reader/reader.service'
 import { getAvatar } from '~/utils/tool.util'
 
@@ -55,11 +56,13 @@ export class EventPayloadEnricherService {
 
     switch (event) {
       case BusinessEvents.POST_CREATE:
-      case BusinessEvents.POST_UPDATE: {
+      case BusinessEvents.POST_UPDATE:
+      case BusinessEvents.POST_REPUBLISH: {
         return (await this.postService.findById(data.id)) ?? data
       }
       case BusinessEvents.NOTE_CREATE:
-      case BusinessEvents.NOTE_UPDATE: {
+      case BusinessEvents.NOTE_UPDATE:
+      case BusinessEvents.NOTE_REPUBLISH: {
         return (await this.noteService.findById(data.id)) ?? data
       }
       case BusinessEvents.PAGE_CREATE:
@@ -75,9 +78,9 @@ export class EventPayloadEnricherService {
     }
   }
 
-  async isPremiumPost(refType: string, refId: string): Promise<boolean> {
+  async isPaywalledPost(refType: string, refId: string): Promise<boolean> {
     if (refType !== 'post') return false
     const post = await this.postService.findById(refId)
-    return !!post?.isPremium
+    return !!post?.isPremium && !isInFreeWindow(post.meta)
   }
 }

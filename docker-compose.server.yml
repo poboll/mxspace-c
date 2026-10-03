@@ -4,12 +4,12 @@
 x-mx-env: &mx-env
   TZ: ${TZ:-Asia/Shanghai}
   NODE_ENV: production
-  PORT: "2333"
+  PORT: '2333'
   ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-localhost:*}
 
   # PostgreSQL (container in this compose)
   PG_HOST: postgres
-  PG_PORT: "5432"
+  PG_PORT: '5432'
   PG_USER: ${PG_USER:-mx}
   PG_PASSWORD: ${PG_PASSWORD:-mx}
   PG_DATABASE: ${PG_DATABASE:-mx_core}
@@ -17,7 +17,7 @@ x-mx-env: &mx-env
 
   # Redis (container in this compose)
   REDIS_HOST: redis
-  REDIS_PORT: "6379"
+  REDIS_PORT: '6379'
   # REDIS_PASSWORD: ${REDIS_PASSWORD:-}
 
   # Security (optional)
@@ -27,6 +27,9 @@ x-mx-env: &mx-env
   JWT_SECRET: ${JWT_SECRET:-}
   JWT_EXPIRE: ${JWT_EXPIRE:-}
 
+  # Comma-separated HTTPS origins mx-core may contact for Push Relay.
+  MX_PUSH_RELAY_ORIGINS: ${MX_PUSH_RELAY_ORIGINS:-}
+
   # Cache
   DISABLE_CACHE: ${DISABLE_CACHE:-false}
 
@@ -34,8 +37,21 @@ x-mx-env: &mx-env
   DEBUG: ${DEBUG:-false}
   DEBUG_MEMORY_DUMP: ${DEBUG_MEMORY_DUMP:-false}
 
+# Bound crash artifacts and stdout/stderr even during dependency outages.
+x-runtime-safety: &runtime-safety
+  ulimits:
+    core:
+      soft: 0
+      hard: 0
+  logging:
+    driver: json-file
+    options:
+      max-size: '10m'
+      max-file: '3'
+
 services:
   mx-core:
+    <<: *runtime-safety
     # CI build this image, then ship it to your SERVER.
     # e.g. ghcr.io/<org>/<repo>:<tag>
     image: ${MX_CORE_IMAGE:-mx-core:latest}
@@ -43,7 +59,7 @@ services:
     restart: unless-stopped
 
     ports:
-      - "${MX_PORT:-2333}:2333"
+      - '${MX_PORT:-2333}:2333'
 
     environment: *mx-env
 
@@ -58,7 +74,7 @@ services:
         condition: service_started
 
     healthcheck:
-      test: [CMD, curl, -f, "http://127.0.0.1:2333/api/v3/ping"]
+      test: [CMD, curl, -f, 'http://127.0.0.1:2333/api/v3/ping']
       interval: 1m30s
       timeout: 30s
       retries: 5
@@ -69,10 +85,11 @@ services:
   # waits for completion via `service_completed_successfully` before starting.
   # See docs/superpowers/specs/2026-05-05-database-migration-release-phase-design.md.
   mx-migrate:
+    <<: *runtime-safety
     image: ${MX_CORE_IMAGE:-mx-core:latest}
     container_name: mx-migrate
-    command: ["node", "migrate.mjs"]
-    restart: "no"
+    command: ['node', 'migrate.mjs']
+    restart: 'no'
     environment: *mx-env
     depends_on:
       postgres:
@@ -81,20 +98,22 @@ services:
         condition: service_started
 
   redis:
+    <<: *runtime-safety
     image: redis:8-alpine
     container_name: mx-redis
     restart: unless-stopped
-    command: ["redis-server", "--appendonly", "yes"]
+    command: ['redis-server', '--appendonly', 'yes']
     volumes:
       - ./data/redis:/data
     healthcheck:
-      test: [CMD-SHELL, "redis-cli ping | grep PONG"]
+      test: [CMD-SHELL, 'redis-cli ping | grep PONG']
       start_period: 20s
       interval: 30s
       retries: 5
       timeout: 3s
 
   postgres:
+    <<: *runtime-safety
     image: postgres:16-alpine
     container_name: mx-postgres
     restart: unless-stopped
@@ -105,7 +124,8 @@ services:
     volumes:
       - ./data/postgres:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${PG_USER:-mx} -d ${PG_DATABASE:-mx_core}"]
+      test:
+        ['CMD-SHELL', 'pg_isready -U ${PG_USER:-mx} -d ${PG_DATABASE:-mx_core}']
       interval: 30s
       timeout: 5s
       retries: 5

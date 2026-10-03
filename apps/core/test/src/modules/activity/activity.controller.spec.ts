@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 
 import { ActivityController } from '~/modules/activity/activity.controller'
+import { ActivityService } from '~/modules/activity/activity.service'
 
 const NOW = new Date('2024-01-01')
 
@@ -70,6 +71,9 @@ const createController = (opts: {
     getLikeActivities: vi.fn(async () => ({
       data: opts.recent?.likeData ?? [],
     })),
+    getRecentLikes(this: any) {
+      return ActivityService.prototype.getRecentLikes.call(this)
+    },
     getRecentComment: vi.fn(async () => opts.recent?.comment ?? []),
     getRecentPublish: vi.fn(
       async () =>
@@ -103,8 +107,44 @@ const createController = (opts: {
     translationService as any,
   )
 
-  return { controller, activityService, translationService }
+  return { controller, activityService, translationService, readerService }
 }
+
+describe('ActivityController.getPresence', () => {
+  it('returns only the public reader card', async () => {
+    const { controller, activityService, readerService } = createController({})
+    activityService.getRoomPresence = vi.fn(async () => [
+      {
+        identity: 'abcd1234',
+        readerId: 'reader-1',
+        ip: '1.2.3.4',
+        position: 12,
+      },
+    ])
+    readerService.findReaderInIds = vi.fn(async () => [
+      {
+        id: 'reader-1',
+        name: 'Magren',
+        image: 'https://avatars.githubusercontent.com/u/1?v=4',
+        handle: 'magren',
+        email: 'hidden@example.com',
+        emailVerified: true,
+        role: 'reader',
+        membership: { status: 'active' },
+      },
+    ])
+
+    const res = await controller.getPresence({ roomName: 'article-1' } as any)
+
+    expect(res.readers['reader-1']).toEqual({
+      id: 'reader-1',
+      name: 'Magren',
+      image: 'https://avatars.githubusercontent.com/u/1?v=4',
+      handle: 'magren',
+    })
+    expect(res.presence.abcd1234).not.toHaveProperty('ip')
+  })
+})
 
 describe('ActivityController.getRoomsInfo', () => {
   it('returns bare data when lang is absent', async () => {
@@ -184,7 +224,14 @@ describe('ActivityController.getTopReadings', () => {
       readings: [
         {
           refId: 'r1',
-          ref: { id: 'r1', title: 'Article 1', createdAt: NOW, slug: 'a1' },
+          ref: {
+            id: 'r1',
+            title: 'Article 1',
+            createdAt: NOW,
+            slug: 'a1',
+            categoryId: 'category-1',
+            category: { id: 'category-1', name: 'Design', slug: 'design' },
+          },
           count: 10,
         },
       ],
@@ -193,6 +240,11 @@ describe('ActivityController.getTopReadings', () => {
     const res = await controller.getTopReadings({} as any, undefined)
     expect(Array.isArray(res)).toBe(true)
     expect((res as any[])[0].ref.title).toBe('Article 1')
+    expect((res as any[])[0].ref).toEqual({
+      id: 'r1',
+      slug: 'a1',
+      title: 'Article 1',
+    })
   })
 
   it('translates ref.title in place and meta is keyed by refId', async () => {

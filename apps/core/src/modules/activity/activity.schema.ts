@@ -1,7 +1,6 @@
-import { createZodDto } from 'nestjs-zod'
 import { z } from 'zod'
 
-import { zCoerceInt, zEntityId } from '~/common/zod'
+import { zCoerceInt, zEntityId, zHttpsUrl } from '~/common/zod'
 import { BasicPagerSchema } from '~/shared/dto/pager.dto'
 
 import { Activity } from './activity.constant'
@@ -17,9 +16,7 @@ export const ActivityTypeParamsSchema = z.object({
   type: z.preprocess((val) => transformEnum(val), z.enum(Activity)),
 })
 
-export class ActivityTypeParamsDto extends createZodDto(
-  ActivityTypeParamsSchema,
-) {}
+export type ActivityTypeParamsDto = z.infer<typeof ActivityTypeParamsSchema>
 
 /**
  * Activity delete schema
@@ -28,7 +25,7 @@ export const ActivityDeleteSchema = z.object({
   before: z.number().optional(),
 })
 
-export class ActivityDeleteDto extends createZodDto(ActivityDeleteSchema) {}
+export type ActivityDeleteDto = z.infer<typeof ActivityDeleteSchema>
 
 /**
  * Activity query schema
@@ -37,7 +34,7 @@ export const ActivityQuerySchema = BasicPagerSchema.extend({
   type: z.preprocess((val) => transformEnum(val), z.enum(Activity).optional()),
 })
 
-export class ActivityQueryDto extends createZodDto(ActivityQuerySchema) {}
+export type ActivityQueryDto = z.infer<typeof ActivityQuerySchema>
 
 /**
  * Activity range schema
@@ -48,7 +45,7 @@ export const ActivityRangeSchema = z.object({
   limit: zCoerceInt.min(1).max(200).default(50).optional(),
 })
 
-export class ActivityRangeDto extends createZodDto(ActivityRangeSchema) {}
+export type ActivityRangeDto = z.infer<typeof ActivityRangeSchema>
 
 /**
  * Activity top readings schema
@@ -58,9 +55,7 @@ export const ActivityTopReadingsSchema = z.object({
   days: zCoerceInt.min(1).max(365).default(14).optional(),
 })
 
-export class ActivityTopReadingsDto extends createZodDto(
-  ActivityTopReadingsSchema,
-) {}
+export type ActivityTopReadingsDto = z.infer<typeof ActivityTopReadingsSchema>
 
 /**
  * Activity notification schema
@@ -69,9 +64,7 @@ export const ActivityNotificationSchema = z.object({
   from: zCoerceInt,
 })
 
-export class ActivityNotificationDto extends createZodDto(
-  ActivityNotificationSchema,
-) {}
+export type ActivityNotificationDto = z.infer<typeof ActivityNotificationSchema>
 
 /**
  * Like body schema
@@ -86,7 +79,7 @@ export const LikeBodySchema = z.object({
   ]) as z.ZodType<ActivityLikeSupportType>,
 })
 
-export class LikeBodyDto extends createZodDto(LikeBodySchema) {}
+export type LikeBodyDto = z.infer<typeof LikeBodySchema>
 
 /**
  * Update presence schema
@@ -97,11 +90,12 @@ export const UpdatePresenceSchema = z.object({
   ts: z.number(),
   position: z.number().min(0),
   displayName: z.string().max(50).optional(),
-  sid: z.string().max(30),
+  sid: z.string().min(1).max(64),
   readerId: z.string().optional(),
+  image: z.string().max(2048).pipe(zHttpsUrl).optional(),
 })
 
-export class UpdatePresenceDto extends createZodDto(UpdatePresenceSchema) {}
+export type UpdatePresenceDto = z.infer<typeof UpdatePresenceSchema>
 
 /**
  * Get presence query schema
@@ -110,17 +104,4 @@ export const GetPresenceQuerySchema = z.object({
   roomName: z.string().max(50),
 })
 
-export class GetPresenceQueryDto extends createZodDto(GetPresenceQuerySchema) {}
-
-// Type exports
-export type ActivityTypeParamsInput = z.infer<typeof ActivityTypeParamsSchema>
-export type ActivityDeleteInput = z.infer<typeof ActivityDeleteSchema>
-export type ActivityQueryInput = z.infer<typeof ActivityQuerySchema>
-export type ActivityRangeInput = z.infer<typeof ActivityRangeSchema>
-export type ActivityNotificationInput = z.infer<
-  typeof ActivityNotificationSchema
->
-export type ActivityTopReadingsInput = z.infer<typeof ActivityTopReadingsSchema>
-export type LikeBodyInput = z.infer<typeof LikeBodySchema>
-export type UpdatePresenceInput = z.infer<typeof UpdatePresenceSchema>
-export type GetPresenceQueryInput = z.infer<typeof GetPresenceQuerySchema>
+export type GetPresenceQueryDto = z.infer<typeof GetPresenceQuerySchema>

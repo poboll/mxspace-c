@@ -1,4 +1,3 @@
-import { createZodDto } from 'nestjs-zod'
 import { z } from 'zod'
 
 export const DraftImagePromptSchema = z
@@ -13,11 +12,11 @@ export const DraftImagePromptSchema = z
     (data) =>
       !!data.refId || !!data.draftId || (!!data.title && !!data.summary),
     {
-      message: 'Either refId, draftId, or both title and summary are required',
+      error: 'Either refId, draftId, or both title and summary are required',
     },
   )
 
-export class DraftImagePromptDto extends createZodDto(DraftImagePromptSchema) {}
+export type DraftImagePromptDto = z.infer<typeof DraftImagePromptSchema>
 
 export const GenerateImageSchema = z
   .object({
@@ -43,11 +42,9 @@ export const GenerateImageSchema = z
       (!!data.presetId &&
         (!!data.refId || !!data.draftId || (!!data.title && !!data.summary))),
     {
-      message:
+      error:
         'Either prompt, or presetId with refId / draftId / title and summary, is required',
     },
   )
 
-export class GenerateImageDto extends createZodDto(GenerateImageSchema) {}
-
-export type GenerateImageInput = z.infer<typeof GenerateImageSchema>
+export type GenerateImageDto = z.infer<typeof GenerateImageSchema>

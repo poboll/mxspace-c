@@ -3,6 +3,7 @@ import {
   integer,
   jsonb,
   pgTable,
+  primaryKey,
   text,
   timestamp,
   uniqueIndex,
@@ -10,6 +11,37 @@ import {
 } from 'drizzle-orm/pg-core'
 
 import { createdAt, pkText, refText } from './columns'
+
+// A failed first fetch has no successful cache row. Keep retry/lease state
+// separately so it never masquerades as a usable link preview.
+export const enrichmentFetchState = pgTable(
+  'enrichment_fetch_state',
+  {
+    provider: varchar('provider', { length: 64 }).notNull(),
+    externalId: varchar('external_id', { length: 256 }).notNull(),
+    locale: varchar('locale', { length: 8 }).notNull().default(''),
+    failureCount: integer('failure_count').notNull().default(0),
+    lastError: text('last_error'),
+    lastAttemptAt: timestamp('last_attempt_at', {
+      withTimezone: true,
+      mode: 'date',
+    })
+      .notNull()
+      .defaultNow(),
+    nextRetryAt: timestamp('next_retry_at', {
+      withTimezone: true,
+      mode: 'date',
+    }),
+    leaseToken: text('lease_token'),
+    leaseExpiresAt: timestamp('lease_expires_at', {
+      withTimezone: true,
+      mode: 'date',
+    }),
+  },
+  (table) => [
+    primaryKey({ columns: [table.provider, table.externalId, table.locale] }),
+  ],
+)
 
 export const enrichmentCache = pgTable(
   'enrichment_cache',

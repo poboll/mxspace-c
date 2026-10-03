@@ -24,10 +24,9 @@ import { EventManagerService } from '~/processors/helper/helper.event.service'
 import { ImageService } from '~/processors/helper/helper.image.service'
 import { LexicalService } from '~/processors/helper/helper.lexical.service'
 import { ContentFormat } from '~/shared/types/content-format.type'
-import { isLexical } from '~/utils/content.util'
+import { contentIdentityChanged, isLexical } from '~/utils/content.util'
 import { scheduleManager } from '~/utils/schedule.util'
 import { getLessThanNow } from '~/utils/time.util'
-import { isDefined } from '~/utils/validator.util'
 
 import type { CategoryService } from '../category/category.service'
 import { CommentService } from '../comment/comment.service'
@@ -41,6 +40,10 @@ import {
   type PostListParams,
   type PostModel,
 } from './post.types'
+import {
+  applyFreeWindowOnPublish,
+  assertPaywallMetaValid,
+} from './post-paywall.util'
 
 @Injectable()
 export class PostService implements OnApplicationBootstrap {
@@ -71,12 +74,6 @@ export class PostService implements OnApplicationBootstrap {
 
   public get repository() {
     return this.postRepository
-  }
-
-  private normalizeMeta(meta: unknown) {
-    if (meta === undefined) return undefined
-    if (meta === null) return null
-    return meta as Record<string, unknown>
   }
 
   async list(params: PostListParams = {}) {
@@ -184,7 +181,8 @@ export class PostService implements OnApplicationBootstrap {
     return this.postRepository.findAdjacent(direction, pivotDate, options)
   }
 
-  async create(post: PostModel & { draftId?: string }) {
+  async create(post: PostModel) {
+    assertPaywallMetaValid(post.meta)
     this.lexicalService.normalizeContentForStorage(post)
 
     const effectiveContentFormat = post.contentFormat ?? ContentFormat.Markdown
@@ -192,7 +190,7 @@ export class PostService implements OnApplicationBootstrap {
       throw createAppException(AppErrorCode.PREMIUM_REQUIRES_LEXICAL)
     }
 
-    const { categoryId, draftId } = post
+    const { categoryId } = post
     const category = await this.categoryService.findCategoryById(
       categoryId as any as string,
     )
@@ -208,6 +206,10 @@ export class PostService implements OnApplicationBootstrap {
     const relatedIds = await this.checkRelated(post)
     const createdAt = getLessThanNow(post.createdAt ?? (post as any).created)
     const pinAt = post.pinAt ?? (post as any).pin ?? null
+    const meta =
+      (post.isPublished ?? true) && post.isPremium
+        ? applyFreeWindowOnPublish(post.meta)
+        : post.meta
     let doc = await this.postRepository.create({
       title: post.title,
       slug,
@@ -217,7 +219,7 @@ export class PostService implements OnApplicationBootstrap {
       contentFormat: post.contentFormat ?? ContentFormat.Markdown,
       summary: post.summary,
       images: post.images as unknown[],
-      meta: this.normalizeMeta(post.meta) as Record<string, unknown> | null,
+      meta,
       tags: post.tags,
       categoryId: category.id,
       copyright: post.copyright,
@@ -234,15 +236,6 @@ export class PostService implements OnApplicationBootstrap {
     }
 
     await this.relatedEachOther(doc, relatedIds)
-
-    if (draftId) {
-      await this.fileReferenceService.removeReferencesForDocument(
-        draftId,
-        FileReferenceType.Draft,
-      )
-      await this.draftService.linkToPublished(draftId, doc.id)
-      await this.draftService.markAsPublished(draftId)
-    }
 
     scheduleManager.schedule(async () => {
       await Promise.all([
@@ -265,7 +258,11 @@ export class PostService implements OnApplicationBootstrap {
         this.eventManager.emit(
           BusinessEvents.POST_CREATE,
           { id: doc.id },
-          { scope: EventScope.TO_SYSTEM_VISITOR },
+          {
+            scope: doc.isPublished
+              ? EventScope.TO_SYSTEM_VISITOR
+              : EventScope.TO_SYSTEM,
+          },
         ),
       ])
     })
@@ -353,10 +350,11 @@ export class PostService implements OnApplicationBootstrap {
   async updateById(
     id: string,
     data: Partial<PostModel> & {
-      draftId?: string
       migration?: MarkdownToLexicalMigrationDescriptor
+      migrationBranchId?: string
     },
   ) {
+    assertPaywallMetaValid(data.meta)
     this.lexicalService.normalizeContentForStorage(data)
 
     const oldDocument = await this.findById(id)
@@ -364,7 +362,7 @@ export class PostService implements OnApplicationBootstrap {
       throw createAppException(AppErrorCode.POST_NOT_FOUND, { id })
     }
 
-    const { draftId, migration } = data
+    const { migration, migrationBranchId } = data
     const isMarkdownToLexical =
       oldDocument.contentFormat === ContentFormat.Markdown &&
       data.contentFormat === ContentFormat.Lexical
@@ -407,7 +405,7 @@ export class PostService implements OnApplicationBootstrap {
       if (!category) throw createAppException(AppErrorCode.CATEGORY_NOT_FOUND)
     }
 
-    if ([data.text, data.title, data.slug].some(isDefined)) {
+    if (contentIdentityChanged(oldDocument, data)) {
       data.modifiedAt = new Date()
     }
 
@@ -436,6 +434,16 @@ export class PostService implements OnApplicationBootstrap {
       : patch.createdAt
     const pinAt =
       (data as any).pin !== undefined ? (data as any).pin : patch.pinAt
+    const effectiveIsPublished = patch.isPublished ?? oldDocument.isPublished
+    const entersPaywall =
+      effectiveIsPublished &&
+      effectiveIsPremium &&
+      (!oldDocument.isPublished || !oldDocument.isPremium)
+    const meta = entersPaywall
+      ? applyFreeWindowOnPublish(
+          patch.meta === undefined ? oldDocument.meta : patch.meta,
+        )
+      : patch.meta
     const repositoryPatch = {
       title: patch.title,
       slug: patch.slug,
@@ -445,10 +453,7 @@ export class PostService implements OnApplicationBootstrap {
       contentFormat: patch.contentFormat,
       summary: patch.summary,
       images: patch.images as unknown[] | undefined,
-      meta:
-        patch.meta !== undefined
-          ? (this.normalizeMeta(patch.meta) as Record<string, unknown> | null)
-          : undefined,
+      meta,
       tags: patch.tags,
       categoryId: patch.categoryId as string | undefined,
       copyright: patch.copyright,
@@ -470,7 +475,7 @@ export class PostService implements OnApplicationBootstrap {
         refType: DraftRefType.Post,
         refId: id,
         descriptor: migration,
-        draftId,
+        branchId: migrationBranchId,
         patch: repositoryPatch,
         source: {
           title: repositoryPatch.title ?? oldDocument.title,
@@ -496,17 +501,14 @@ export class PostService implements OnApplicationBootstrap {
       updated = await this.postRepository.update(id, repositoryPatch)
     }
 
-    if (draftId && !migration) {
-      await this.draftService.markAsPublished(draftId)
-    }
-
-    scheduleManager.schedule(() => this.afterUpdatePost(id))
+    const wasPublished = oldDocument.isPublished
+    scheduleManager.schedule(() => this.afterUpdatePost(id, wasPublished))
     if (updated) this.enrichmentService.scheduleDocPrefetch(updated)
     return updated
   }
 
   afterUpdatePost = debounce(
-    async (id: string) => {
+    async (id: string, wasPublished: boolean) => {
       const doc = await this.findById(id)
       if (doc) {
         await this.fileReferenceService.updateReferencesForDocument(
@@ -531,9 +533,18 @@ export class PostService implements OnApplicationBootstrap {
           ),
         doc &&
           this.eventManager.emit(
-            BusinessEvents.POST_UPDATE,
+            wasPublished === doc.isPublished
+              ? BusinessEvents.POST_UPDATE
+              : doc.isPublished
+                ? BusinessEvents.POST_REPUBLISH
+                : BusinessEvents.POST_UNPUBLISH,
             { id: doc.id },
-            { scope: EventScope.TO_SYSTEM_VISITOR },
+            {
+              scope:
+                wasPublished || doc.isPublished
+                  ? EventScope.TO_SYSTEM_VISITOR
+                  : EventScope.TO_SYSTEM,
+            },
           ),
       ])
     },
@@ -554,14 +565,19 @@ export class PostService implements OnApplicationBootstrap {
         FileReferenceType.Post,
       ),
     ])
-    await this.eventManager.emit(
-      BusinessEvents.POST_DELETE,
-      { id },
-      {
-        scope: EventScope.TO_SYSTEM_VISITOR,
-        nextTick: true,
-      },
-    )
+    await Promise.all([
+      this.eventManager.emit(EventBusEvents.CleanAggregateCache, null, {
+        scope: EventScope.TO_SYSTEM,
+      }),
+      this.eventManager.emit(
+        BusinessEvents.POST_DELETE,
+        { id },
+        {
+          scope: EventScope.TO_SYSTEM_VISITOR,
+          nextTick: true,
+        },
+      ),
+    ])
   }
 
   async getCategoryBySlug(slug: string) {

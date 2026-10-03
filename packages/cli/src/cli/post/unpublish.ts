@@ -1,11 +1,11 @@
-import { Args, Command } from '@effect/cli'
 import { Effect } from 'effect'
+import { Argument, Command } from 'effect/cli'
 
 import { Api } from '../../services/Api'
 import { Renderer } from '../../services/Renderer'
 import { Resolver } from '../../services/Resolver'
 
-const slugOrId = Args.text({ name: 'slugOrId' })
+const slugOrId = Argument.String('slugOrId')
 
 export const unpublish = Command.make(
   'unpublish',
@@ -16,7 +16,7 @@ export const unpublish = Command.make(
       const api = yield* Api
       const renderer = yield* Renderer
       const id = yield* resolver.resolvePostId(slugOrId)
-      const res = yield* api.request(`/posts/${id}`, {
+      const res = yield* api.request(`/posts/${id}/publish`, {
         method: 'PATCH',
         body: { isPublished: false },
       })

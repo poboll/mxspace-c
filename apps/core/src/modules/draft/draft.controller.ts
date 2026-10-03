@@ -1,31 +1,35 @@
-import {
-  Body,
-  Delete,
-  Get,
-  HttpCode,
-  Param,
-  Post,
-  Put,
-  Query,
-} from '@nestjs/common'
+import { Body, Delete, Get, Param, Post, Put, Query } from '@nestjs/common'
 
 import { ApiController } from '~/common/decorators/api-controller.decorator'
 import { Auth } from '~/common/decorators/auth.decorator'
 import { AppErrorCode, createAppException } from '~/common/errors'
 import { withMeta } from '~/common/response/envelope.types'
 import { MetaObjectBuilder } from '~/common/response/meta-builder'
-import { EntityIdDto } from '~/shared/dto/id.dto'
+import { type EntityIdDto, EntityIdSchema } from '~/shared/dto/id.dto'
 
 import { DraftRefType } from './draft.enum'
 import {
-  CreateDraftDto,
-  DraftPagerDto,
-  DraftRefTypeAndIdDto,
-  DraftRefTypeDto,
-  RestoreVersionDto,
-  UpdateDraftDto,
+  type CreateDraftDto,
+  CreateDraftSchema,
+  type DraftDocumentIdDto,
+  DraftDocumentIdSchema,
+  type DraftPagerDto,
+  DraftPagerSchema,
+  type DraftRefTypeAndIdDto,
+  DraftRefTypeAndIdSchema,
+  type DraftRefTypeDto,
+  DraftRefTypeSchema,
+  type DraftShareTokenDto,
+  DraftShareTokenSchema,
+  type RevisionComparisonDto,
+  RevisionComparisonSchema,
+  type SetDraftShareDto,
+  SetDraftShareSchema,
+  type UpdateDraftDto,
+  UpdateDraftSchema,
 } from './draft.schema'
 import { DraftService } from './draft.service'
+import { DraftViews } from './draft.views'
 
 @ApiController('drafts')
 export class DraftController {
@@ -33,33 +37,20 @@ export class DraftController {
 
   @Post('/')
   @Auth()
-  create(@Body() body: CreateDraftDto) {
+  create(@Body({ schema: CreateDraftSchema }) body: CreateDraftDto) {
     return this.draftService.create(body)
   }
 
   @Get('/')
   @Auth()
-  async list(@Query() query: DraftPagerDto) {
-    const { page, size, refType, hasRef } = query
-
-    const filter: Record<string, any> = {}
-    if (refType) filter.refType = refType
-    if (hasRef !== undefined) filter.hasRef = hasRef
-
-    const result = await this.draftService.list(page, size, filter)
-    const data = result.data.map((d) => {
-      if (typeof d.typeSpecificData === 'string') {
-        try {
-          ;(d as any).typeSpecificData = JSON.parse(d.typeSpecificData)
-        } catch {
-          // keep raw payload
-        }
-      }
-      return d
+  async list(@Query({ schema: DraftPagerSchema }) query: DraftPagerDto) {
+    const result = await this.draftService.list(query.page, query.size, {
+      hasRef: query.hasRef,
+      refType: query.refType,
+      search: query.search,
     })
-
     return withMeta(
-      data,
+      result.data,
       new MetaObjectBuilder()
         .view('card')
         .pagination({
@@ -72,24 +63,74 @@ export class DraftController {
     )
   }
 
-  @Get('/by-ref/:refType/new')
+  @Get('/context/:refType/:refId')
   @Auth()
-  getNewDrafts(@Param() params: DraftRefTypeDto) {
-    return this.draftService.findNewDrafts(params.refType as DraftRefType)
-  }
-
-  @Get('/by-ref/:refType/:refId')
-  @Auth()
-  getByRef(@Param() params: DraftRefTypeAndIdDto) {
-    return this.draftService.findByRef(
+  context(
+    @Param({ schema: DraftRefTypeAndIdSchema }) params: DraftRefTypeAndIdDto,
+  ) {
+    return this.draftService.getContext(
       params.refType as DraftRefType,
       params.refId,
     )
   }
 
+  @Get('/new/:refType')
+  @Auth()
+  getNewDrafts(@Param({ schema: DraftRefTypeSchema }) params: DraftRefTypeDto) {
+    return this.draftService.findNewDrafts(params.refType as DraftRefType)
+  }
+
+  @Get('/shared/:token')
+  async shared(
+    @Param({ schema: DraftShareTokenSchema }) params: DraftShareTokenDto,
+  ) {
+    const snapshot = await this.draftService.findSharedSnapshot(params.token)
+    return DraftViews.shared.parse(snapshot)
+  }
+
+  @Get('/documents/:documentId/share')
+  @Auth()
+  getShare(
+    @Param({ schema: DraftDocumentIdSchema }) params: DraftDocumentIdDto,
+  ) {
+    return this.draftService.getShare(params.documentId)
+  }
+
+  @Put('/documents/:documentId/share')
+  @Auth()
+  setShare(
+    @Param({ schema: DraftDocumentIdSchema }) params: DraftDocumentIdDto,
+    @Body({ schema: SetDraftShareSchema }) body: SetDraftShareDto,
+  ) {
+    return this.draftService.setShare(params.documentId, body)
+  }
+
+  @Delete('/documents/:documentId/share')
+  @Auth()
+  async deleteShare(
+    @Param({ schema: DraftDocumentIdSchema }) params: DraftDocumentIdDto,
+  ) {
+    await this.draftService.deleteShare(params.documentId)
+    return { success: true }
+  }
+
+  @Get('/compare/:leftId/:rightId')
+  @Auth()
+  compare(
+    @Param({ schema: RevisionComparisonSchema }) params: RevisionComparisonDto,
+  ) {
+    return this.draftService.compare(params.leftId, params.rightId)
+  }
+
+  @Get('/revisions/:id')
+  @Auth()
+  revision(@Param({ schema: EntityIdSchema }) params: EntityIdDto) {
+    return this.draftService.findRevisionById(params.id)
+  }
+
   @Get('/:id')
   @Auth()
-  async getById(@Param() params: EntityIdDto) {
+  async getById(@Param({ schema: EntityIdSchema }) params: EntityIdDto) {
     const draft = await this.draftService.findById(params.id)
     if (!draft) {
       throw createAppException(AppErrorCode.DRAFT_NOT_FOUND, { id: params.id })
@@ -97,41 +138,25 @@ export class DraftController {
     return draft
   }
 
+  @Get('/:id/revisions')
+  @Auth()
+  revisions(@Param({ schema: EntityIdSchema }) params: EntityIdDto) {
+    return this.draftService.getBranchRevisions(params.id)
+  }
+
   @Put('/:id')
   @Auth()
-  update(@Param() params: EntityIdDto, @Body() body: UpdateDraftDto) {
+  update(
+    @Param({ schema: EntityIdSchema }) params: EntityIdDto,
+    @Body({ schema: UpdateDraftSchema }) body: UpdateDraftDto,
+  ) {
     return this.draftService.update(params.id, body)
   }
 
   @Delete('/:id')
   @Auth()
-  async delete(@Param() params: EntityIdDto) {
+  async delete(@Param({ schema: EntityIdSchema }) params: EntityIdDto) {
     await this.draftService.delete(params.id)
     return { success: true }
-  }
-
-  @Get('/:id/history')
-  @Auth()
-  getHistory(@Param() params: EntityIdDto) {
-    return this.draftService.getHistory(params.id)
-  }
-
-  @Get('/:id/history/:version')
-  @Auth()
-  getHistoryVersion(
-    @Param() params: EntityIdDto,
-    @Param() versionParams: RestoreVersionDto,
-  ) {
-    return this.draftService.getHistoryVersion(params.id, versionParams.version)
-  }
-
-  @Post('/:id/restore/:version')
-  @HttpCode(200)
-  @Auth()
-  restore(
-    @Param() params: EntityIdDto,
-    @Param() versionParams: RestoreVersionDto,
-  ) {
-    return this.draftService.restoreVersion(params.id, versionParams.version)
   }
 }

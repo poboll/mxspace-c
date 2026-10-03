@@ -1,4 +1,3 @@
-import { createZodDto } from 'nestjs-zod'
 import { z } from 'zod'
 
 import { zCoerceInt, zLang } from '~/common/zod'
@@ -13,7 +12,7 @@ export const TopQuerySchema = z.object({
   ),
 })
 
-export class TopQueryDto extends createZodDto(TopQuerySchema) {}
+export type TopQueryDto = z.infer<typeof TopQuerySchema>
 
 export enum TimelineType {
   Post,
@@ -36,7 +35,7 @@ export const TimelineQuerySchema = z.object({
   lang: zLang,
 })
 
-export class TimelineQueryDto extends createZodDto(TimelineQuerySchema) {}
+export type TimelineQueryDto = z.infer<typeof TimelineQuerySchema>
 
 /**
  * Aggregate query schema
@@ -46,7 +45,7 @@ export const AggregateQuerySchema = z.object({
   lang: zLang,
 })
 
-export class AggregateQueryDto extends createZodDto(AggregateQuerySchema) {}
+export type AggregateQueryDto = z.infer<typeof AggregateQuerySchema>
 
 export enum ReadAndLikeCountDocumentType {
   Post,
@@ -64,9 +63,7 @@ export const ReadAndLikeCountTypeSchema = z.object({
   ),
 })
 
-export class ReadAndLikeCountTypeDto extends createZodDto(
-  ReadAndLikeCountTypeSchema,
-) {}
+export type ReadAndLikeCountTypeDto = z.infer<typeof ReadAndLikeCountTypeSchema>
 
 /**
  * Latest query schema
@@ -82,7 +79,7 @@ export const LatestQuerySchema = z.object({
       if (Array.isArray(val)) return val.map(Number)
       return val
     },
-    z.array(z.nativeEnum(TimelineType)).optional(),
+    z.array(z.enum(TimelineType)).optional(),
   ),
   combined: z.preprocess(
     (val) => val === 'true' || val === true,
@@ -90,13 +87,4 @@ export const LatestQuerySchema = z.object({
   ),
 })
 
-export class LatestQueryDto extends createZodDto(LatestQuerySchema) {}
-
-// Type exports
-export type TopQueryInput = z.infer<typeof TopQuerySchema>
-export type TimelineQueryInput = z.infer<typeof TimelineQuerySchema>
-export type AggregateQueryInput = z.infer<typeof AggregateQuerySchema>
-export type ReadAndLikeCountTypeInput = z.infer<
-  typeof ReadAndLikeCountTypeSchema
->
-export type LatestQueryInput = z.infer<typeof LatestQuerySchema>
+export type LatestQueryDto = z.infer<typeof LatestQuerySchema>

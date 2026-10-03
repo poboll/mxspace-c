@@ -1,14 +1,27 @@
 ## TL;DR
 
-Repairs a schema migrator flaw that let a migration be recorded as applied without running, breaking article translations.
+Updating an article now reuses the AI resources chosen at its last publish, so CLI updates no longer silently skip summaries or translations.
+
+## Highlights
+
+Each article now remembers which AI resources (summary, insights, translation, TTS) were chosen at its last publish, and whether publishing waited for each one. When a publish job leaves the AI selection out, the server falls back to that remembered choice instead of generating nothing. Passing an explicit list, including an empty one, replaces the remembered choice once the publish succeeds.
+
+The admin publish dialog now opens with the article's remembered choices instead of a browser-local default. In the CLI, `post`/`note` `update`, `edit` and `apply` inherit the last choices automatically; `mxs draft publish --ai none` clears them.
 
 ## Changes
 
-- A migration whose journal timestamp is not strictly increasing is no longer mistaken for already-applied history and skipped without executing its SQL ([33d2a43](https://github.com/mx-space/core/commit/33d2a43dd727b9143169f17cc1034d4373bf68e8))
-- Servers upgraded to v13.25.2 automatically regain the missing `ai_translations.updated_at` column on deploy, so post, note, and category listings return translated content again ([33d2a43](https://github.com/mx-space/core/commit/33d2a43dd727b9143169f17cc1034d4373bf68e8))
-- The startup schema guard now verifies every bundled migration by hash rather than trusting the newest recorded timestamp, so an unapplied migration blocks the deploy instead of surfacing later as runtime query failures ([33d2a43](https://github.com/mx-space/core/commit/33d2a43dd727b9143169f17cc1034d4373bf68e8))
-- Failed translation lookups now log the underlying database error instead of only the SQL statement that failed ([33d2a43](https://github.com/mx-space/core/commit/33d2a43dd727b9143169f17cc1034d4373bf68e8))
+### Features
+
+- Publish jobs reuse each article's last AI resource choices when none are given ([4156d29](https://github.com/mx-space/core/commit/4156d296775380f6075499d74b3fde19ff43cb18))
+
+### Other
+
+- Upgraded major dependencies, including pi-ai, nodemailer, jotai, dotenv, zod-compiler and unplugin-swc, and moved the editor stack to `@haklex/*` 0.46.0 with lexical 0.52.0 ([6a0bd8d](https://github.com/mx-space/core/commit/6a0bd8d90), [49c309a](https://github.com/mx-space/core/commit/49c309a4d))
+
+## Upgrade Notes
+
+- This release adds a nullable column (`content_documents.publish_ai_resources`). Run the `mx-migrate` step before starting the new image; the app refuses to boot until the schema is current.
 
 ---
 
-**Full Changelog**: https://github.com/mx-space/core/compare/v13.25.2...v13.25.3
+**Full Changelog**: https://github.com/mx-space/core/compare/v14.15.1...v14.15.2

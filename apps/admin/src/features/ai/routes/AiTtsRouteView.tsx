@@ -1,4 +1,4 @@
-import { Plus, RefreshCw } from 'lucide-react'
+import { Play, Plus, RefreshCw } from 'lucide-react'
 import { useMemo } from 'react'
 
 import type { AITtsRow } from '~/api/ai'
@@ -11,8 +11,15 @@ import {
 
 import { ArticleGroupedRouteView } from '../components/article-grouped/ArticleGroupedRouteView'
 import { TtsPlaybackBody } from '../components/article-grouped/TtsPlaybackBody'
-import type { ArticleGroupedConfig } from '../components/article-grouped/types'
-import { buildTtsRegeneratePayload } from '../utils/ai'
+import type {
+  ArticleGroupedConfig,
+  ItemAction,
+} from '../components/article-grouped/types'
+import {
+  buildTtsRegeneratePayload,
+  buildTtsResumePayload,
+  isTtsNarrationIncomplete,
+} from '../utils/ai'
 
 export function AiTtsRouteView() {
   const config = useMemo<ArticleGroupedConfig<AITtsRow>>(
@@ -57,12 +64,26 @@ export function AiTtsRouteView() {
         labelKey: 'ai.tts.generateLabel',
         icon: Plus,
         promptForLang: true,
-        runTask: ({ refId, lang }) =>
-          createTtsTask({ refId, langs: lang ? [lang] : undefined }),
+        runTask: ({ refId, langs, force }) =>
+          createTtsTask({
+            force,
+            langs: langs?.length ? langs : undefined,
+            refId,
+          }),
         taskTypeForQueue: 'Tts',
       },
 
       extraItemActions: (item) => [
+        ...(isTtsNarrationIncomplete(item)
+          ? [
+              {
+                id: 'resume',
+                labelKey: 'ai.action.resumeTts',
+                icon: Play,
+                run: (row) => createTtsTask(buildTtsResumePayload(row)),
+              } satisfies ItemAction<AITtsRow>,
+            ]
+          : []),
         {
           id: 'regenerate',
           labelKey: 'ai.action.regenerate',

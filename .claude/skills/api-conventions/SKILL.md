@@ -1,10 +1,10 @@
 ---
 name: api-conventions
-description: MX Space API design conventions. Apply when writing controllers, API endpoints, or handling HTTP requests.
+description: Mix Space API design conventions. Apply when writing controllers, API endpoints, or handling HTTP requests.
 user-invocable: false
 ---
 
-# MX Space API Design Conventions
+# Mix Space API Design Conventions
 
 ## Controller Decorators
 
@@ -33,11 +33,11 @@ async get(@CurrentUser() user: UserModel) {}
 
 `ResponseInterceptor` (global `APP_INTERCEPTOR`) wraps every controller return value:
 
-| Return value | Emitted |
-|-------------|-------------------|
-| bare value `T` | `{ data: T }` |
-| `withMeta(data, meta)` | `{ data, meta }` |
-| `undefined` | 204 No Content |
+| Return value                  | Emitted                                        |
+| ----------------------------- | ---------------------------------------------- |
+| bare value `T`                | `{ data: T }`                                  |
+| `withMeta(data, meta)`        | `{ data, meta }`                               |
+| `undefined`                   | 204 No Content                                 |
 | `@HTTPDecorators.RawResponse` | untouched — skips envelope and case conversion |
 
 `withMeta` (from `~/common/response/envelope.types`) is detected by an internal `Symbol`,
@@ -47,6 +47,7 @@ include `data` gets double-wrapped. CI enforces this via
 
 `transformResponseCase` (`~/common/response/case-transform.ts`) converts the response
 `data`/`meta` to snake_case at the wire boundary:
+
 - `createdAt` → `created_at`
 - `categoryId` → `category_id`
 
@@ -58,7 +59,7 @@ Pagination belongs in `meta`, never merged into `data`. Build it with `MetaObjec
 
 ```typescript
 @Get('/')
-async list(@Query() query: PagerDto) {
+async list(@Query({ schema: BasicPagerSchema }) query: BasicPagerInput) {
   const result = await this.postRepository.list({
     page: query.page,
     size: query.size,
@@ -85,7 +86,7 @@ export class LinkControllerCrud extends BasePgCrudFactory({
   repository: LinkRepository,
 }) {
   @Get('/')
-  async gets(@Query() pager: PagerDto) {
+  async gets(@Query({ schema: BasicPagerSchema }) pager: BasicPagerInput) {
     const { size = 10, page = 1 } = pager
     return this.repository.list(page, size)
   }
@@ -95,34 +96,34 @@ export class LinkControllerCrud extends BasePgCrudFactory({
 ## Parameter Validation
 
 ```typescript
-// Path parameters — use EntityIdDto for Snowflake entity IDs
+// Path parameters — attach EntityIdSchema for Snowflake entity IDs
 @Get('/:id')
-async get(@Param() params: EntityIdDto) {
+async get(@Param({ schema: EntityIdSchema }) params: EntityIdInput) {
   return this.service.findById(params.id)
 }
 
 // For integer IDs or entity IDs (e.g. notes with nid)
 @Get('/:id')
-async get(@Param() params: IntIdOrEntityIdDto) {}
+async get(@Param({ schema: IntIdOrEntityIdSchema }) params: IntIdOrEntityIdInput) {}
 
 // Query parameters
 @Get('/')
-async list(@Query() query: PagerDto) {}
+async list(@Query({ schema: BasicPagerSchema }) query: BasicPagerInput) {}
 
 // Request body
 @Post('/')
-async create(@Body() body: CreateDto) {}
+async create(@Body({ schema: CreateSchema }) body: CreateInput) {}
 ```
 
 ## HTTP Methods
 
-| Method | Purpose | Status Code |
-|--------|---------|-------------|
-| GET | Retrieve resource | 200 |
-| POST | Create resource | 201 |
-| PUT | Full update | 200 |
-| PATCH | Partial update | 200 |
-| DELETE | Delete resource | 204 |
+| Method | Purpose           | Status Code |
+| ------ | ----------------- | ----------- |
+| GET    | Retrieve resource | 200         |
+| POST   | Create resource   | 201         |
+| PUT    | Full update       | 200         |
+| PATCH  | Partial update    | 200         |
+| DELETE | Delete resource   | 204         |
 
 ## Error Handling
 

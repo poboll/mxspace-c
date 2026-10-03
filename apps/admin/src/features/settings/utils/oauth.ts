@@ -1,8 +1,11 @@
+import { oauthProviders } from '../constants'
 import type {
   FlatOauthProvider,
   OauthOptions,
   OauthProviderType,
 } from '../types/settings'
+
+const oauthConfiguredIgnoredKeys = new Set(['reviewDemoEnabled'])
 
 export function flattenOauthOptions(
   data: OauthOptions | undefined,
@@ -11,16 +14,21 @@ export function flattenOauthOptions(
     (data?.providers ?? []).map((provider) => [provider.type, provider]),
   )
 
-  return {
-    github: {
-      clientId: data?.public?.github?.clientId ?? '',
-      enabled: providerMap.get('github')?.enabled ?? false,
-      type: 'github',
-    },
-    google: {
-      clientId: data?.public?.google?.clientId ?? '',
-      enabled: providerMap.get('google')?.enabled ?? false,
-      type: 'google',
-    },
-  }
+  return Object.fromEntries(
+    oauthProviders.map((provider) => {
+      const publicFields = { ...data?.public?.[provider.type] }
+      return [
+        provider.type,
+        {
+          configured: Object.entries(publicFields).some(
+            ([key, value]) =>
+              !oauthConfiguredIgnoredKeys.has(key) && Boolean(value),
+          ),
+          enabled: providerMap.get(provider.type)?.enabled ?? false,
+          public: publicFields,
+          type: provider.type,
+        },
+      ]
+    }),
+  ) as Record<OauthProviderType, FlatOauthProvider>
 }

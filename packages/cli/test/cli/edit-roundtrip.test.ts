@@ -1,5 +1,6 @@
 import { Effect, Exit, Layer, Option } from 'effect'
 import { describe, expect, it, vi } from 'vitest'
+import { handler } from '../helper/handler'
 
 import { edit as editNote } from '../../src/cli/note/edit'
 import { edit as editPage } from '../../src/cli/page/edit'
@@ -17,36 +18,83 @@ const makeApi = (calls: string[]): ApiService => ({
   request: (path) =>
     Effect.sync(() => {
       calls.push(path)
+      if (path.startsWith('/drafts/context/')) {
+        const [, , , refType, refId] = path.split('/')
+        return {
+          branches: [],
+          document: {
+            id: 'document-1',
+            publishedRevisionId: 'published-1',
+            refId,
+            refType,
+          },
+          publishedRevision: {
+            content: null,
+            contentFormat: 'markdown',
+            id: 'published-1',
+            images: [],
+            meta: null,
+            text: 'body',
+            title: 'Title',
+            typeSpecificData: {},
+          },
+        } as never
+      }
+      if (path === '/drafts') {
+        return {
+          document: {
+            id: 'document-1',
+            publishedRevisionId: 'published-1',
+            refId: '123456789012345',
+            refType: 'post',
+          },
+          headRevision: { id: 'revision-2' },
+          headRevisionId: 'revision-2',
+          id: 'branch-1',
+          relationToPublished: 'ancestor',
+          status: 'active',
+        } as never
+      }
+      if (path === '/publish-jobs') return { id: 'task-1' } as never
       if (path.startsWith('/notes/')) {
         return {
-          id: '123456789012346',
-          title: 'Note',
-          slug: 'note',
-          contentFormat: 'markdown',
-          content: 'note body',
-          isPublished: false,
-          mood: 'calm',
-          weather: 'clear',
+          data: {
+            id: '123456789012346',
+            title: 'Note',
+            slug: 'note',
+            content_format: 'markdown',
+            content: 'note body',
+            is_published: false,
+            mood: 'calm',
+            weather: 'clear',
+          },
+          meta: {},
         } as never
       }
       if (path.startsWith('/pages/')) {
         return {
-          id: '123456789012347',
-          title: 'Page',
-          slug: 'page',
-          contentFormat: 'markdown',
-          content: 'page body',
+          data: {
+            id: '123456789012347',
+            title: 'Page',
+            slug: 'page',
+            content_format: 'markdown',
+            content: 'page body',
+          },
+          meta: {},
         } as never
       }
       return {
-        id: '123456789012345',
-        title: 'Post',
-        slug: 'post',
-        contentFormat: 'markdown',
-        content: 'post body',
-        summary: 'summary',
-        isPublished: true,
-        tags: ['a', 'b'],
+        data: {
+          id: '123456789012345',
+          title: 'Post',
+          slug: 'post',
+          content_format: 'markdown',
+          content: 'post body',
+          summary: 'summary',
+          is_published: true,
+          tags: ['a', 'b'],
+        },
+        meta: {},
       } as never
     }),
   raw: (path) =>
@@ -150,12 +198,20 @@ describe('edit command no-change round trip', () => {
     const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true)
     try {
       const exit = await Effect.runPromiseExit(
-        editPost
-          .handler({ slugOrId: 'post', ...commonPostOptions })
-          .pipe(Effect.provide(buildLayer(calls))),
+        handler(editPost)({ slugOrId: 'post', ...commonPostOptions })
+          .pipe(
+            Effect.provide(
+              buildLayer(calls, (initial) => {
+                expect(initial).toContain('<title>Post</title>')
+                expect(initial).toContain('<state>publish</state>')
+                expect(initial).toContain('post body')
+                return initial
+              }),
+            ),
+          ),
       )
       expect(Exit.isSuccess(exit)).toBe(true)
-      expect(calls).toEqual(['/posts/post'])
+      expect(calls).toEqual(['/posts/123456789012345', '/posts/post'])
     } finally {
       stderr.mockRestore()
     }
@@ -166,12 +222,23 @@ describe('edit command no-change round trip', () => {
     const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true)
     try {
       const exit = await Effect.runPromiseExit(
-        editNote
-          .handler({ slugOrId: 'note', ...commonNoteOptions })
-          .pipe(Effect.provide(buildLayer(calls))),
+        handler(editNote)({ slugOrId: 'note', ...commonNoteOptions })
+          .pipe(
+            Effect.provide(
+              buildLayer(calls, (initial) => {
+                expect(initial).toContain('<title>Note</title>')
+                expect(initial).toContain('<state>draft</state>')
+                expect(initial).toContain('note body')
+                return initial
+              }),
+            ),
+          ),
       )
       expect(Exit.isSuccess(exit)).toBe(true)
-      expect(calls).toEqual(['/notes/123456789012346'])
+      expect(calls).toEqual([
+        '/notes/123456789012346',
+        '/notes/123456789012346',
+      ])
     } finally {
       stderr.mockRestore()
     }
@@ -182,9 +249,16 @@ describe('edit command no-change round trip', () => {
     const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true)
     try {
       const exit = await Effect.runPromiseExit(
-        editPage
-          .handler({ slugOrId: '123456789012347', ...commonPageOptions })
-          .pipe(Effect.provide(buildLayer(calls))),
+        handler(editPage)({ slugOrId: '123456789012347', ...commonPageOptions })
+          .pipe(
+            Effect.provide(
+              buildLayer(calls, (initial) => {
+                expect(initial).toContain('<title>Page</title>')
+                expect(initial).toContain('page body')
+                return initial
+              }),
+            ),
+          ),
       )
       expect(Exit.isSuccess(exit)).toBe(true)
       expect(calls).toEqual(['/pages/123456789012347'])
@@ -198,8 +272,7 @@ describe('edit command no-change round trip', () => {
     const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true)
     try {
       const exit = await Effect.runPromiseExit(
-        editPost
-          .handler({
+        handler(editPost)({
             slugOrId: 'post',
             ...commonPostOptions,
             format: Option.some('markdown'),
@@ -224,7 +297,12 @@ changed body
           ),
       )
       expect(Exit.isSuccess(exit)).toBe(true)
-      expect(calls).toEqual(['/posts/post', '/posts/123456789012345'])
+      expect(calls).toEqual([
+        '/posts/123456789012345',
+        '/posts/post',
+        '/drafts/context/post/123456789012345',
+        '/drafts',
+      ])
     } finally {
       stdout.mockRestore()
     }
@@ -235,8 +313,7 @@ changed body
     const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true)
     try {
       const exit = await Effect.runPromiseExit(
-        editNote
-          .handler({
+        handler(editNote)({
             slugOrId: 'note',
             ...commonNoteOptions,
             format: Option.some('markdown'),
@@ -266,6 +343,9 @@ changed note body
       expect(calls).toEqual([
         '/notes/123456789012346',
         '/notes/123456789012346',
+        '/drafts/context/note/123456789012346',
+        '/drafts',
+        '/publish-jobs',
       ])
     } finally {
       stdout.mockRestore()
@@ -277,8 +357,7 @@ changed note body
     const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true)
     try {
       const exit = await Effect.runPromiseExit(
-        editPage
-          .handler({
+        handler(editPage)({
             slugOrId: 'page',
             ...commonPageOptions,
             format: Option.some('markdown'),
@@ -305,7 +384,9 @@ changed page body
       expect(calls).toEqual([
         '/pages/slug/page',
         '/pages/slug/page',
-        '/pages/123456789012347',
+        '/drafts/context/page/123456789012347',
+        '/drafts',
+        '/publish-jobs',
       ])
     } finally {
       stdout.mockRestore()

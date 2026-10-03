@@ -8,13 +8,24 @@ const DraftCardSchema = z
     version: z.number(),
     createdAt: z.date().or(z.string()),
   })
-  .passthrough()
+  .loose()
 
-const DraftDetailSchema = z.object({}).passthrough()
+const DraftDetailSchema = z.object({}).loose()
+
+const DraftSharedSchema = z.object({
+  content: z.string().nullable(),
+  contentFormat: z.string(),
+  createdAt: z.date().or(z.string()),
+  images: z.array(z.unknown()).nullable(),
+  refType: z.string(),
+  text: z.string(),
+  title: z.string(),
+})
 
 export const DraftViews = {
   card: DraftCardSchema,
   detail: DraftDetailSchema,
+  shared: DraftSharedSchema,
 } as const
 
 export type DraftView = keyof typeof DraftViews

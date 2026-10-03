@@ -8,14 +8,16 @@ import { ConfigsService } from '../../configs/configs.service'
 import { DraftRepository } from '../../draft/draft.repository'
 import { AI_PROMPTS, COVER_STYLE_PRESETS } from '../ai.prompts'
 import { AiService } from '../ai.service'
+import { AIProviderType } from '../ai.types'
 import { AiTaskService } from '../ai-task/ai-task.service'
+import { getVertexMediaModels } from '../vertex/vertex-model-catalog'
 import {
-  DraftImagePromptDto,
+  type DraftImagePromptDto,
+  DraftImagePromptSchema,
   type GenerateImageDto,
-  type GenerateImageInput,
+  GenerateImageSchema,
 } from './ai-image.dto'
-import type { ImageModelView } from './ai-image.views'
-import { AiImageViews } from './ai-image.views'
+import { AiImageViews, type ImageModelView } from './ai-image.views'
 import { resolveCoverPreset, resolveCoverSubject } from './cover-preset.util'
 import { getImageCatalog } from './image-catalog'
 
@@ -32,7 +34,9 @@ export class AiImageController {
   @Post('draft-prompt')
   @HttpCode(200)
   @Auth()
-  async draftPrompt(@Body() body: DraftImagePromptDto) {
+  async draftPrompt(
+    @Body({ schema: DraftImagePromptSchema }) body: DraftImagePromptDto,
+  ) {
     const preset = resolveCoverPreset(body.presetId)
     const article = await resolveCoverSubject(
       {
@@ -54,12 +58,14 @@ export class AiImageController {
   @Post('generate')
   @HttpCode(200)
   @Auth()
-  async generate(@Body() body: GenerateImageDto) {
+  async generate(
+    @Body({ schema: GenerateImageSchema }) body: GenerateImageDto,
+  ) {
     let aspectRatio = body.aspectRatio
     if (body.presetId) {
       const preset = resolveCoverPreset(body.presetId)
       aspectRatio ??=
-        preset.defaultAspectRatio as GenerateImageInput['aspectRatio']
+        preset.defaultAspectRatio as GenerateImageDto['aspectRatio']
     }
 
     const result = await this.aiTaskService.createImageGenerationTask({
@@ -103,10 +109,16 @@ export class AiImageController {
     )
     if (!resolved) return []
 
-    const models = await getImageCatalog({
-      endpoint: resolved.provider.endpoint,
-      apiKey: resolved.provider.apiKey,
-    })
+    const models =
+      resolved.provider.type === AIProviderType.GoogleVertex
+        ? getVertexMediaModels('image').map((model) => ({
+            ...model,
+            supportedParameters: {},
+          }))
+        : await getImageCatalog({
+            endpoint: resolved.provider.endpoint,
+            apiKey: resolved.provider.apiKey,
+          })
     return models.map((m) =>
       AiImageViews.model.parse({
         id: m.id,

@@ -7,8 +7,10 @@ import { createPgRepositoryMock, now } from '@/helper/pg-repository-mock'
 import { CollectionRefTypes } from '~/constants/db.constant'
 import { AIProviderType } from '~/modules/ai/ai.types'
 import type { AiStreamEvent } from '~/modules/ai/ai-inflight/ai-inflight.types'
+import { AiInsightsAdapter } from '~/modules/ai/ai-insights/ai-insights.adapter'
 import type { AiInsightsRepository } from '~/modules/ai/ai-insights/ai-insights.repository'
 import { AiInsightsService } from '~/modules/ai/ai-insights/ai-insights.service'
+import { MultilangGenerationService } from '~/modules/ai/ai-multilang/ai-multilang.service'
 import { PiRuntimeAdapter } from '~/modules/ai/runtime/pi-runtime.adapter'
 
 const PROVIDER = 'faux-insights'
@@ -49,7 +51,7 @@ function createService(runtime: PiRuntimeAdapter) {
         title: 'T',
         text: 'source text',
         tags: [],
-        lang: 'en',
+        meta: { lang: 'en' },
       },
     })),
     findGlobalByIds: vi.fn(),
@@ -82,12 +84,10 @@ function createService(runtime: PiRuntimeAdapter) {
     }),
   }
   const taskProcessor = { registerHandler: vi.fn() }
-  const aiTaskService = {}
   const eventEmitter = { emit: vi.fn() }
   const generationMetrics = createAiGenerationMetricsMock()
 
   repository.findByRefAndLang.mockResolvedValue(null)
-  repository.deleteTranslationsWithDifferentHash = vi.fn(async () => 0) as any
   repository.upsert.mockImplementation(async (input: any) => ({
     id: 'insights-1',
     refId: input.refId,
@@ -111,15 +111,26 @@ function createService(runtime: PiRuntimeAdapter) {
     createdAt: now,
   })
 
-  const service = new AiInsightsService(
+  const adapter = new AiInsightsAdapter(
     repository as any,
     databaseService as any,
     configService as any,
     aiService as any,
-    aiInFlightService as any,
-    taskProcessor as any,
-    aiTaskService as any,
     eventEmitter as any,
+    { isPremiumLocked: vi.fn(async () => false) } as any,
+  )
+  const multilang = new MultilangGenerationService(
+    aiInFlightService as any,
+    generationMetrics as any,
+    configService as any,
+  )
+  const service = new AiInsightsService(
+    repository as any,
+    databaseService as any,
+    configService as any,
+    adapter,
+    multilang,
+    taskProcessor as any,
     generationMetrics as any,
   )
   return { service, generationMetrics, inflightEvents }

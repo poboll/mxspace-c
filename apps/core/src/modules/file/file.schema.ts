@@ -1,4 +1,3 @@
-import { createZodDto } from 'nestjs-zod'
 import { z } from 'zod'
 
 import { BasicPagerSchema } from '~/shared/dto/pager.dto'
@@ -14,16 +13,21 @@ export const FileQuerySchema = z.object({
   name: z.string(),
 })
 
-export class FileQueryDto extends createZodDto(FileQuerySchema) {}
+export type FileQueryDto = z.infer<typeof FileQuerySchema>
 
 /**
  * File upload schema
  */
-export const FileUploadSchema = z.object({
-  type: z.enum(FileTypeEnum).optional(),
-})
+export const FileUploadSchema = z
+  .object({
+    type: z.enum(FileTypeEnum).optional(),
+    immutable: z.literal('true').optional(),
+  })
+  .refine((value) => !value.immutable || !value.type || value.type === 'file', {
+    error: 'Immutable uploads require type=file',
+  })
 
-export class FileUploadDto extends createZodDto(FileUploadSchema) {}
+export type FileUploadDto = z.infer<typeof FileUploadSchema>
 
 /**
  * Rename file query schema
@@ -32,7 +36,7 @@ export const RenameFileQuerySchema = z.object({
   newName: z.string(),
 })
 
-export class RenameFileQueryDto extends createZodDto(RenameFileQuerySchema) {}
+export type RenameFileQueryDto = z.infer<typeof RenameFileQuerySchema>
 
 /**
  * Batch orphan delete schema
@@ -43,20 +47,18 @@ export const BatchOrphanDeleteSchema = z
     all: z.boolean().optional(),
   })
   .refine((data) => data.ids?.length || data.all, {
-    message: 'Either ids or all must be provided',
+    error: 'Either ids or all must be provided',
   })
 
-export class BatchOrphanDeleteDto extends createZodDto(
-  BatchOrphanDeleteSchema,
-) {}
+export type BatchOrphanDeleteDto = z.infer<typeof BatchOrphanDeleteSchema>
 
 export const ReconcileFileReferencesSchema = z.object({
   apply: z.boolean().optional().default(false),
 })
 
-export class ReconcileFileReferencesDto extends createZodDto(
-  ReconcileFileReferencesSchema,
-) {}
+export type ReconcileFileReferencesDto = z.infer<
+  typeof ReconcileFileReferencesSchema
+>
 
 /**
  * Comment uploads list query schema (pagination + filters)
@@ -72,18 +74,6 @@ export const CommentUploadsListQuerySchema = BasicPagerSchema.extend({
   refId: z.string().optional(),
 })
 
-export class CommentUploadsListQueryDto extends createZodDto(
-  CommentUploadsListQuerySchema,
-) {}
-
-// Type exports
-export type FileQueryInput = z.infer<typeof FileQuerySchema>
-export type FileUploadInput = z.infer<typeof FileUploadSchema>
-export type RenameFileQueryInput = z.infer<typeof RenameFileQuerySchema>
-export type BatchOrphanDeleteInput = z.infer<typeof BatchOrphanDeleteSchema>
-export type ReconcileFileReferencesInput = z.infer<
-  typeof ReconcileFileReferencesSchema
->
-export type CommentUploadsListQueryInput = z.infer<
+export type CommentUploadsListQueryDto = z.infer<
   typeof CommentUploadsListQuerySchema
 >

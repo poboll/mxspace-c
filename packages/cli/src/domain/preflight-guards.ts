@@ -1,5 +1,5 @@
 /**
- * Single source of truth for preflight exemptions (the `@effect/cli`
+ * Single source of truth for preflight exemptions (the `effect/cli`
  * equivalent of the v0.2.x `preAction` hook in `src/bin/mxs.ts`).
  *
  * Any subcommand registered in `cli/*` MUST match the names declared here —
@@ -32,7 +32,7 @@ export const PREFLIGHT_EXEMPT_COMMANDS: readonly ExemptCommand[] = [
 export const PREFLIGHT_EXEMPT_TOPLEVEL: ReadonlySet<string> = new Set([
   'update',
   'skill',
-  'preview',
+  'author',
 ])
 
 export interface GuardInput {
@@ -84,7 +84,7 @@ export const TOPLEVEL_COMMANDS: ReadonlySet<string> = new Set([
   'topic',
   'config',
   'skill',
-  'preview',
+  'author',
   'update',
 ])
 

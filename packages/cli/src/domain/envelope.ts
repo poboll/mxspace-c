@@ -10,10 +10,17 @@ import { ValidationXml } from './errors'
 
 export type EnvelopeKind = 'post' | 'note'
 
+export interface ContentSpan {
+  readonly start: number
+  readonly end: number
+  readonly selfClosing: boolean
+}
+
 export interface ParsedEnvelope {
   readonly kind: EnvelopeKind
   readonly meta: Record<string, unknown>
   readonly contentXml: string
+  readonly contentSpan: ContentSpan | null
   readonly sourceMap: Record<string, number>
 }
 
@@ -51,6 +58,8 @@ interface Token {
   raw?: string
   text?: string
   line: number
+  start: number
+  end: number
 }
 
 function tokenize(xml: string): Token[] {
@@ -83,9 +92,10 @@ function tokenize(xml: string): Token[] {
           })
         }
         const inner = xml.slice(i + 9, end)
-        tokens.push({ kind: 'cdata', text: inner, line })
-        line += countLines(xml.slice(i, end + 3))
-        i = end + 3
+        const endAt = end + 3
+        tokens.push({ kind: 'cdata', text: inner, line, start: i, end: endAt })
+        line += countLines(xml.slice(i, endAt))
+        i = endAt
         continue
       }
       const close = xml.indexOf('>', i)
@@ -97,23 +107,31 @@ function tokenize(xml: string): Token[] {
         })
       }
       const raw = xml.slice(i + 1, close).trim()
+      const endAt = close + 1
       if (raw.startsWith('/')) {
-        tokens.push({ kind: 'close', name: raw.slice(1).trim(), line })
+        tokens.push({
+          kind: 'close',
+          name: raw.slice(1).trim(),
+          line,
+          start: i,
+          end: endAt,
+        })
       } else if (raw.endsWith('/')) {
         const name = raw.slice(0, -1).trim().split(/\s+/)[0] ?? ''
-        tokens.push({ kind: 'self', name, raw, line })
+        tokens.push({ kind: 'self', name, raw, line, start: i, end: endAt })
       } else {
         const name = raw.split(/\s+/)[0] ?? ''
-        tokens.push({ kind: 'open', name, raw, line })
+        tokens.push({ kind: 'open', name, raw, line, start: i, end: endAt })
       }
-      line += countLines(xml.slice(i, close + 1))
-      i = close + 1
+      line += countLines(xml.slice(i, endAt))
+      i = endAt
     } else {
       const next = xml.indexOf('<', i)
-      const text = xml.slice(i, next < 0 ? xml.length : next)
-      tokens.push({ kind: 'text', text, line })
+      const endAt = next < 0 ? xml.length : next
+      const text = xml.slice(i, endAt)
+      tokens.push({ kind: 'text', text, line, start: i, end: endAt })
       line += countLines(text)
-      i = next < 0 ? xml.length : next
+      i = endAt
     }
   }
   return tokens
@@ -175,6 +193,7 @@ export function parseEnvelope(xml: string, kind: EnvelopeKind): ParsedEnvelope {
   const meta: Record<string, unknown> = {}
   const sourceMap: Record<string, number> = {}
   let contentXml = ''
+  let contentSpan: ContentSpan | null = null
 
   let i = 0
   while (i < inner.length) {
@@ -191,13 +210,16 @@ export function parseEnvelope(xml: string, kind: EnvelopeKind): ParsedEnvelope {
     }
     if (t.kind === 'open' && t.name === 'content') {
       const closeIdx = findMatchingClose(inner, i, 'content')
+      const closeTok = inner[closeIdx]!
       contentXml = renderInnerXml(inner.slice(i + 1, closeIdx))
+      contentSpan = { start: t.end, end: closeTok.start, selfClosing: false }
       sourceMap.content = t.line
       i = closeIdx + 1
       continue
     }
     if (t.kind === 'self' && t.name === 'content') {
       contentXml = ''
+      contentSpan = { start: t.start, end: t.end, selfClosing: true }
       sourceMap.content = t.line
       i++
       continue
@@ -212,7 +234,18 @@ export function parseEnvelope(xml: string, kind: EnvelopeKind): ParsedEnvelope {
     i++
   }
 
-  return { kind, meta, contentXml, sourceMap }
+  return { kind, meta, contentXml, contentSpan, sourceMap }
+}
+
+export function spliceEnvelopeContent(
+  source: string,
+  span: ContentSpan,
+  body: string,
+): string {
+  if (span.selfClosing) {
+    return `${source.slice(0, span.start)}<content>\n${body}\n</content>${source.slice(span.end)}`
+  }
+  return `${source.slice(0, span.start)}\n${body}\n  ${source.slice(span.end)}`
 }
 
 function findMatchingClose(

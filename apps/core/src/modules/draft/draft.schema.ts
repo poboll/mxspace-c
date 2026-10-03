@@ -1,4 +1,3 @@
-import { createZodDto } from 'nestjs-zod'
 import { z } from 'zod'
 
 import {
@@ -8,85 +7,92 @@ import {
   zPaginationSize,
   zSortOrder,
 } from '~/common/zod'
-import {
-  validateLexicalCreateContentPair,
-  validateLexicalPartialContentPair,
-} from '~/shared/schema'
+import { validateLexicalCreateContentPair } from '~/shared/schema'
 import { ContentFormat } from '~/shared/types/content-format.type'
 
 import { DraftRefType } from './draft.enum'
 
 const ImageModelSchema = z.object({
-  src: z.string(),
   alt: z.string().optional(),
+  src: z.string(),
 })
 
-const DraftBaseSchema = z.object({
-  refType: z.enum(DraftRefType),
-  refId: zEntityId.optional(),
-  title: z.string().optional(),
-  text: z.string().optional(),
-  contentFormat: z
-    .enum([ContentFormat.Markdown, ContentFormat.Lexical])
-    .default(ContentFormat.Markdown)
-    .optional(),
-  content: z.string().optional(),
-  images: z.array(ImageModelSchema).optional(),
-  meta: z.record(z.string(), z.any()).optional().nullable().default(null),
-  typeSpecificData: z.record(z.string(), z.any()).optional(),
-})
-
-export const CreateDraftSchema = DraftBaseSchema.superRefine(
-  validateLexicalCreateContentPair,
-)
-
-export class CreateDraftDto extends createZodDto(CreateDraftSchema) {}
-
-export const UpdateDraftSchema = DraftBaseSchema.partial()
-  .extend({
-    expectedVersion: z.number().int().min(1),
+export const DraftWriteDataSchema = z
+  .object({
+    content: z.string().optional(),
+    contentFormat: z
+      .enum([ContentFormat.Markdown, ContentFormat.Lexical])
+      .default(ContentFormat.Markdown),
+    images: z.array(ImageModelSchema).nullable().optional(),
+    meta: z.record(z.string(), z.unknown()).nullable().optional(),
+    text: z.string().default(''),
+    title: z.string().default(''),
+    typeSpecificData: z.record(z.string(), z.unknown()).nullable().optional(),
   })
-  .superRefine(validateLexicalPartialContentPair)
+  .superRefine(validateLexicalCreateContentPair)
 
-export class UpdateDraftDto extends createZodDto(UpdateDraftSchema) {}
+export const CreateDraftSchema = z.object({
+  baseRevisionId: zEntityId.nullable().optional(),
+  data: DraftWriteDataSchema,
+  refId: zEntityId.optional(),
+  refType: z.enum(DraftRefType),
+})
+
+export type CreateDraftDto = z.infer<typeof CreateDraftSchema>
+
+export const UpdateDraftSchema = z.object({
+  data: DraftWriteDataSchema,
+  expectedHeadRevisionId: zEntityId,
+})
+
+export type UpdateDraftDto = z.infer<typeof UpdateDraftSchema>
 
 export const DraftPagerSchema = z.object({
-  size: zPaginationSize,
+  hasRef: zCoerceBoolean.optional(),
   page: zPaginationPage,
+  refType: z.enum(DraftRefType).optional(),
+  search: z.string().optional(),
+  size: zPaginationSize,
   sortBy: z.string().optional(),
   sortOrder: zSortOrder,
-  refType: z.enum(DraftRefType).optional(),
-  hasRef: zCoerceBoolean.optional(),
 })
 
-export class DraftPagerDto extends createZodDto(DraftPagerSchema) {}
+export type DraftPagerDto = z.infer<typeof DraftPagerSchema>
 
 export const DraftRefTypeSchema = z.object({
   refType: z.enum(DraftRefType),
 })
 
-export class DraftRefTypeDto extends createZodDto(DraftRefTypeSchema) {}
+export type DraftRefTypeDto = z.infer<typeof DraftRefTypeSchema>
 
 export const DraftRefTypeAndIdSchema = DraftRefTypeSchema.extend({
   refId: zEntityId,
 })
 
-export class DraftRefTypeAndIdDto extends createZodDto(
-  DraftRefTypeAndIdSchema,
-) {}
+export type DraftRefTypeAndIdDto = z.infer<typeof DraftRefTypeAndIdSchema>
 
-export const RestoreVersionSchema = z.object({
-  version: z.preprocess(
-    (val) => Number.parseInt(val as string, 10),
-    z.number().int().min(1),
-  ),
+export const RevisionComparisonSchema = z.object({
+  leftId: zEntityId,
+  rightId: zEntityId,
 })
 
-export class RestoreVersionDto extends createZodDto(RestoreVersionSchema) {}
+export type RevisionComparisonDto = z.infer<typeof RevisionComparisonSchema>
 
-export type CreateDraftInput = z.infer<typeof CreateDraftSchema>
-export type UpdateDraftInput = z.infer<typeof UpdateDraftSchema>
-export type DraftPagerInput = z.infer<typeof DraftPagerSchema>
-export type DraftRefTypeInput = z.infer<typeof DraftRefTypeSchema>
-export type DraftRefTypeAndIdInput = z.infer<typeof DraftRefTypeAndIdSchema>
-export type RestoreVersionInput = z.infer<typeof RestoreVersionSchema>
+export const DraftDocumentIdSchema = z.object({
+  documentId: zEntityId,
+})
+
+export type DraftDocumentIdDto = z.infer<typeof DraftDocumentIdSchema>
+
+export const DraftShareTokenSchema = z.object({
+  token: z.string().min(1).max(128),
+})
+
+export type DraftShareTokenDto = z.infer<typeof DraftShareTokenSchema>
+
+export const SetDraftShareSchema = z.discriminatedUnion('mode', [
+  z.object({ draftId: zEntityId, mode: z.literal('follow') }),
+  z.object({ mode: z.literal('pinned'), revisionId: zEntityId }),
+])
+
+export type SetDraftShareDto = z.infer<typeof SetDraftShareSchema>

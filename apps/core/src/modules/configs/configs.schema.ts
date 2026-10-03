@@ -1,4 +1,3 @@
-import { createZodDto } from 'nestjs-zod'
 import { z } from 'zod'
 
 import { zAllowedUrl } from '~/common/zod'
@@ -27,7 +26,6 @@ export const SeoSchema = section('SEO', {
     'Per-locale SEO overrides',
   ),
 })
-export class SeoDto extends createZodDto(SeoSchema) {}
 export type SeoConfig = z.infer<typeof SeoSchema>
 
 // ==================== URL ====================
@@ -37,8 +35,6 @@ export const UrlSchema = section('Site URLs', {
   serverUrl: field.halfGrid(zAllowedUrl.optional(), 'API URL'),
   wsUrl: field.halfGrid(zAllowedUrl.optional(), 'Gateway URL'),
 })
-export class UrlDto extends createZodDto(UrlSchema) {}
-export type UrlConfig = z.infer<typeof UrlSchema>
 
 // ==================== Mail Options ====================
 const SmtpConfigSchema = withMeta(
@@ -122,13 +118,23 @@ export const MailOptionsSchema = section('Email notifications', {
     },
   ),
 })
-export class MailOptionsDto extends createZodDto(MailOptionsSchema) {}
-export type MailOptionsConfig = z.infer<typeof MailOptionsSchema>
 
 // ==================== Comment Options ====================
 export const CommentOptionsSchema = section('Comment settings', {
   antiSpam: field.toggle(z.boolean().optional(), 'Anti-spam'),
   aiReview: field.toggle(z.boolean().optional(), 'Enable AI review'),
+  decisionReview: field.toggle(
+    z.boolean().optional().default(false),
+    'Prefer decision model',
+  ),
+  decisionConfidence: field.number(
+    z.coerce.number().min(0).max(1).optional().default(0.9),
+    'Decision confidence threshold',
+  ),
+  decisionTimeoutMs: field.number(
+    z.coerce.number().int().min(100).max(10000).optional().default(1000),
+    'Decision timeout (ms)',
+  ),
   aiReviewType: field.select(
     z.enum(['binary', 'score']).optional(),
     'AI review mode',
@@ -191,8 +197,6 @@ export const CommentOptionsSchema = section('Comment settings', {
     'Publicly display comment location',
   ),
 })
-export class CommentOptionsDto extends createZodDto(CommentOptionsSchema) {}
-export type CommentOptionsConfig = z.infer<typeof CommentOptionsSchema>
 
 // ==================== S3 Storage Options ====================
 const nullableStorageText = () =>
@@ -216,8 +220,6 @@ export const BackupOptionsSchema = section('Backup', {
     .halfGrid(nullableStorageText(), 'Region')
     .transform((value) => value || 'auto'),
 })
-export class BackupOptionsDto extends createZodDto(BackupOptionsSchema) {}
-export type BackupOptionsConfig = z.infer<typeof BackupOptionsSchema>
 
 // ==================== Image Storage Options ====================
 
@@ -250,12 +252,6 @@ export const ImageStorageOptionsSchema = section('Image storage', {
     },
   ),
 })
-export class ImageStorageOptionsDto extends createZodDto(
-  ImageStorageOptionsSchema,
-) {}
-export type ImageStorageOptionsConfig = z.infer<
-  typeof ImageStorageOptionsSchema
->
 
 // ==================== Image Generation Options ====================
 export const ImageGenerationOptionsSchema = section('AI image generation', {
@@ -323,12 +319,6 @@ export const ImageGenerationOptionsSchema = section('AI image generation', {
     { 'ui:options': { halfGrid: true } },
   ),
 })
-export class ImageGenerationOptionsDto extends createZodDto(
-  ImageGenerationOptionsSchema,
-) {}
-export type ImageGenerationOptionsConfig = z.infer<
-  typeof ImageGenerationOptionsSchema
->
 
 // ==================== TTS Options ====================
 export const TtsOptionsSchema = section('AI text to speech', {
@@ -377,8 +367,6 @@ export const TtsOptionsSchema = section('AI text to speech', {
     { 'ui:options': { halfGrid: true } },
   ),
 })
-export class TtsOptionsDto extends createZodDto(TtsOptionsSchema) {}
-export type TtsOptionsConfig = z.infer<typeof TtsOptionsSchema>
 
 // ==================== Comment Upload Options ====================
 export const CommentUploadOptionsSchema = section('Comment image uploads', {
@@ -489,12 +477,6 @@ export const CommentUploadOptionsSchema = section('Comment image uploads', {
       'Defaults to image/jpeg, image/png, image/webp, image/gif. Changes take effect immediately',
   }),
 })
-export class CommentUploadOptionsDto extends createZodDto(
-  CommentUploadOptionsSchema,
-) {}
-export type CommentUploadOptionsConfig = z.infer<
-  typeof CommentUploadOptionsSchema
->
 
 // ==================== File Upload Options ====================
 export const FileUploadOptionsSchema = section('File upload settings', {
@@ -526,30 +508,18 @@ export const FileUploadOptionsSchema = section('File upload settings', {
     },
   ),
 })
-export class FileUploadOptionsDto extends createZodDto(
-  FileUploadOptionsSchema,
-) {}
-export type FileUploadOptionsConfig = z.infer<typeof FileUploadOptionsSchema>
 
 // ==================== Baidu Search Options ====================
 export const BaiduSearchOptionsSchema = section('Baidu push settings', {
   enable: field.toggle(z.boolean().optional(), 'Enable push'),
   token: field.password(z.string().min(1).optional(), 'Token'),
 })
-export class BaiduSearchOptionsDto extends createZodDto(
-  BaiduSearchOptionsSchema,
-) {}
-export type BaiduSearchOptionsConfig = z.infer<typeof BaiduSearchOptionsSchema>
 
 // ==================== Bing Search Options ====================
 export const BingSearchOptionsSchema = section('Bing push settings', {
   enable: field.toggle(z.boolean().optional(), 'Enable push'),
   token: field.password(z.string().optional(), 'Bing API key'),
 })
-export class BingSearchOptionsDto extends createZodDto(
-  BingSearchOptionsSchema,
-) {}
-export type BingSearchOptionsConfig = z.infer<typeof BingSearchOptionsSchema>
 
 // ==================== Admin Extra ====================
 export const AdminExtraSchema = section('Admin extras', {
@@ -566,8 +536,6 @@ export const AdminExtraSchema = section('Admin extras', {
     description: 'Location lookup for diary entries',
   }),
 })
-export class AdminExtraDto extends createZodDto(AdminExtraSchema) {}
-export type AdminExtraConfig = z.infer<typeof AdminExtraSchema>
 
 // ==================== Friend Link Options ====================
 export const FriendLinkOptionsSchema = section('Friend link settings', {
@@ -591,16 +559,12 @@ export const FriendLinkOptionsSchema = section('Friend link settings', {
     },
   ),
 })
-export class FriendLinkOptionsDto extends createZodDto(
-  FriendLinkOptionsSchema,
-) {}
-export type FriendLinkOptionsConfig = z.infer<typeof FriendLinkOptionsSchema>
 
 // ==================== Bark Options ====================
 export const BarkOptionsSchema = section('Bark notifications', {
   enable: field.toggle(z.boolean().optional(), 'Enable Bark notifications'),
   key: field.password(z.string().optional(), 'Device key'),
-  serverUrl: field.plain(z.string().url().optional(), 'Server URL', {
+  serverUrl: field.plain(z.url().optional(), 'Server URL', {
     description: 'Defaults to the public server, https://day.app, when empty',
   }),
   enableComment: field.toggle(
@@ -616,8 +580,6 @@ export const BarkOptionsSchema = section('Bark notifications', {
     },
   ),
 })
-export class BarkOptionsDto extends createZodDto(BarkOptionsSchema) {}
-export type BarkOptionsConfig = z.infer<typeof BarkOptionsSchema>
 
 // ==================== Feature List ====================
 export const FeatureListSchema = section('Feature toggles', {
@@ -626,8 +588,6 @@ export const FeatureListSchema = section('Feature toggles', {
     'Enable email subscription',
   ),
 })
-export class FeatureListDto extends createZodDto(FeatureListSchema) {}
-export type FeatureListConfig = z.infer<typeof FeatureListSchema>
 
 // ==================== Third Party Service Integration ====================
 
@@ -798,12 +758,6 @@ export const ThirdPartyServiceIntegrationSchema = section(
     polygon: PolygonIntegrationSchema.optional(),
   },
 )
-export class ThirdPartyServiceIntegrationDto extends createZodDto(
-  ThirdPartyServiceIntegrationSchema,
-) {}
-export type ThirdPartyServiceIntegrationConfig = z.infer<
-  typeof ThirdPartyServiceIntegrationSchema
->
 
 // ==================== Auth Security ====================
 export const AuthSecuritySchema = section(
@@ -820,11 +774,10 @@ export const AuthSecuritySchema = section(
   },
   { 'ui:options': { type: 'hidden' } },
 )
-export class AuthSecurityDto extends createZodDto(AuthSecuritySchema) {}
-export type AuthSecurityConfig = z.infer<typeof AuthSecuritySchema>
 
 // ==================== AI Provider Config ====================
 const AIProviderCapabilitiesSchema = z.object({
+  decision: z.boolean().optional(),
   text: z.boolean().optional().default(true),
   image: z.boolean().optional().default(false),
   speech: z.boolean().optional().default(false),
@@ -843,6 +796,9 @@ const AIProviderConfigSchema = withMeta(
     endpoint: field.plain(z.string().optional(), 'Custom endpoint', {
       description:
         'Required for OpenAI-compatible services, e.g. https://api.deepseek.com',
+    }),
+    projectId: field.plain(z.string().optional(), 'Google Cloud project ID', {
+      description: 'Required when the provider type is google-vertex',
     }),
     modelListUrl: field.plain(z.string().optional(), 'Model list URL', {
       description:
@@ -955,6 +911,10 @@ export const AISchema = section('AI settings', {
     'AI providers',
     { description: 'Configure multiple AI service providers' },
   ),
+  decisionModel: field.plain(
+    AIModelAssignmentSchema.nullish(),
+    'Decision model',
+  ),
   summaryModel: field.plain(AIModelAssignmentSchema.nullish(), 'Summary model'),
   writerModel: field.plain(
     AIModelAssignmentSchema.nullish(),
@@ -967,37 +927,12 @@ export const AISchema = section('AI settings', {
   enableSummary: field.toggle(z.boolean().optional(), 'Allow AI summary', {
     description: 'Whether to allow calling AI to generate summaries',
   }),
-  enableAutoGenerateSummaryOnCreate: field.toggle(
-    z.boolean().optional(),
-    'Auto-generate summary on article creation',
-    { description: 'Requires enableSummary to also be enabled' },
-  ),
-  enableAutoGenerateSummaryOnUpdate: field.toggle(
-    z.boolean().optional(),
-    'Regenerate summary on article update',
-    {
-      description:
-        'Regenerates only for languages whose source-text hash has changed; requires enableSummary to also be enabled',
-    },
-  ),
   summaryTargetLanguages: field.array(
     z.array(z.string()).optional(),
     'AI summary target languages',
     {
       description:
         'Target languages for auto-generated summaries, using [ISO 639-1 language codes](https://www.w3schools.com/tags/ref_language_codes.asp), e.g. ["zh", "en", "ja"]',
-    },
-  ),
-  summaryMinTextLength: field.number(
-    z.preprocess(
-      (val) =>
-        val === '' || val === null || val === undefined ? val : Number(val),
-      z.number().int().min(0).optional(),
-    ),
-    'Minimum text length for summary auto-generation',
-    {
-      description:
-        'Skips automatic hooks (OnCreate/OnUpdate) when the body has fewer characters than this; only affects automatic triggers. 0 means no limit. Default 100',
     },
   ),
   translationModel: field.plain(
@@ -1018,14 +953,6 @@ export const AISchema = section('AI settings', {
       description:
         'Freeform guidance injected into translation prompts, e.g. DOCUMENT_TYPE / AUDIENCE / REGISTER lines. Leave empty to disable.',
       'ui:options': { type: 'textarea' },
-    },
-  ),
-  enableAutoGenerateTranslation: field.toggle(
-    z.boolean().optional(),
-    'Auto-generate AI translations',
-    {
-      description:
-        'When enabled, translations are auto-generated after an article is published. Requires the option above to also be enabled, otherwise has no effect.',
     },
   ),
   translationTargetLanguages: field.array(
@@ -1064,6 +991,14 @@ export const AISchema = section('AI settings', {
         'AI model used by the translation reviewer (critique-only). Falls back to the translation model when empty.',
     },
   ),
+  fieldTranslationModel: field.plain(
+    AIModelAssignmentSchema.nullish(),
+    'Field translation model',
+    {
+      description:
+        'AI model used to translate short fields (category names, tags, moods, weather). Falls back to the translation model when empty.',
+    },
+  ),
   insightsModel: field.plain(
     AIModelAssignmentSchema.nullish(),
     'Insights model',
@@ -1082,16 +1017,6 @@ export const AISchema = section('AI settings', {
   enableInsights: field.toggle(z.boolean().optional(), 'Allow AI Insights', {
     description: 'Master switch',
   }),
-  enableAutoGenerateInsightsOnCreate: field.toggle(
-    z.boolean().optional(),
-    'Auto-generate Insights on article creation',
-    { description: 'Requires enableInsights to also be enabled' },
-  ),
-  enableAutoGenerateInsightsOnUpdate: field.toggle(
-    z.boolean().optional(),
-    'Regenerate Insights on article update',
-    { description: 'Triggers only when the source-text hash changes' },
-  ),
   enableAutoTranslateInsights: field.toggle(
     z.boolean().optional(),
     'Auto-translate Insights after generation',
@@ -1108,22 +1033,9 @@ export const AISchema = section('AI settings', {
         'ISO 639-1 list; the source language is automatically excluded',
     },
   ),
-  insightsMinTextLength: field.number(
-    z.preprocess(
-      (val) =>
-        val === '' || val === null || val === undefined ? val : Number(val),
-      z.number().int().min(0).optional(),
-    ),
-    'Minimum text length for Insights auto-generation',
-    {
-      description:
-        'Skips automatic hooks (OnCreate/OnUpdate) when the body has fewer characters than this; only affects automatic triggers. 0 means no limit. Default 300',
-    },
-  ),
   imageGeneration: AIImageGenerationFeatureSchema.optional(),
   tts: AITtsFeatureSchema.optional(),
 })
-export class AIDto extends createZodDto(AISchema) {}
 export type AIConfig = z.infer<typeof AISchema>
 
 // ==================== Membership ====================
@@ -1147,6 +1059,16 @@ export const MembershipSchema = section('Membership', {
     z.string().optional(),
     'Yearly plan product ID',
   ),
+  articlePurchaseEnabled: field.toggle(
+    z.boolean().optional(),
+    'Single Article Purchase',
+    { description: 'Allow readers to buy a single premium article' },
+  ),
+  articleProductId: field.halfGrid(
+    z.string().optional(),
+    'Article Product ID',
+    { description: 'Dodo one-time product for single-article purchases' },
+  ),
   apiKey: field.password(z.string().optional(), 'API key'),
   webhookSigningKey: field.password(
     z.string().optional(),
@@ -1160,9 +1082,23 @@ export const MembershipSchema = section('Membership', {
       { label: 'Test mode', value: 'test_mode' },
     ],
   ),
+  appleBundleId: field.halfGrid(z.string().optional(), 'Apple bundle ID'),
+  appleKeyId: field.halfGrid(z.string().optional(), 'Apple key ID'),
+  appleIssuerId: field.plain(z.string().optional(), 'Apple issuer ID'),
+  applePrivateKey: field.password(
+    z.string().optional(),
+    'Apple .p8 private key',
+  ),
+  appleMonthlyProductId: field.halfGrid(
+    z.string().optional(),
+    'Apple monthly product ID',
+  ),
+  appleYearlyProductId: field.halfGrid(
+    z.string().optional(),
+    'Apple yearly product ID',
+  ),
+  appleAppAppleId: field.plain(z.string().optional(), 'Apple app Apple ID'),
 })
-export class MembershipDto extends createZodDto(MembershipSchema) {}
-export type MembershipConfig = z.infer<typeof MembershipSchema>
 
 // ==================== OAuth ====================
 const OAuthProviderSchema = z.object({
@@ -1182,7 +1118,6 @@ export const OAuthSchema = section(
   },
   { 'ui:options': { type: 'hidden' } },
 )
-export class OAuthDto extends createZodDto(OAuthSchema) {}
 export type OAuthConfig = z.infer<typeof OAuthSchema>
 
 // ==================== Config Schema Mapping ====================
@@ -1219,5 +1154,3 @@ export const FullConfigSchema = withMeta(z.object(configSchemaMapping), {
   description:
     '* Sensitive fields are hidden; the backend does not return them by default, so they appear empty',
 })
-
-export type FullConfig = z.infer<typeof FullConfigSchema>

@@ -1,7 +1,9 @@
 export enum AIProviderType {
+  TypeSafe = 'typesafe',
   OpenAICompatible = 'openai-compatible',
   Anthropic = 'anthropic',
   Generic = 'generic',
+  GoogleVertex = 'google-vertex',
 }
 
 export enum AIFeatureKey {
@@ -10,13 +12,15 @@ export enum AIFeatureKey {
   CommentReview = 'commentReview',
   Translation = 'translation',
   TranslationReview = 'translationReview',
+  FieldTranslation = 'fieldTranslation',
   Insights = 'insights',
   InsightsTranslation = 'insightsTranslation',
 }
 
-export type AIProviderCapability = 'image' | 'speech' | 'text'
+export type AIProviderCapability = 'decision' | 'image' | 'speech' | 'text'
 
 export interface AIProviderCapabilities {
+  decision?: boolean
   text: boolean
   image: boolean
   speech: boolean
@@ -33,6 +37,8 @@ export interface AIProviderConfig {
   apiKey: string
   /** Custom endpoint (required for OpenAI-compatible) */
   endpoint?: string
+  /** Google Cloud project used by Vertex AI */
+  projectId?: string
   /** Full URL to fetch the model list from; falls back to the pi registry when empty */
   modelListUrl?: string
   /** Full URL to fetch speech voices from; falls back to the built-in catalog when empty */

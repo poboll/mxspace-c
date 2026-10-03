@@ -1,7 +1,9 @@
 import type { EntityId } from '~/shared/id/entity-id'
 
+import type { SponsorCsvRow } from './sponsors-csv'
+
 export type MembershipProvider =
-  'dodo' | 'creem' | 'lemonsqueezy' | 'stripe' | 'manual'
+  'dodo' | 'creem' | 'lemonsqueezy' | 'stripe' | 'manual' | 'apple'
 
 export const REGISTERED_PAYMENT_PROVIDERS: readonly string[] = ['dodo']
 
@@ -59,9 +61,85 @@ export function resolveMembershipAvailability(config: {
   return { enabled, plans: enabled ? plans : [] }
 }
 
+export type ArticlePurchaseStatus = 'paid' | 'refunded'
+
+export interface ArticlePurchaseRow {
+  id: EntityId
+  readerId: string
+  postId: string
+  provider: string
+  providerPaymentId: string
+  providerCustomerId: string | null
+  amount: number
+  currency: string
+  status: ArticlePurchaseStatus
+  createdAt: Date
+  updatedAt: Date | null
+}
+
+export interface ArticlePurchaseAvailability {
+  enabled: boolean
+}
+
+export function resolveArticlePurchaseAvailability(config: {
+  articlePurchaseEnabled?: boolean
+  provider?: string
+  articleProductId?: string
+  apiKey?: string
+  webhookSigningKey?: string
+}): ArticlePurchaseAvailability {
+  const hasProviderCredentials = !!config.apiKey && !!config.webhookSigningKey
+  const enabled =
+    !!config.articlePurchaseEnabled &&
+    !!config.provider &&
+    REGISTERED_PAYMENT_PROVIDERS.includes(config.provider) &&
+    hasProviderCredentials &&
+    !!config.articleProductId
+  return { enabled }
+}
+
+export interface AppleIapAvailability {
+  enabled: boolean
+  monthlyProductId?: string
+  yearlyProductId?: string
+}
+
+const nonEmpty = (value?: string) => Boolean(value?.trim())
+
+const positiveInteger = (value?: string) => {
+  const parsed = Number(value?.trim())
+  return Number.isSafeInteger(parsed) && parsed > 0
+}
+
+export function resolveAppleIapAvailability(config: {
+  enabled?: boolean
+  appleBundleId?: string
+  appleAppAppleId?: string
+  appleKeyId?: string
+  appleIssuerId?: string
+  applePrivateKey?: string
+  appleMonthlyProductId?: string
+  appleYearlyProductId?: string
+}): AppleIapAvailability {
+  const monthlyProductId = config.appleMonthlyProductId?.trim()
+  const yearlyProductId = config.appleYearlyProductId?.trim()
+  const enabled =
+    !!config.enabled &&
+    nonEmpty(config.appleBundleId) &&
+    positiveInteger(config.appleAppAppleId) &&
+    nonEmpty(config.appleKeyId) &&
+    nonEmpty(config.appleIssuerId) &&
+    nonEmpty(config.applePrivateKey) &&
+    nonEmpty(monthlyProductId) &&
+    nonEmpty(yearlyProductId)
+  if (!enabled) return { enabled: false }
+  return { enabled: true, monthlyProductId, yearlyProductId }
+}
+
 export function resolveMembershipReturnUrl(
   returnPath: string | undefined,
   webUrl: string | undefined,
+  successParam: 'membership' | 'purchase' = 'membership',
 ): string | undefined {
   if (!returnPath || !webUrl) return undefined
   if (!returnPath.startsWith('/') || returnPath.startsWith('//'))
@@ -78,7 +156,7 @@ export function resolveMembershipReturnUrl(
   const resolved = new URL(returnPath, base)
   if (resolved.origin !== base.origin) return undefined
 
-  resolved.searchParams.set('membership', 'success')
+  resolved.searchParams.set(successParam, 'success')
   return resolved.toString()
 }
 
@@ -99,4 +177,45 @@ export interface BillingWebhookEventRow {
   payload: unknown
   processedAt: Date | null
   receivedAt: Date
+}
+
+export interface SponsorReaderMatch {
+  id: string
+  name: string | null
+  handle: string | null
+  membership: MembershipRow | null
+}
+
+export interface GithubSponsorRow {
+  githubId: string
+  login: string
+  avatarUrl: string
+  tierName: string | null
+  monthlyPrice: number | null
+  isActive: boolean
+  sponsoredAt: Date
+  reader: SponsorReaderMatch | null
+}
+
+export interface SponsorCsvPreviewRow extends SponsorCsvRow {
+  reader: SponsorReaderMatch | null
+}
+
+export interface SponsorGrantResult {
+  granted: number
+  skipped: { readerId: string; reason: string }[]
+}
+
+export function resolveGrantExtension(
+  existing: MembershipRow | null,
+  months: number,
+  now: Date = new Date(),
+): { plan: MembershipPlan; expiresAt: Date } {
+  const base =
+    existing && existing.status === 'active' && existing.currentPeriodEnd > now
+      ? existing.currentPeriodEnd
+      : now
+  const expiresAt = new Date(base)
+  expiresAt.setUTCMonth(expiresAt.getUTCMonth() + months)
+  return { plan: months >= 12 ? 'yearly' : 'monthly', expiresAt }
 }

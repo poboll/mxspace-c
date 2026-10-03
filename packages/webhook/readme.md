@@ -1,6 +1,6 @@
 # @mx-space/webhook
 
-SDK for receiving and verifying MX Space Core webhooks. It provides a signature-verified HTTP handler and an event emitter so you can react to server events (post/note/page/say/comment updates, link applications, activity, etc.) in your own Node.js or edge services.
+SDK for receiving and verifying Mix Space Core webhooks. It provides a signature-verified HTTP handler and an event emitter so you can react to server events (post/note/page/say/comment updates, link applications, activity, etc.) in your own Node.js or edge services.
 
 ---
 
@@ -21,7 +21,7 @@ SDK for receiving and verifying MX Space Core webhooks. It provides a signature-
 ## Requirements
 
 - **Node.js** ≥ 22 (see `engines` in `package.json`)
-- **MX Space Core** server with webhooks configured; the webhook endpoint must use the same **secret** you pass to `createHandler`.
+- **Mix Space Core** server with webhooks configured; the webhook endpoint must use the same **secret** you pass to `createHandler`.
 
 ---
 
@@ -45,7 +45,7 @@ No framework is bundled; you plug the handler into your own HTTP server (Express
 
 ## Quick Start
 
-1. **Create a handler** with the same `secret` as in your MX Space Core webhook configuration.
+1. **Create a handler** with the same `secret` as in your Mix Space Core webhook configuration.
 2. **Mount the handler** on the path your server sends webhooks to (e.g. `POST /mx/webhook`).
 3. **Subscribe to events** on `handler.emitter`.
 
@@ -60,7 +60,7 @@ yourServer.post('/mx/webhook', (req, res) => {
 })
 
 // Listen for specific events (typed payloads)
-handler.emitter.on('POST_CREATE', (payload, source) => {
+handler.emitter.on('post.create', (payload, source) => {
   console.log('New post:', payload.title, 'source:', source)
 })
 
@@ -134,21 +134,21 @@ Events are defined in the core server and re-exported here. The following are co
 
 | Event                     | Payload type (summary) |
 |---------------------------|-------------------------|
-| `POST_CREATE` / `POST_UPDATE` | Normalized post        |
-| `POST_DELETE`             | `{ data: id }`          |
-| `NOTE_CREATE` / `NOTE_UPDATE` | Normalized note        |
-| `NOTE_DELETE`             | `{ data: id }`          |
-| `PAGE_CREATE` / `PAGE_UPDATE` | Page model             |
-| `PAGE_DELETE`             | `{ data: id }`          |
-| `SAY_CREATE` / `SAY_UPDATE` / `SAY_DELETE` | Say model or id   |
-| `RECENTLY_CREATE` / `RECENTLY_UPDATE` | Recently model   |
-| `LINK_APPLY`              | Link model              |
-| `COMMENT_CREATE` / `COMMENT_UPDATE` | Comment payloads  |
-| `ACTIVITY_LIKE`           | Activity like payload   |
-| `AGGREGATE_UPDATE`        | Aggregate update payload |
-| `TRANSLATION_CREATE` / `TRANSLATION_UPDATE` / `TRANSLATION_DELETE` | AI translation payloads |
-| `INSIGHTS_CREATE` / `INSIGHTS_UPDATE` / `INSIGHTS_DELETE` / `INSIGHTS_GENERATED` | AI insights payloads |
-| `ARTICLE_READ_COUNT_UPDATE` | `{ count, type, id }` |
+| `post.create` / `post.update` | Normalized post        |
+| `post.delete`             | `{ data: id }`          |
+| `note.create` / `note.update` | Normalized note        |
+| `note.delete`             | `{ data: id }`          |
+| `page.create` / `page.update` | Page model             |
+| `page.delete`             | `{ data: id }`          |
+| `say.create` / `say.update` / `say.delete` | Say model or id   |
+| `recently.create` / `recently.update` | Recently model   |
+| `link.apply`              | Link model              |
+| `comment.create` / `comment.update` | Comment payloads  |
+| `activity.like`           | Activity like payload   |
+| `aggregate.update`        | Aggregate update payload |
+| `translation.create` / `translation.update` / `translation.delete` | AI translation payloads |
+| `insights.create` / `insights.update` / `insights.delete` / `insights.generated` | AI insights payloads |
+| `article.read_count_update` | `{ count, type, id }` |
 | `health_check`            | `{}`                    |
 
 > Server v12+ serializes all entity ids (`id`, `categoryId`, `topicId`, etc.) as Snowflake **decimal strings**. Cast to `string`, not `number`.
@@ -159,7 +159,7 @@ Use the TypeScript types from `@mx-space/webhook` for precise payload shapes whe
 
 ## Security
 
-- **Secret**: Must match the webhook secret configured in MX Space Core. Keep it in environment variables or a secrets manager, not in source.
+- **Secret**: Must match the webhook secret configured in Mix Space Core. Keep it in environment variables or a secrets manager, not in source.
 - **Signatures**: The handler requires both SHA-1 (`X-Webhook-Signature`) and SHA-256 (`X-Webhook-Signature256`) and validates with `timingSafeEqual`.
 - **Body**: Verification uses the raw body string. Your server must pass the **parsed** body as `req.body` for the handler to use; ensure the body is not modified before parsing (e.g. use the same raw body for verification if you implement custom verification).
 

@@ -15,17 +15,22 @@ import {
   ReaderReplyCommentSchema,
 } from '~/modules/comment/comment.schema'
 import { CommentViews } from '~/modules/comment/comment.views'
-import { ResolveQuerySchema } from '~/modules/enrichment/enrichment.schema'
+import {
+  EnrichmentSearchParamsSchema,
+  EnrichmentSearchQuerySchema,
+  ResolveQuerySchema,
+} from '~/modules/enrichment/enrichment.schema'
 import { EnrichmentViews } from '~/modules/enrichment/enrichment.views'
 import { NoteSchema } from '~/modules/note/note.schema'
 import { NoteViews } from '~/modules/note/note.views'
 import {
   PushActivationRequestSchema,
   PushActivationResponseSchema,
-  PushBindingIdParamSchema,
-  PushStatusResponseSchema,
 } from '~/modules/push/push.schema'
-import { RecentlySchema } from '~/modules/recently/recently.schema'
+import {
+  RecentlyRefCandidatesQuerySchema,
+  RecentlySchema,
+} from '~/modules/recently/recently.schema'
 import { RecentlyViews } from '~/modules/recently/recently.views'
 import { SayCreateSchema } from '~/modules/say/say.controller'
 import { SayViews } from '~/modules/say/say.views'
@@ -141,8 +146,9 @@ export const routeManifest: readonly OpenApiRoute[] = [
     method: 'post',
     path: '/notifications/push/activate',
     tag: 'notifications',
-    summary: 'Bind this authenticated owner installation to a Push Relay',
-    auth: true,
+    summary:
+      'Claim a Push Relay activation ticket for this device, optionally associating the current reader',
+    auth: false,
     body: {
       name: 'PushActivationRequest',
       schema: PushActivationRequestSchema,
@@ -151,27 +157,6 @@ export const routeManifest: readonly OpenApiRoute[] = [
       name: 'PushActivationResponse',
       schema: PushActivationResponseSchema,
     },
-  },
-  {
-    operationId: 'getPushNotificationStatus',
-    method: 'get',
-    path: '/notifications/push/status',
-    tag: 'notifications',
-    summary: 'Read the current owner push binding status',
-    auth: true,
-    response: {
-      name: 'PushStatus',
-      schema: PushStatusResponseSchema,
-    },
-  },
-  {
-    operationId: 'deactivatePushNotifications',
-    method: 'delete',
-    path: '/notifications/push/:bindingId',
-    tag: 'notifications',
-    summary: 'Revoke one mobile push binding',
-    auth: true,
-    params: PushBindingIdParamSchema,
   },
 
   {
@@ -340,6 +325,20 @@ export const routeManifest: readonly OpenApiRoute[] = [
     responseIsArray: true,
   },
   {
+    operationId: 'listRecentlyRefCandidates',
+    method: 'get',
+    path: '/recently/ref-candidates',
+    tag: 'recently',
+    summary: 'Search internal content that can be attached as Recently context',
+    auth: true,
+    query: RecentlyRefCandidatesQuerySchema,
+    response: {
+      name: 'RecentlyRefCandidate',
+      schema: RecentlyViews.refCandidate,
+    },
+    responseIsArray: true,
+  },
+  {
     operationId: 'createRecently',
     successStatus: 201,
     method: 'post',
@@ -380,5 +379,17 @@ export const routeManifest: readonly OpenApiRoute[] = [
     auth: false,
     query: ResolveQuerySchema,
     response: { name: 'EnrichmentResult', schema: EnrichmentViews.result },
+  },
+  {
+    operationId: 'searchEnrichment',
+    method: 'get',
+    path: '/enrichment/search/:provider',
+    tag: 'recently',
+    summary: 'Search a configured enrichment provider by text',
+    auth: true,
+    params: EnrichmentSearchParamsSchema,
+    query: EnrichmentSearchQuerySchema,
+    response: { name: 'EnrichmentResult', schema: EnrichmentViews.result },
+    responseIsArray: true,
   },
 ] as const

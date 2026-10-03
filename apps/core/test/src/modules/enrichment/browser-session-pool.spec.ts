@@ -39,10 +39,10 @@ afterEach(() => {
 })
 
 describe('BrowserSessionPool', () => {
-  it('acquire returns a slot named agent-browser-0 on first use', async () => {
+  it('acquire returns a session name on first use', async () => {
     const pool = new BrowserSessionPool({ maxSize: 2, idleMs: 60_000 })
     const slot = await pool.acquire()
-    expect(slot.name).toBe('agent-browser-0')
+    expect(slot.name).toMatch(/^agent-browser-/)
     pool.release(slot)
     await pool.shutdown()
   })
@@ -51,10 +51,7 @@ describe('BrowserSessionPool', () => {
     const pool = new BrowserSessionPool({ maxSize: 2, idleMs: 60_000 })
     const a = await pool.acquire()
     const b = await pool.acquire()
-    expect([a.name, b.name].sort()).toEqual([
-      'agent-browser-0',
-      'agent-browser-1',
-    ])
+    expect(a.name).not.toBe(b.name)
     pool.release(a)
     pool.release(b)
     await pool.shutdown()
@@ -83,10 +80,9 @@ describe('BrowserSessionPool', () => {
     const pool = new BrowserSessionPool({ maxSize: 1, idleMs: 60_000 })
     const a = await pool.acquire()
     pool.release(a, { discard: true })
-    // discard issues a close; next acquire creates a fresh session with the
-    // same name (slot index reused).
+    // Close completes before the next session is allocated.
     const b = await pool.acquire()
-    expect(b.name).toBe(a.name)
+    expect(b.name).not.toBe(a.name)
     const closedCall = execFileMock.mock.calls.find(
       (call) => (call[1] as string[]).at(-1) === 'close',
     )
@@ -128,25 +124,76 @@ describe('BrowserSessionPool', () => {
     await expect(pool.acquire()).rejects.toThrow(/shut down/i)
   })
 
-  it('discard release with a queued waiter does NOT hand the discarded slot to the waiter', async () => {
-    // Regression: discard fires close asynchronously; flushWaiter must not
-    // see the slot being torn down, or the waiter ends up sharing a session
-    // name with an in-flight `agent-browser ... close`.
-    const pool = new BrowserSessionPool({ maxSize: 1, idleMs: 60_000 })
+  it('retains capacity until close completes without reusing its session', async () => {
+    let finishClose!: () => void
+    execFileMock.mockImplementation((...args: unknown[]) => {
+      const cb = args.at(-1) as (err: Error | null, result?: object) => void
+      finishClose = () => cb(null, { stdout: '', stderr: '' })
+    })
+    const pool = new BrowserSessionPool({ maxSize: 1 })
     const a = await pool.acquire()
-    const waiterPromise = pool.acquire()
+    const waiting = pool.acquire()
+    let granted = false
+    void waiting.then(() => {
+      granted = true
+    })
     pool.release(a, { discard: true })
-    const b = await waiterPromise
-    // Slot index reused (pool was emptied), so name collides — but the
-    // important invariant is that the slot object now in the pool is a
-    // fresh one, observable via the close-call count: discard issues one
-    // close, the waiter's slot has not been closed yet.
-    const closeCalls = execFileMock.mock.calls.filter(
-      (call) => (call[1] as string[]).at(-1) === 'close',
-    )
-    expect(closeCalls.length).toBe(1)
-    expect(b.name).toBe('agent-browser-0')
+    await Promise.resolve()
+    expect(granted).toBe(false)
+    finishClose()
+    const b = await waiting
+    expect(b.name).not.toBe(a.name)
+    mockExecFileSuccess()
     pool.release(b)
+    await pool.shutdown()
+  })
+
+  it('does not collide with an active session when an earlier slot closes', async () => {
+    const pool = new BrowserSessionPool({ maxSize: 2 })
+    const a = await pool.acquire()
+    const b = await pool.acquire()
+    pool.release(a, { discard: true })
+    const c = await pool.acquire()
+    expect(new Set([a.name, b.name, c.name]).size).toBe(3)
+    pool.release(b)
+    pool.release(c)
+    await pool.shutdown()
+  })
+
+  it('quarantines failed closes and rejects work instead of spawning replacements', async () => {
+    execFileMock.mockImplementation((...args: unknown[]) => {
+      const cb = args.at(-1) as (err: Error) => void
+      cb(Object.assign(new Error('close failed'), { code: 'ETIMEDOUT' }))
+    })
+    const pool = new BrowserSessionPool({ maxSize: 1 })
+    const a = await pool.acquire()
+    const waiting = expect(pool.acquire()).rejects.toThrow(/quarantined/)
+    pool.release(a, { discard: true })
+    await waiting
+    expect(execFileMock).toHaveBeenCalledTimes(2)
+    await expect(pool.acquire()).rejects.toThrow(/quarantined/)
+    expect(execFileMock).toHaveBeenCalledTimes(2)
+    mockExecFileSuccess()
+    await pool.shutdown()
+  })
+
+  it('bounds waiting even without an abort signal', async () => {
+    const pool = new BrowserSessionPool({ maxSize: 1 })
+    const a = await pool.acquire()
+    const waiting = expect(pool.acquire()).rejects.toThrow(/timed out/)
+    await vi.advanceTimersByTimeAsync(30_000)
+    await waiting
+    pool.release(a)
+    await pool.shutdown()
+  })
+
+  it('rejects pre-aborted acquisitions without consuming capacity', async () => {
+    const pool = new BrowserSessionPool({ maxSize: 1 })
+    await expect(pool.acquire({ signal: AbortSignal.abort() })).rejects.toThrow(
+      /aborted/,
+    )
+    const a = await pool.acquire()
+    pool.release(a)
     await pool.shutdown()
   })
 

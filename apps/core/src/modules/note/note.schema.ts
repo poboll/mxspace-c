@@ -1,4 +1,3 @@
-import { createZodDto } from 'nestjs-zod'
 import { z } from 'zod'
 
 import {
@@ -14,11 +13,9 @@ import { MarkdownToLexicalMigrationDescriptorSchema } from '~/modules/content-mi
 import { createPagerSchema } from '~/shared/dto/pager.dto'
 import {
   validateLexicalCreateContentPair,
-  validateLexicalPartialContentPair,
   WriteBaseSchema,
 } from '~/shared/schema'
 import { ImageArraySchema } from '~/shared/schema/image.schema'
-import { ContentFormat } from '~/shared/types/content-format.type'
 
 /**
  * Coordinate schema
@@ -58,8 +55,6 @@ const NoteBaseSchema = WriteBaseSchema.extend({
   location: z.string().optional().nullable(),
   topicId: zEntityId.optional().nullable(),
   images: ImageArraySchema.optional().default([]),
-  /** ID of the associated draft; marked as published when this note is published */
-  draftId: zEntityId.optional(),
   migration: MarkdownToLexicalMigrationDescriptorSchema.optional(),
 })
 
@@ -67,29 +62,18 @@ export const NoteSchema = NoteBaseSchema.superRefine(
   validateLexicalCreateContentPair,
 )
 
-export class NoteDto extends createZodDto(NoteSchema) {}
-
 /**
  * Partial note schema for PATCH operations
  * Override fields with .default() to prevent defaults from being applied during partial updates
  */
-export const PartialNoteSchema = NoteBaseSchema.extend({
-  title: z
-    .string()
-    .transform((val) => (val.length === 0 ? 'Untitled' : val))
-    .optional(),
-  contentFormat: z
-    .enum([ContentFormat.Markdown, ContentFormat.Lexical])
-    .optional(),
-  meta: z.record(z.string(), z.any()).optional().nullable(),
-  isPublished: z.boolean().optional(),
+export const PartialNoteSchema = z.object({
   bookmark: z.boolean().optional(),
-  images: ImageArraySchema.optional(),
+  mood: z.string().nullable().optional(),
+  topicId: zEntityId.nullable().optional(),
+  weather: z.string().nullable().optional(),
 })
-  .partial()
-  .superRefine(validateLexicalPartialContentPair)
 
-export class PartialNoteDto extends createZodDto(PartialNoteSchema) {}
+export type PartialNoteDto = z.infer<typeof PartialNoteSchema>
 
 /**
  * Note query schema for pagination
@@ -105,7 +89,7 @@ export const NoteQuerySchema = createPagerSchema([
   withSummary: zCoerceBoolean.optional(),
 })
 
-export class NoteQueryDto extends createZodDto(NoteQuerySchema) {}
+export type NoteQueryDto = z.infer<typeof NoteQuerySchema>
 
 /**
  * Note password query schema
@@ -117,9 +101,7 @@ export const NotePasswordQuerySchema = z.object({
   prefer: zPrefer,
 })
 
-export class NotePasswordQueryDto extends createZodDto(
-  NotePasswordQuerySchema,
-) {}
+export type NotePasswordQueryDto = z.infer<typeof NotePasswordQuerySchema>
 
 /**
  * List query schema
@@ -129,7 +111,7 @@ export const ListQuerySchema = z.object({
   lang: zLang,
 })
 
-export class ListQueryDto extends createZodDto(ListQuerySchema) {}
+export type ListQueryDto = z.infer<typeof ListQuerySchema>
 
 /**
  * Nid type schema
@@ -141,7 +123,7 @@ export const NidTypeSchema = z.object({
   ),
 })
 
-export class NidType extends createZodDto(NidTypeSchema) {}
+export type NidType = z.infer<typeof NidTypeSchema>
 
 export const NoteSlugDateParamsSchema = z.object({
   year: zCoerceInt.min(1970),
@@ -150,9 +132,7 @@ export const NoteSlugDateParamsSchema = z.object({
   slug: zNonEmptyString,
 })
 
-export class NoteSlugDateParamsDto extends createZodDto(
-  NoteSlugDateParamsSchema,
-) {}
+export type NoteSlugDateParamsDto = z.infer<typeof NoteSlugDateParamsSchema>
 
 /**
  * Set note publish status schema
@@ -161,9 +141,7 @@ export const SetNotePublishStatusSchema = z.object({
   isPublished: z.boolean(),
 })
 
-export class SetNotePublishStatusDto extends createZodDto(
-  SetNotePublishStatusSchema,
-) {}
+export type SetNotePublishStatusDto = z.infer<typeof SetNotePublishStatusSchema>
 
 /**
  * Note topic pager schema (extends pager with lang support)
@@ -178,17 +156,4 @@ export const NoteTopicPagerSchema = createPagerSchema([
   lang: zLang,
 })
 
-export class NoteTopicPagerDto extends createZodDto(NoteTopicPagerSchema) {}
-
-// Type exports
-export type CoordinateInput = z.infer<typeof CoordinateSchema>
-export type NoteInput = z.infer<typeof NoteSchema>
-export type PartialNoteInput = z.infer<typeof PartialNoteSchema>
-export type NoteQueryInput = z.infer<typeof NoteQuerySchema>
-export type NotePasswordQueryInput = z.infer<typeof NotePasswordQuerySchema>
-export type ListQueryInput = z.infer<typeof ListQuerySchema>
-export type NidTypeInput = z.infer<typeof NidTypeSchema>
-export type NoteSlugDateParamsInput = z.infer<typeof NoteSlugDateParamsSchema>
-export type SetNotePublishStatusInput = z.infer<
-  typeof SetNotePublishStatusSchema
->
+export type NoteTopicPagerDto = z.infer<typeof NoteTopicPagerSchema>

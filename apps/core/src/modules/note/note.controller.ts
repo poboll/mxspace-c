@@ -1,19 +1,8 @@
-import {
-  Body,
-  Delete,
-  Get,
-  Param,
-  Patch,
-  Post,
-  Put,
-  Query,
-} from '@nestjs/common'
+import { Body, Delete, Get, Param, Patch, Query } from '@nestjs/common'
 
 import { ApiController } from '~/common/decorators/api-controller.decorator'
 import { Auth } from '~/common/decorators/auth.decorator'
-import { HTTPDecorators } from '~/common/decorators/http.decorator'
-import type { IpRecord } from '~/common/decorators/ip.decorator'
-import { IpLocation } from '~/common/decorators/ip.decorator'
+import { IpLocation, type IpRecord } from '~/common/decorators/ip.decorator'
 import { Lang } from '~/common/decorators/lang.decorator'
 import { HasAdminAccess } from '~/common/decorators/role.decorator'
 import { AppErrorCode, createAppException } from '~/common/errors'
@@ -35,7 +24,7 @@ import {
   type EntryRule,
   TranslationService,
 } from '~/processors/helper/helper.translation.service'
-import { EntityIdDto } from '~/shared/dto/id.dto'
+import { type EntityIdDto, EntityIdSchema } from '~/shared/dto/id.dto'
 import { truncateAtBoundary } from '~/utils/text-summary.util'
 
 import { DEFAULT_SUMMARY_LANG } from '../ai/ai.constants'
@@ -45,15 +34,22 @@ import { AiSummaryService } from '../ai/ai-summary/ai-summary.service'
 import { AiTtsQueryService } from '../ai/ai-tts/ai-tts-query.service'
 import { EnrichmentService } from '../enrichment/enrichment.service'
 import {
-  ListQueryDto,
-  NidType,
-  NoteDto,
-  NotePasswordQueryDto,
-  NoteQueryDto,
-  NoteSlugDateParamsDto,
-  NoteTopicPagerDto,
-  PartialNoteDto,
-  SetNotePublishStatusDto,
+  type ListQueryDto,
+  ListQuerySchema,
+  type NidType,
+  NidTypeSchema,
+  type NotePasswordQueryDto,
+  NotePasswordQuerySchema,
+  type NoteQueryDto,
+  NoteQuerySchema,
+  type NoteSlugDateParamsDto,
+  NoteSlugDateParamsSchema,
+  type NoteTopicPagerDto,
+  NoteTopicPagerSchema,
+  type PartialNoteDto,
+  PartialNoteSchema,
+  type SetNotePublishStatusDto,
+  SetNotePublishStatusSchema,
 } from './note.schema'
 import { NoteService } from './note.service'
 import type { NoteModel } from './note.types'
@@ -342,7 +338,7 @@ export class NoteController {
   @Get('/')
   async getNotes(
     @HasAdminAccess() isAuthenticated: boolean,
-    @Query() query: NoteQueryDto,
+    @Query({ schema: NoteQuerySchema }) query: NoteQueryDto,
     @Lang() lang?: string,
   ) {
     const { size, page, sortBy, sortOrder, year, withSummary } = query
@@ -451,7 +447,7 @@ export class NoteController {
 
   @Get(':id')
   async getOneNote(
-    @Param() params: EntityIdDto,
+    @Param({ schema: EntityIdSchema }) params: EntityIdDto,
     @HasAdminAccess() isAuthenticated: boolean,
   ) {
     const { id } = params
@@ -479,9 +475,9 @@ export class NoteController {
 
   @Get('/:year/:month/:day/:slug')
   async getNoteByDateAndSlug(
-    @Param() params: NoteSlugDateParamsDto,
+    @Param({ schema: NoteSlugDateParamsSchema }) params: NoteSlugDateParamsDto,
     @HasAdminAccess() isAuthenticated: boolean,
-    @Query() query: NotePasswordQueryDto,
+    @Query({ schema: NotePasswordQuerySchema }) query: NotePasswordQueryDto,
     @IpLocation() { ip }: IpRecord,
     @Lang() lang?: string,
   ) {
@@ -509,8 +505,8 @@ export class NoteController {
 
   @Get('/list/:id')
   async getNoteList(
-    @Query() query: ListQueryDto,
-    @Param() params: EntityIdDto,
+    @Query({ schema: ListQuerySchema }) query: ListQueryDto,
+    @Param({ schema: EntityIdSchema }) params: EntityIdDto,
     @HasAdminAccess() isAuthenticated: boolean,
     @Lang() lang?: string,
   ) {
@@ -579,23 +575,12 @@ export class NoteController {
     return withMeta(listData, metaBuilder.build())
   }
 
-  @Post('/')
-  @HTTPDecorators.Idempotence()
-  @Auth()
-  create(@Body() body: NoteDto) {
-    return this.noteService.create(body as unknown as NoteModel)
-  }
-
-  @Put('/:id')
-  @Auth()
-  async modify(@Body() body: NoteDto, @Param() params: EntityIdDto) {
-    await this.noteService.updateById(params.id, body as unknown as NoteModel)
-    return this.noteService.findOneByIdOrNid(params.id)
-  }
-
   @Patch('/:id')
   @Auth()
-  async patch(@Body() body: PartialNoteDto, @Param() params: EntityIdDto) {
+  async patch(
+    @Body({ schema: PartialNoteSchema }) body: PartialNoteDto,
+    @Param({ schema: EntityIdSchema }) params: EntityIdDto,
+  ) {
     await this.noteService.updateById(
       params.id,
       body as unknown as Partial<NoteModel>,
@@ -604,7 +589,7 @@ export class NoteController {
 
   @Delete(':id')
   @Auth()
-  async deleteNote(@Param() params: EntityIdDto) {
+  async deleteNote(@Param({ schema: EntityIdSchema }) params: EntityIdDto) {
     await this.noteService.deleteById(params.id)
   }
 
@@ -688,9 +673,9 @@ export class NoteController {
 
   @Get('/nid/:nid')
   async getNoteByNid(
-    @Param() params: NidType,
+    @Param({ schema: NidTypeSchema }) params: NidType,
     @HasAdminAccess() isAuthenticated: boolean,
-    @Query() query: NotePasswordQueryDto,
+    @Query({ schema: NotePasswordQuerySchema }) query: NotePasswordQueryDto,
     @IpLocation() { ip }: IpRecord,
     @Lang() lang?: string,
   ) {
@@ -715,8 +700,8 @@ export class NoteController {
 
   @Get('/topics/:id')
   async getNotesByTopic(
-    @Param() params: EntityIdDto,
-    @Query() query: NoteTopicPagerDto,
+    @Param({ schema: EntityIdSchema }) params: EntityIdDto,
+    @Query({ schema: NoteTopicPagerSchema }) query: NoteTopicPagerDto,
     @HasAdminAccess() isAuthenticated: boolean,
     @Lang() lang?: string,
   ) {
@@ -780,7 +765,7 @@ export class NoteController {
 
   @Get('/topics/:id/recent-update')
   async getTopicRecentUpdate(
-    @Param() params: EntityIdDto,
+    @Param({ schema: EntityIdSchema }) params: EntityIdDto,
     @HasAdminAccess() isAuthenticated: boolean,
   ) {
     const ts = await this.noteService.getTopicRecentUpdate(
@@ -793,8 +778,8 @@ export class NoteController {
   @Patch('/:id/publish')
   @Auth()
   async setPublishStatus(
-    @Param() params: EntityIdDto,
-    @Body() body: SetNotePublishStatusDto,
+    @Param({ schema: EntityIdSchema }) params: EntityIdDto,
+    @Body({ schema: SetNotePublishStatusSchema }) body: SetNotePublishStatusDto,
   ) {
     await this.noteService.updateById(params.id, {
       isPublished: body.isPublished,

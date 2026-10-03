@@ -34,6 +34,7 @@ const createReply = (): FakeReply => {
 
 const createContext = (request: any, reply: FakeReply): ExecutionContext =>
   ({
+    getType: () => 'http',
     getHandler: () => function handler() {},
     getClass: () => class {},
     switchToHttp: () => ({
@@ -198,7 +199,7 @@ describe('HttpCacheInterceptor entitlement-keyed caching', () => {
     const { interceptor } = createInterceptor(store)
     const reply = createReply()
     const premiumResponse = {
-      data: { isPremium: true, title: 'Full premium content' },
+      data: { is_premium: true, title: 'Full premium content' },
       meta: {},
     }
 
@@ -217,7 +218,7 @@ describe('HttpCacheInterceptor entitlement-keyed caching', () => {
 
   it('does not replay an unguarded premium response left by an earlier configuration', async () => {
     const stalePremiumResponse = {
-      data: { isPremium: true, title: 'Full premium content' },
+      data: { is_premium: true, title: 'Full premium content' },
       meta: {},
     }
     const store = new Map<string, unknown>([
@@ -225,7 +226,7 @@ describe('HttpCacheInterceptor entitlement-keyed caching', () => {
     ])
     const { interceptor } = createInterceptor(store)
     const teaserResponse = {
-      data: { isPremium: true, title: 'Teaser' },
+      data: { is_premium: true, title: 'Teaser' },
       meta: { paywall: { locked: true } },
     }
     const handler = vi.fn(() => of(teaserResponse))

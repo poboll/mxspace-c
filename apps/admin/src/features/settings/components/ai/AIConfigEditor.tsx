@@ -10,7 +10,7 @@ import type { TranslationKey } from '~/i18n/types'
 import { DropdownMenu } from '~/ui/overlay/dropdown-menu'
 import { Button } from '~/ui/primitives/button'
 import { SelectField } from '~/ui/primitives/select'
-import { Switch, Toggle } from '~/ui/primitives/switch'
+import { FormSwitch, Switch } from '~/ui/primitives/switch'
 import { TextInput } from '~/ui/primitives/text-field'
 import { cn } from '~/utils/cn'
 
@@ -29,6 +29,7 @@ import { formatAIProviderLabel } from '../../utils/settings'
 import { EmptyState, FieldShell, SettingsSection } from '../SettingsPrimitives'
 import { AIModelAssignmentField } from './AIModelAssignmentField'
 import { AIProviderDrawer } from './AIProviderDrawer'
+import { presentAIProviderPresetModal } from './AIProviderPresetModal'
 import { AITextListField } from './AITextListField'
 import { TtsVoiceField } from './TtsVoiceField'
 
@@ -55,7 +56,9 @@ const PRESET_NAME_KEYS: Partial<Record<string, TranslationKey>> = {
   xai: 'settings.ai.preset.name.xai',
 }
 
-async function getProviderModels(capability: 'image' | 'speech' | 'text') {
+async function getProviderModels(
+  capability: 'decision' | 'image' | 'speech' | 'text',
+) {
   const response = await getModelsByCapability(capability)
   const entries: Array<[string, AIProviderModel[]]> = response.map(
     (provider) => [provider.providerId, provider.models ?? []],
@@ -98,6 +101,13 @@ export function AIConfigEditor(props: {
     queryKey: [...props.modelCacheKey, 'image'],
     staleTime: 24 * 60 * 60 * 1000,
   })
+  const decisionModelsQuery = useQuery({
+    enabled: providers.some((p) => p.enabled && p.capabilities?.decision),
+    queryFn: () => getProviderModels('decision'),
+    queryKey: [...props.modelCacheKey, 'decision'],
+    staleTime: 24 * 60 * 60 * 1000,
+  })
+  const decisionModels = decisionModelsQuery.data ?? {}
   const providerModels = modelsQuery.data ?? {}
   const speechProviderModels = speechModelsQuery.data ?? {}
   const imageProviderModels = imageModelsQuery.data ?? {}
@@ -113,8 +123,12 @@ export function AIConfigEditor(props: {
     })
   }
 
-  const addProviderFromPreset = (preset: AIProviderPreset) => {
-    const provider = createProviderFromPreset(preset)
+  const addProviderFromPreset = async (preset: AIProviderPreset) => {
+    const values = preset.templateFields?.length
+      ? await presentAIProviderPresetModal(preset)
+      : {}
+    if (values === undefined) return
+    const provider = createProviderFromPreset(preset, values)
     updateConfig({ providers: [...providers, provider] })
     setEditingId(provider.id)
   }
@@ -123,11 +137,13 @@ export function AIConfigEditor(props: {
 
   const deleteProvider = (id: string) => {
     const references = [
+      props.value.decisionModel,
       props.value.summaryModel,
       props.value.writerModel,
       props.value.commentReviewModel,
       props.value.translationModel,
       props.value.translationReviewModel,
+      props.value.fieldTranslationModel,
       props.value.insightsModel,
       props.value.insightsTranslationModel,
       props.value.imageGeneration?.model,
@@ -171,7 +187,7 @@ export function AIConfigEditor(props: {
                         <DropdownMenu.Item
                           className="items-start py-2"
                           key={preset.id}
-                          onClick={() => addProviderFromPreset(preset)}
+                          onClick={() => void addProviderFromPreset(preset)}
                         >
                           <span className="flex min-w-0 flex-col gap-0.5">
                             <span className="truncate font-medium">
@@ -222,6 +238,18 @@ export function AIConfigEditor(props: {
           )}
         </SettingsSection>
 
+        <SettingsSection title={t('settings.ai.section.decision')}>
+          <AIModelAssignmentField
+            capability="decision"
+            label={t('settings.ai.section.decision')}
+            description={t('settings.ai.decision.description')}
+            models={decisionModels}
+            providers={providers}
+            value={props.value.decisionModel}
+            onChange={(decisionModel) => updateConfig({ decisionModel })}
+          />
+        </SettingsSection>
+
         <FeatureSection
           assignment={
             <AIModelAssignmentField
@@ -238,22 +266,6 @@ export function AIConfigEditor(props: {
           title={t('settings.ai.section.summary')}
           toggleLabel={t('settings.ai.switch.enableSummary')}
         >
-          <Switch
-            checked={Boolean(props.value.enableAutoGenerateSummaryOnCreate)}
-            disabled={!props.value.enableSummary}
-            label={t('settings.ai.switch.enableAutoSummaryCreate')}
-            onCheckedChange={(enableAutoGenerateSummaryOnCreate) =>
-              updateConfig({ enableAutoGenerateSummaryOnCreate })
-            }
-          />
-          <Switch
-            checked={Boolean(props.value.enableAutoGenerateSummaryOnUpdate)}
-            disabled={!props.value.enableSummary}
-            label={t('settings.ai.switch.enableAutoSummaryUpdate')}
-            onCheckedChange={(enableAutoGenerateSummaryOnUpdate) =>
-              updateConfig({ enableAutoGenerateSummaryOnUpdate })
-            }
-          />
           <AITextListField
             disabled={!props.value.enableSummary}
             label={t('settings.ai.switch.summaryTargetLanguages')}
@@ -261,18 +273,6 @@ export function AIConfigEditor(props: {
               updateConfig({ summaryTargetLanguages })
             }
             value={props.value.summaryTargetLanguages ?? []}
-          />
-          <TextInput
-            disabled={!props.value.enableSummary}
-            inputMode="numeric"
-            label={t('settings.ai.switch.summaryMinTextLength')}
-            onChange={(value) =>
-              updateConfig({
-                summaryMinTextLength: value.trim() ? Number(value) : 0,
-              })
-            }
-            type="number"
-            value={String(props.value.summaryMinTextLength ?? 0)}
           />
         </FeatureSection>
 
@@ -303,23 +303,7 @@ export function AIConfigEditor(props: {
           title={t('settings.ai.section.insights')}
           toggleLabel={t('settings.ai.switch.enableInsights')}
         >
-          <Switch
-            checked={Boolean(props.value.enableAutoGenerateInsightsOnCreate)}
-            disabled={!props.value.enableInsights}
-            label={t('settings.ai.switch.enableAutoInsightsCreate')}
-            onCheckedChange={(enableAutoGenerateInsightsOnCreate) =>
-              updateConfig({ enableAutoGenerateInsightsOnCreate })
-            }
-          />
-          <Switch
-            checked={Boolean(props.value.enableAutoGenerateInsightsOnUpdate)}
-            disabled={!props.value.enableInsights}
-            label={t('settings.ai.switch.enableAutoInsightsUpdate')}
-            onCheckedChange={(enableAutoGenerateInsightsOnUpdate) =>
-              updateConfig({ enableAutoGenerateInsightsOnUpdate })
-            }
-          />
-          <Switch
+          <FormSwitch
             checked={Boolean(props.value.enableAutoTranslateInsights)}
             disabled={!props.value.enableInsights}
             label={t('settings.ai.switch.enableAutoTranslateInsights')}
@@ -334,18 +318,6 @@ export function AIConfigEditor(props: {
               updateConfig({ insightsTargetLanguages })
             }
             value={props.value.insightsTargetLanguages ?? []}
-          />
-          <TextInput
-            disabled={!props.value.enableInsights}
-            inputMode="numeric"
-            label={t('settings.ai.switch.insightsMinTextLength')}
-            onChange={(value) =>
-              updateConfig({
-                insightsMinTextLength: value.trim() ? Number(value) : 0,
-              })
-            }
-            type="number"
-            value={String(props.value.insightsMinTextLength ?? 0)}
           />
         </FeatureSection>
 
@@ -370,6 +342,15 @@ export function AIConfigEditor(props: {
                 providers={providers}
                 value={props.value.translationReviewModel}
               />
+              <AIModelAssignmentField
+                label={t('settings.ai.assignment.fieldTranslationLabel')}
+                models={providerModels}
+                onChange={(fieldTranslationModel) =>
+                  updateConfig({ fieldTranslationModel })
+                }
+                providers={providers}
+                value={props.value.fieldTranslationModel}
+              />
             </>
           }
           description={t('settings.ai.section.translationDescription')}
@@ -380,15 +361,7 @@ export function AIConfigEditor(props: {
           title={t('settings.ai.section.translation')}
           toggleLabel={t('settings.ai.switch.enableTranslation')}
         >
-          <Switch
-            checked={Boolean(props.value.enableAutoGenerateTranslation)}
-            disabled={!props.value.enableTranslation}
-            label={t('settings.ai.switch.enableAutoTranslate')}
-            onCheckedChange={(enableAutoGenerateTranslation) =>
-              updateConfig({ enableAutoGenerateTranslation })
-            }
-          />
-          <Switch
+          <FormSwitch
             checked={Boolean(props.value.enableTranslationReview)}
             disabled={!props.value.enableTranslation}
             label={t('settings.ai.switch.enableTranslationReview')}
@@ -631,14 +604,22 @@ export function AIConfigEditor(props: {
       </div>
 
       <AIProviderDrawer
-        modelCacheKey={props.modelCacheKey}
+        modelCacheKey={
+          editingProvider?.capabilities?.decision
+            ? [...props.modelCacheKey, 'decision']
+            : props.modelCacheKey
+        }
         onChange={(patch) =>
           editingId ? updateProvider(editingId, patch) : undefined
         }
         onClose={() => setEditingId(null)}
         provider={editingProvider}
         providerModels={
-          editingProvider ? (providerModels[editingProvider.id] ?? []) : []
+          editingProvider
+            ? ((editingProvider.capabilities?.decision
+                ? decisionModels
+                : providerModels)[editingProvider.id] ?? [])
+            : []
         }
       />
     </>
@@ -654,6 +635,9 @@ function ProviderRow(props: {
   const { t } = useI18n()
   const provider = props.provider
   const capabilities = [
+    provider.capabilities?.decision
+      ? t('settings.ai.capability.decision')
+      : null,
     (provider.capabilities?.text ?? true)
       ? t('settings.ai.capability.text')
       : null,
@@ -670,7 +654,7 @@ function ProviderRow(props: {
           {capabilities.join(' · ') || t('settings.ai.provider.row.empty')}
         </div>
       </div>
-      <Toggle
+      <Switch
         aria-label={t('settings.oauth.switch.enabled')}
         checked={provider.enabled}
         onCheckedChange={props.onToggle}
@@ -707,7 +691,7 @@ function FeatureSection(props: {
   return (
     <SettingsSection description={props.description} title={props.title}>
       <div className="space-y-4">
-        <Switch
+        <FormSwitch
           checked={props.enabled}
           label={props.toggleLabel}
           onCheckedChange={props.onEnabledChange}

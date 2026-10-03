@@ -1,5 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common'
-import { and, eq } from 'drizzle-orm'
+import { and, asc, desc, eq, isNotNull, isNull, sql } from 'drizzle-orm'
 
 import { PG_DB_TOKEN } from '~/constants/system.constant'
 import { billingWebhookEvents } from '~/database/schema'
@@ -74,6 +74,72 @@ export class BillingWebhookEventRepository extends BaseRepository {
       )
       .limit(1)
     return row ? mapRow(row) : null
+  }
+
+  async findPendingByProviderSubscriptionId(
+    provider: string,
+    providerSubscriptionId: string,
+  ): Promise<BillingWebhookEventRow[]> {
+    const rows = await this.db
+      .select()
+      .from(billingWebhookEvents)
+      .where(
+        and(
+          eq(billingWebhookEvents.provider, provider),
+          isNull(billingWebhookEvents.processedAt),
+          sql`${billingWebhookEvents.payload}->'_normalizedMembershipEvent'->>'subscriptionId' = ${providerSubscriptionId}`,
+        )!,
+      )
+      .orderBy(
+        asc(
+          sql`${billingWebhookEvents.payload}->'_normalizedMembershipEvent'->>'occurredAt'`,
+        ),
+        asc(billingWebhookEvents.receivedAt),
+      )
+    return rows.map(mapRow)
+  }
+
+  async findLatestProcessedByProviderSubscriptionId(
+    provider: string,
+    providerSubscriptionId: string,
+  ): Promise<BillingWebhookEventRow | null> {
+    const [row] = await this.db
+      .select()
+      .from(billingWebhookEvents)
+      .where(
+        and(
+          eq(billingWebhookEvents.provider, provider),
+          isNotNull(billingWebhookEvents.processedAt),
+          sql`${billingWebhookEvents.payload}->'_normalizedMembershipEvent'->>'subscriptionId' = ${providerSubscriptionId}`,
+        )!,
+      )
+      .orderBy(
+        desc(
+          sql`${billingWebhookEvents.payload}->'_normalizedMembershipEvent'->>'occurredAt'`,
+        ),
+        desc(billingWebhookEvents.receivedAt),
+      )
+      .limit(1)
+    return row ? mapRow(row) : null
+  }
+
+  async hasProcessedArticleRefund(
+    provider: string,
+    providerPaymentId: string,
+  ): Promise<boolean> {
+    const [row] = await this.db
+      .select({ id: billingWebhookEvents.id })
+      .from(billingWebhookEvents)
+      .where(
+        and(
+          eq(billingWebhookEvents.provider, provider),
+          isNotNull(billingWebhookEvents.processedAt),
+          sql`${billingWebhookEvents.payload}->'_normalizedArticleEvent'->>'type' = 'refunded'`,
+          sql`${billingWebhookEvents.payload}->'_normalizedArticleEvent'->>'providerPaymentId' = ${providerPaymentId}`,
+        )!,
+      )
+      .limit(1)
+    return !!row
   }
 
   async markProcessed(

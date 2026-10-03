@@ -223,7 +223,7 @@ describe('BrowserFetchService', () => {
       )
       expect(batches).toHaveLength(1)
       expect(parseBatchArgs(batches[0].args).sessionName).toMatch(
-        /^agent-browser-\d+$/,
+        /^agent-browser-/,
       )
       expect(
         calls.some((c) =>
@@ -802,6 +802,22 @@ describe('BrowserFetchService', () => {
   })
 
   describe('timeout path', () => {
+    it('includes queue waiting in the request timeout and never launches an expired request', async () => {
+      setExecFileBehavior(() => ({ stdout: '' }))
+      const pool = new BrowserSessionPool({ maxSize: 1 })
+      const occupied = await pool.acquire()
+      const service = new BrowserFetchService(pool)
+      await expect(
+        service.fetchHtml('https://example.com', {
+          timeoutMs: 10,
+          maxBodyBytes: 4000,
+        }),
+      ).rejects.toThrow(/timed out after 10ms/)
+      expect(execFileMock).not.toHaveBeenCalled()
+      pool.release(occupied)
+      await pool.shutdown()
+    })
+
     it('aborts the HTML batch and throws a timeout error', async () => {
       execFileMock.mockImplementation((...invocationArgs: unknown[]) => {
         const args = invocationArgs[1] as string[]
@@ -830,6 +846,12 @@ describe('BrowserFetchService', () => {
           executable: '/usr/local/bin/agent-browser-fake',
         }),
       ).rejects.toThrow(/timed out after 10ms/)
+      await Promise.resolve()
+      expect(
+        execFileMock.mock.calls.some((call) =>
+          (call[1] as string[]).includes('close'),
+        ),
+      ).toBe(true)
 
       await pool.shutdown()
     })

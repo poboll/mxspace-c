@@ -1,3 +1,15 @@
+import type { AIProviderType } from '../ai.types'
+
+export interface ImageRuntimeAdapterConfig {
+  apiKey: string
+  endpoint?: string
+  model: string
+  projectId?: string
+  provider: string
+  providerType?: AIProviderType
+  sessionId?: string
+}
+
 export interface ImageGenerateOptions {
   prompt: string
   aspectRatio?: '1:1' | '3:2' | '2:3' | '4:3' | '3:4' | '16:9' | '9:16'

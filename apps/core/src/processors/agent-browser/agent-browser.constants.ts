@@ -22,3 +22,13 @@ export const AGENT_BROWSER_DEFAULT_LAUNCH_ARGS =
 export const AGENT_BROWSER_DEFAULT_NETWORKIDLE_MS = 10_000
 
 export const AGENT_BROWSER_CLOSE_TIMEOUT_MS = 5_000
+
+/** execFile errors embed command arguments and stderr; do not log them verbatim. */
+export function describeAgentBrowserError(error: unknown): string {
+  const err = error as { code?: unknown; signal?: unknown; killed?: unknown }
+  const token = (value: unknown) =>
+    String(value ?? 'unknown')
+      .replaceAll(/[^\w-]/g, '')
+      .slice(0, 32)
+  return `code=${token(err?.code)} signal=${token(err?.signal)} killed=${err?.killed === true}`
+}

@@ -1,58 +1,55 @@
-import { LANGUAGE_CODE_TO_NAME } from '../../ai.constants'
 import { AI_PROMPTS } from '../../ai.prompts'
-import type { ContextInjector } from '../../message-engine/conversation/context-injector'
+import { Conversation } from '../../message-engine/conversation/conversation'
 import type { TranslationUnit } from '../translation-unit.types'
 import { unitsToEntries, unitsToMeta } from '../translation-unit.types'
+import type { TranslationChunk } from './translation-chunk-planner'
 
-export function translationContextInjectors(opts: {
+export function createTranslationConversation(opts: {
   targetLang: string
   documentContext: string
   units: TranslationUnit[]
   styleHints?: string
   reviewEnabled: boolean
-}): ContextInjector[] {
+}): Conversation {
   const { targetLang, documentContext, units, styleHints, reviewEnabled } = opts
-  const targetLanguage = LANGUAGE_CODE_TO_NAME[targetLang] || targetLang
-  const meta = unitsToMeta(units)
-  return [
-    {
-      name: 'agent-system',
-      position: 'system',
-      build: () =>
-        AI_PROMPTS.translationAgent(targetLang, { reviewEnabled }).systemPrompt,
-    },
-    {
-      name: 'target-language',
-      position: 'context',
-      build: () => `TARGET_LANGUAGE: ${targetLanguage}`,
-    },
-    {
-      name: 'document-context',
-      position: 'context',
-      build: () =>
-        `## Document context (for semantic reference, DO NOT output this)\n${documentContext}`,
-    },
-    {
-      name: 'style-context',
-      position: 'context',
-      build: () =>
-        styleHints
-          ? `## Style context (DO NOT output this)\n${styleHints}`
-          : null,
-    },
-    {
-      name: 'segment-meta',
-      position: 'context',
-      build: () =>
-        Object.keys(meta).length > 0
-          ? `## Segment metadata (for translation guidance only, DO NOT output this)\n${JSON.stringify(meta)}`
-          : null,
-    },
-    {
-      name: 'segments',
-      position: 'context',
-      build: () =>
-        `## Segments to translate\n${JSON.stringify(unitsToEntries(units))}`,
-    },
-  ]
+  const { systemPrompt } = AI_PROMPTS.translationAgent(targetLang, {
+    reviewEnabled,
+  })
+  const { prompt } = AI_PROMPTS.translationChunk(targetLang, {
+    documentContext,
+    textEntries: unitsToEntries(units),
+    segmentMeta: unitsToMeta(units),
+    ...(styleHints ? { styleHints } : {}),
+  })
+  const conversation = new Conversation(systemPrompt)
+  conversation.appendUser(prompt)
+  return conversation
+}
+
+export function createTranslationCoordinatorConversation(opts: {
+  targetLang: string
+  chunks: readonly TranslationChunk[]
+  reviewEnabled: boolean
+}): Conversation {
+  const { targetLang, chunks, reviewEnabled } = opts
+  const reviewWorkflow = reviewEnabled
+    ? 'After every chunk is complete, call request_review. If it reports issues, read only the cited ids with read_translation_segments, patch them, and request review again. Finish after a clean review or when the review budget is exhausted.'
+    : 'After every chunk is complete, finish with a short confirmation.'
+  const conversation =
+    new Conversation(`You coordinate a long-document translation into ${targetLang}.
+
+Do not translate prose yourself. The source text is intentionally hidden from this conversation. Delegate work through translate_chunks, which runs isolated translation sub-agents with bounded concurrency.
+
+Call translate_chunks with all pending chunk ids. If any chunk fails, retry only the failed ids. Use translation_status when coverage is uncertain. Never invent chunk ids.
+
+${reviewWorkflow}`)
+  conversation.appendUser(`Translate every chunk in this manifest:
+${JSON.stringify(
+  chunks.map((chunk) => ({
+    id: chunk.id,
+    sourceChars: chunk.sourceChars,
+    segmentCount: chunk.segmentCount,
+  })),
+)}`)
+  return conversation
 }

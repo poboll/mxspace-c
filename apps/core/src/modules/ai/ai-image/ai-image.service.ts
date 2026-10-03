@@ -1,6 +1,7 @@
 import { Injectable, Logger, type OnModuleInit } from '@nestjs/common'
 import { extension } from 'mime-types'
 
+import { OperationContext } from '~/common/contexts/operation.context'
 import { AppErrorCode, createAppException } from '~/common/errors'
 import { DatabaseService } from '~/processors/database/database.service'
 import {
@@ -76,6 +77,9 @@ export class AiImageService implements OnModuleInit {
           apiKey: resolved.provider.apiKey,
           endpoint: resolved.provider.endpoint,
           model,
+          projectId: resolved.provider.projectId,
+          providerType: resolved.provider.type,
+          sessionId: OperationContext.currentId(),
         })
 
         await context.appendLog(

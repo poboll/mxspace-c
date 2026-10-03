@@ -116,11 +116,17 @@ export type AppErrorPayloadMap = {
 
   // draft
   [AppErrorCode.DRAFT_NOT_FOUND]: WithId
-  [AppErrorCode.DRAFT_HISTORY_NOT_FOUND]: undefined
-  [AppErrorCode.DRAFT_VERSION_CONFLICT]: {
-    actualVersion: number
-    expectedVersion: number
-    id: string
+  [AppErrorCode.CONTENT_REVISION_NOT_FOUND]: WithId
+  [AppErrorCode.DRAFT_SHARE_NOT_FOUND]: WithId | undefined
+  [AppErrorCode.DRAFT_HEAD_CONFLICT]: {
+    actualHeadRevisionId: string
+    branchId: string
+    expectedHeadRevisionId: string
+  }
+  [AppErrorCode.PUBLISHED_REVISION_CHANGED]: {
+    actualPublishedRevisionId: string | null
+    documentId: string
+    expectedPublishedRevisionId: string | null
   }
 
   // document / helper
@@ -144,6 +150,7 @@ export type AppErrorPayloadMap = {
   [AppErrorCode.FILE_STORAGE_NOT_CONFIGURED]: undefined
   [AppErrorCode.FILE_UPLOAD_DISABLED]: undefined
   [AppErrorCode.FILE_UPLOAD_NOT_AUTHORIZED]: undefined
+  [AppErrorCode.FILE_REQUIRED]: undefined
   [AppErrorCode.MIME_ZIP_REQUIRED]: { got?: string } | undefined
 
   // init
@@ -178,10 +185,16 @@ export type AppErrorPayloadMap = {
 
   // membership
   [AppErrorCode.MEMBERSHIP_REQUIRED]: undefined
-  [AppErrorCode.WEBHOOK_VERIFY_FAILED]: undefined
+  [AppErrorCode.WEBHOOK_SIGNATURE_INVALID]: undefined
   [AppErrorCode.MEMBERSHIP_PROVIDER_NOT_CONFIGURED]: undefined
+  [AppErrorCode.MEMBERSHIP_PROVIDER_NOT_SUPPORTED]: undefined
   [AppErrorCode.MEMBERSHIP_ALREADY_ACTIVE]: undefined
+  [AppErrorCode.MEMBERSHIP_APPLE_TRANSACTION_INVALID]: undefined
+  [AppErrorCode.MEMBERSHIP_APPLE_ALREADY_BOUND]: undefined
   [AppErrorCode.PREMIUM_REQUIRES_LEXICAL]: undefined
+  [AppErrorCode.ARTICLE_PURCHASE_UNAVAILABLE]: undefined
+  [AppErrorCode.ARTICLE_NOT_PURCHASABLE]: undefined
+  [AppErrorCode.ARTICLE_ALREADY_PURCHASED]: undefined
 
   // page
   [AppErrorCode.PAGE_NOT_FOUND]: WithId

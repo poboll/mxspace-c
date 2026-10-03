@@ -417,17 +417,32 @@ export const APP_ERROR_DEFINITIONS = {
     message: 'Draft not found',
     details: (p) => (p?.id ? { id: p.id } : undefined),
   },
-  [AppErrorCode.DRAFT_HISTORY_NOT_FOUND]: {
+  [AppErrorCode.CONTENT_REVISION_NOT_FOUND]: {
     status: 404,
-    message: 'Draft history not found',
+    message: 'Content revision not found',
+    details: (p) => (p?.id ? { id: p.id } : undefined),
   },
-  [AppErrorCode.DRAFT_VERSION_CONFLICT]: {
+  [AppErrorCode.DRAFT_SHARE_NOT_FOUND]: {
+    status: 404,
+    message: 'Share link not found',
+    details: (p) => (p?.id ? { id: p.id } : undefined),
+  },
+  [AppErrorCode.DRAFT_HEAD_CONFLICT]: {
     status: 409,
-    message: 'Draft was updated elsewhere',
+    message: 'The same draft was updated elsewhere',
     details: (p) => ({
-      actualVersion: p.actualVersion,
-      expectedVersion: p.expectedVersion,
-      id: p.id,
+      actualHeadRevisionId: p.actualHeadRevisionId,
+      branchId: p.branchId,
+      expectedHeadRevisionId: p.expectedHeadRevisionId,
+    }),
+  },
+  [AppErrorCode.PUBLISHED_REVISION_CHANGED]: {
+    status: 409,
+    message: 'The online revision changed',
+    details: (p) => ({
+      actualPublishedRevisionId: p.actualPublishedRevisionId,
+      documentId: p.documentId,
+      expectedPublishedRevisionId: p.expectedPublishedRevisionId,
     }),
   },
 
@@ -498,6 +513,10 @@ export const APP_ERROR_DEFINITIONS = {
   [AppErrorCode.FILE_UPLOAD_NOT_AUTHORIZED]: {
     status: 403,
     message: 'File upload is not authorized',
+  },
+  [AppErrorCode.FILE_REQUIRED]: {
+    status: 400,
+    message: 'A file must be uploaded in the "file" field',
   },
   [AppErrorCode.MIME_ZIP_REQUIRED]: {
     status: 422,
@@ -614,7 +633,7 @@ export const APP_ERROR_DEFINITIONS = {
     status: 403,
     message: 'An active membership is required',
   },
-  [AppErrorCode.WEBHOOK_VERIFY_FAILED]: {
+  [AppErrorCode.WEBHOOK_SIGNATURE_INVALID]: {
     status: 400,
     message: 'Webhook signature verification failed',
   },
@@ -622,13 +641,37 @@ export const APP_ERROR_DEFINITIONS = {
     status: 400,
     message: 'No membership payment provider is configured',
   },
+  [AppErrorCode.MEMBERSHIP_PROVIDER_NOT_SUPPORTED]: {
+    status: 404,
+    message: 'Unknown membership payment provider',
+  },
   [AppErrorCode.MEMBERSHIP_ALREADY_ACTIVE]: {
     status: 409,
     message: 'Reader already has an active membership',
   },
+  [AppErrorCode.MEMBERSHIP_APPLE_TRANSACTION_INVALID]: {
+    status: 400,
+    message: 'Apple transaction could not be verified',
+  },
+  [AppErrorCode.MEMBERSHIP_APPLE_ALREADY_BOUND]: {
+    status: 409,
+    message: 'This Apple subscription is already linked to another reader',
+  },
   [AppErrorCode.PREMIUM_REQUIRES_LEXICAL]: {
     status: 400,
     message: 'Only Lexical-format posts can be marked as premium',
+  },
+  [AppErrorCode.ARTICLE_PURCHASE_UNAVAILABLE]: {
+    status: 400,
+    message: 'Single article purchase is not available',
+  },
+  [AppErrorCode.ARTICLE_NOT_PURCHASABLE]: {
+    status: 400,
+    message: 'This article cannot be purchased',
+  },
+  [AppErrorCode.ARTICLE_ALREADY_PURCHASED]: {
+    status: 409,
+    message: 'Reader already purchased this article',
   },
 
   // page

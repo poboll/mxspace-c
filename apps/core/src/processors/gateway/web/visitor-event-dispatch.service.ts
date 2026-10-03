@@ -10,9 +10,10 @@ import {
   SERVERLESS_EVENT_PREFIX,
 } from '~/constants/business-event.constant'
 import { buildArticleRoomName } from '~/modules/activity/activity.util'
-import { NoteModel } from '~/modules/note/note.types'
-import { PageModel } from '~/modules/page/page.types'
-import { PostModel } from '~/modules/post/post.types'
+import { type NoteModel } from '~/modules/note/note.types'
+import { type PageModel } from '~/modules/page/page.types'
+import { type PostModel } from '~/modules/post/post.types'
+import { isInFreeWindow } from '~/modules/post/post-paywall.util'
 import { EventManagerService } from '~/processors/helper/helper.event.service'
 import { EventPayloadEnricherService } from '~/processors/helper/helper.event-payload.service'
 import {
@@ -113,7 +114,7 @@ export class VisitorEventDispatchService implements OnModuleInit {
   // --- Post ---
 
   private toPublicPostPayload<T extends Record<string, any>>(doc: T): T {
-    if (!doc?.isPremium) return doc
+    if (!doc?.isPremium || isInFreeWindow(doc.meta)) return doc
     return {
       ...doc,
       text: getPublicText(doc),
@@ -154,6 +155,26 @@ export class VisitorEventDispatchService implements OnModuleInit {
     this.webGateway.broadcast(BusinessEvents.POST_DELETE, payload.id, {
       rooms: [buildArticleRoomName(payload.id)],
     })
+  }
+
+  @OnVisitorEvent(BusinessEvents.POST_UNPUBLISH)
+  onPostUnpublish(payload: { id: string }) {
+    this.webGateway.broadcast(BusinessEvents.POST_UNPUBLISH, payload.id, {
+      rooms: [buildArticleRoomName(payload.id)],
+    })
+  }
+
+  @OnVisitorEvent(BusinessEvents.POST_REPUBLISH)
+  async onPostRepublish(payload: { id: string }) {
+    const doc = await this.enricher.enrichPayload(
+      BusinessEvents.POST_REPUBLISH,
+      payload,
+    )
+    if (!doc || doc === payload) return
+    this.webGateway.broadcast(
+      BusinessEvents.POST_REPUBLISH,
+      this.toPublicPostPayload(doc),
+    )
   }
 
   // --- Note ---
@@ -199,6 +220,32 @@ export class VisitorEventDispatchService implements OnModuleInit {
     this.webGateway.broadcast(BusinessEvents.NOTE_DELETE, payload.id, {
       rooms: [buildArticleRoomName(payload.id)],
     })
+  }
+
+  @OnVisitorEvent(BusinessEvents.NOTE_UNPUBLISH)
+  onNoteUnpublish(payload: { id: string }) {
+    this.webGateway.broadcast(BusinessEvents.NOTE_UNPUBLISH, payload.id, {
+      rooms: [buildArticleRoomName(payload.id)],
+    })
+  }
+
+  @OnVisitorEvent(BusinessEvents.NOTE_REPUBLISH)
+  async onNoteRepublish(payload: { id: string }) {
+    const doc = await this.enricher.enrichPayload(
+      BusinessEvents.NOTE_REPUBLISH,
+      payload,
+    )
+    if (!doc || doc === payload) return
+
+    if (
+      doc.isPublished === false ||
+      doc.password ||
+      (doc.publicAt && new Date(doc.publicAt) > new Date())
+    ) {
+      return
+    }
+
+    this.webGateway.broadcast(BusinessEvents.NOTE_REPUBLISH, doc)
   }
 
   // --- Page ---
@@ -350,11 +397,11 @@ export class VisitorEventDispatchService implements OnModuleInit {
   }
 
   private async toPublicTranslationPayload(data: any) {
-    const isPremium = await this.enricher.isPremiumPost(
+    const paywalled = await this.enricher.isPaywalledPost(
       data.refType,
       data.refId,
     )
-    if (!isPremium) return data
+    if (!paywalled) return data
     const { text: _text, summary: _summary, ...rest } = data
     return rest
   }
@@ -425,7 +472,7 @@ export class VisitorEventDispatchService implements OnModuleInit {
         )
       }
 
-      // The socket ID is the room socket.io auto-joins, so we can target it directly
+      // A connection id is addressable as a room, so lang groups fan out directly.
       this.webGateway.broadcast(event, this.toPublicPostPayload(data), {
         rooms: socketIds,
       })

@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { AppErrorCode } from '~/common/errors'
 import { DodoProvider } from '~/modules/membership/providers/dodo.provider'
+import type { VerifiedBillingEvent } from '~/modules/membership/providers/provider.interface'
 
 const verifyMock = vi.fn()
 const checkoutCreateMock = vi.fn()
@@ -34,6 +35,7 @@ describe('DodoProvider', () => {
         provider: 'dodo',
         monthlyProductId: 'prod_monthly',
         yearlyProductId: 'prod_yearly',
+        articleProductId: 'prod_article',
         apiKey: 'test-dodo-api-key',
         webhookSigningKey: 'test-dodo-webhook-key',
         environment: 'test_mode',
@@ -110,6 +112,31 @@ describe('DodoProvider', () => {
           product_cart: [{ product_id: 'prod_yearly', quantity: 1 }],
         }),
       )
+    })
+
+    it('creates an article checkout with article metadata', async () => {
+      checkoutCreateMock.mockResolvedValue({
+        session_id: 'sess_a',
+        checkout_url: 'https://checkout.dodopayments.com/sess_a',
+      })
+
+      const provider = new DodoProvider(configsService as any)
+      const result = await provider.createArticleCheckout({
+        reader: { id: 'reader-1', email: 'reader@example.com', name: 'Reader' },
+        postId: 'post-1',
+        productId: 'prod_article',
+        returnUrl: 'https://blog.example.com/posts/foo?purchase=success',
+      })
+
+      expect(result).toEqual({
+        checkoutUrl: 'https://checkout.dodopayments.com/sess_a',
+      })
+      expect(checkoutCreateMock).toHaveBeenCalledWith({
+        product_cart: [{ product_id: 'prod_article', quantity: 1 }],
+        metadata: { readerId: 'reader-1', postId: 'post-1', kind: 'article' },
+        customer: { email: 'reader@example.com', name: 'Reader' },
+        return_url: 'https://blog.example.com/posts/foo?purchase=success',
+      })
     })
 
     it('throws MEMBERSHIP_PROVIDER_NOT_CONFIGURED when apiKey is empty', async () => {
@@ -213,6 +240,27 @@ describe('DodoProvider', () => {
     })
   })
 
+  describe('getProductPricing', () => {
+    it('resolves amount and currency for a one-time price', async () => {
+      productsRetrieveMock.mockResolvedValue({
+        price: { price: 300, currency: 'USD', type: 'one_time_price' },
+      })
+
+      const provider = new DodoProvider(configsService as any)
+      expect(await provider.getProductPricing('prod_article')).toEqual({
+        amount: 300,
+        currency: 'USD',
+      })
+    })
+
+    it('returns null when the provider call throws', async () => {
+      productsRetrieveMock.mockRejectedValue(new Error('boom'))
+
+      const provider = new DodoProvider(configsService as any)
+      expect(await provider.getProductPricing('prod_article')).toBeNull()
+    })
+  })
+
   describe('verifyAndParseWebhook', () => {
     const headers = {
       'webhook-id': 'evt_1',
@@ -236,9 +284,13 @@ describe('DodoProvider', () => {
       verifyMock.mockReturnValue(rawEvent)
 
       const provider = new DodoProvider(configsService as any)
-      const event = await provider.verifyAndParseWebhook('{}', headers)
+      const event = (await provider.verifyAndParseWebhook(
+        '{}',
+        headers,
+      )) as VerifiedBillingEvent
 
       expect(event).toEqual({
+        kind: 'membership',
         event: {
           eventId: 'evt_1',
           provider: 'dodo',
@@ -259,6 +311,7 @@ describe('DodoProvider', () => {
       ['subscription.on_hold', 'on_hold'],
       ['subscription.cancelled', 'cancelled'],
       ['subscription.expired', 'cancelled'],
+      ['subscription.failed', 'cancelled'],
       ['subscription.plan_changed', 'plan_changed'],
     ] as const)('maps %s to %s', async (dodoType, expectedType) => {
       verifyMock.mockReturnValue({
@@ -275,7 +328,10 @@ describe('DodoProvider', () => {
       })
 
       const provider = new DodoProvider(configsService as any)
-      const event = await provider.verifyAndParseWebhook('{}', headers)
+      const event = (await provider.verifyAndParseWebhook(
+        '{}',
+        headers,
+      )) as VerifiedBillingEvent
 
       expect(event.event.type).toBe(expectedType)
       expect(event.event.plan).toBe('yearly')
@@ -300,9 +356,72 @@ describe('DodoProvider', () => {
       })
 
       const provider = new DodoProvider(configsService as any)
-      const event = await provider.verifyAndParseWebhook('{}', headers)
+      const event = (await provider.verifyAndParseWebhook(
+        '{}',
+        headers,
+      )) as VerifiedBillingEvent
 
       expect(event.event.plan).toBe('yearly')
+    })
+
+    it.each([
+      ['subscription.updated', 'active', 'activated'],
+      ['subscription.updated', 'on_hold', 'on_hold'],
+      ['subscription.updated', 'cancelled', 'cancelled'],
+      ['subscription.updated', 'failed', 'cancelled'],
+      ['subscription.updated', 'expired', 'cancelled'],
+      ['subscription.update_payment_method', 'active', 'activated'],
+      ['subscription.update_payment_method', 'on_hold', 'on_hold'],
+    ] as const)(
+      'maps %s with status %s to %s',
+      async (dodoType, status, expectedType) => {
+        verifyMock.mockReturnValue({
+          type: dodoType,
+          business_id: 'biz_1',
+          timestamp: '2026-07-30T00:36:27.584023Z',
+          data: {
+            subscription_id: 'sub_1',
+            customer: { customer_id: 'cus_1' },
+            metadata: { readerId: 'reader-1', plan: 'monthly' },
+            next_billing_date: '2026-08-30T00:36:27.783074Z',
+            payment_frequency_interval: 'Month',
+            status,
+          },
+        })
+
+        const provider = new DodoProvider(configsService as any)
+        const event = (await provider.verifyAndParseWebhook(
+          '{}',
+          headers,
+        )) as VerifiedBillingEvent
+
+        expect(event.event.type).toBe(expectedType)
+        expect(event.event.plan).toBe('monthly')
+        expect(event.rawType).toBe(dodoType)
+      },
+    )
+
+    it('ignores subscription.updated while the subscription is pending', async () => {
+      verifyMock.mockReturnValue({
+        type: 'subscription.updated',
+        business_id: 'biz_1',
+        timestamp: '2026-01-01T00:00:00Z',
+        data: {
+          subscription_id: 'sub_1',
+          customer: { customer_id: 'cus_1' },
+          metadata: { readerId: 'reader-1' },
+          next_billing_date: '2026-02-01T00:00:00Z',
+          status: 'pending',
+        },
+      })
+
+      const provider = new DodoProvider(configsService as any)
+
+      expect(await provider.verifyAndParseWebhook('{}', headers)).toEqual({
+        kind: 'ignored',
+        rawType: 'subscription.updated',
+        reason: 'unsupported_event',
+      })
     })
 
     it('throws MEMBERSHIP_PROVIDER_NOT_CONFIGURED when webhookSigningKey is empty', async () => {
@@ -325,7 +444,7 @@ describe('DodoProvider', () => {
       })
     })
 
-    it('throws WebhookVerifyFailed when signature verification fails', async () => {
+    it('throws WebhookSignatureInvalid when signature verification fails', async () => {
       verifyMock.mockImplementation(() => {
         throw new Error('invalid signature')
       })
@@ -334,10 +453,10 @@ describe('DodoProvider', () => {
 
       await expect(
         provider.verifyAndParseWebhook('{}', headers),
-      ).rejects.toMatchObject({ code: AppErrorCode.WEBHOOK_VERIFY_FAILED })
+      ).rejects.toMatchObject({ code: AppErrorCode.WEBHOOK_SIGNATURE_INVALID })
     })
 
-    it('throws WebhookVerifyFailed when readerId metadata is missing', async () => {
+    it('ignores an event whose readerId metadata is missing', async () => {
       verifyMock.mockReturnValue({
         type: 'subscription.active',
         business_id: 'biz_1',
@@ -352,12 +471,14 @@ describe('DodoProvider', () => {
 
       const provider = new DodoProvider(configsService as any)
 
-      await expect(
-        provider.verifyAndParseWebhook('{}', headers),
-      ).rejects.toMatchObject({ code: AppErrorCode.WEBHOOK_VERIFY_FAILED })
+      expect(await provider.verifyAndParseWebhook('{}', headers)).toEqual({
+        kind: 'ignored',
+        rawType: 'subscription.active',
+        reason: 'missing_reader_metadata',
+      })
     })
 
-    it('throws WebhookVerifyFailed for an unmapped event type', async () => {
+    it('ignores an unmapped event type', async () => {
       verifyMock.mockReturnValue({
         type: 'payment.succeeded',
         business_id: 'biz_1',
@@ -372,9 +493,249 @@ describe('DodoProvider', () => {
 
       const provider = new DodoProvider(configsService as any)
 
-      await expect(
-        provider.verifyAndParseWebhook('{}', headers),
-      ).rejects.toMatchObject({ code: AppErrorCode.WEBHOOK_VERIFY_FAILED })
+      expect(await provider.verifyAndParseWebhook('{}', headers)).toEqual({
+        kind: 'ignored',
+        rawType: 'payment.succeeded',
+        reason: 'unsupported_event',
+      })
+    })
+
+    it('maps payment.succeeded with article metadata to an article paid event', async () => {
+      const rawEvent = {
+        type: 'payment.succeeded',
+        business_id: 'biz_1',
+        timestamp: '2026-01-01T00:00:00Z',
+        data: {
+          payment_id: 'pay_1',
+          customer: { customer_id: 'cus_1' },
+          metadata: {
+            kind: 'article',
+            readerId: '1000000000000000001',
+            postId: '1000000000000000002',
+          },
+          product_cart: [{ product_id: 'prod_article', quantity: 1 }],
+          total_amount: 300,
+          currency: 'USD',
+        },
+      }
+      verifyMock.mockReturnValue(rawEvent)
+
+      const provider = new DodoProvider(configsService as any)
+
+      expect(await provider.verifyAndParseWebhook('{}', headers)).toEqual({
+        kind: 'article',
+        event: {
+          type: 'paid',
+          eventId: 'evt_1',
+          occurredAt: new Date('2026-01-01T00:00:00Z'),
+          readerId: '1000000000000000001',
+          postId: '1000000000000000002',
+          providerPaymentId: 'pay_1',
+          providerCustomerId: 'cus_1',
+          amount: 300,
+          currency: 'USD',
+        },
+        rawType: 'payment.succeeded',
+        rawPayload: rawEvent,
+      })
+    })
+
+    it.each([
+      ['missing postId', { readerId: '1000000000000000001' }],
+      ['non-snowflake ids', { readerId: 'reader-1', postId: 'post-1' }],
+    ])('ignores an article payment with %s metadata', async (_, metadata) => {
+      verifyMock.mockReturnValue({
+        type: 'payment.succeeded',
+        business_id: 'biz_1',
+        timestamp: '2026-01-01T00:00:00Z',
+        data: {
+          payment_id: 'pay_1',
+          customer: { customer_id: 'cus_1' },
+          metadata: { kind: 'article', ...metadata },
+          product_cart: [{ product_id: 'prod_article', quantity: 1 }],
+          total_amount: 300,
+          currency: 'USD',
+        },
+      })
+
+      const provider = new DodoProvider(configsService as any)
+
+      expect(await provider.verifyAndParseWebhook('{}', headers)).toEqual({
+        kind: 'ignored',
+        rawType: 'payment.succeeded',
+        reason: 'missing_reader_metadata',
+      })
+    })
+
+    it.each([
+      [
+        'a different product',
+        { product_cart: [{ product_id: 'prod_cheap', quantity: 1 }] },
+      ],
+      [
+        'a two-line cart',
+        {
+          product_cart: [
+            { product_id: 'prod_article', quantity: 1 },
+            { product_id: 'prod_cheap', quantity: 1 },
+          ],
+        },
+      ],
+      [
+        'quantity other than one',
+        { product_cart: [{ product_id: 'prod_article', quantity: 2 }] },
+      ],
+      ['a zero amount', { total_amount: 0 }],
+      ['no cart', { product_cart: null }],
+      ['a null cart line', { product_cart: [null] }],
+    ])('ignores an article payment with %s', async (_, override) => {
+      verifyMock.mockReturnValue({
+        type: 'payment.succeeded',
+        business_id: 'biz_1',
+        timestamp: '2026-01-01T00:00:00Z',
+        data: {
+          payment_id: 'pay_1',
+          customer: { customer_id: 'cus_1' },
+          metadata: {
+            kind: 'article',
+            readerId: '1000000000000000001',
+            postId: '1000000000000000002',
+          },
+          product_cart: [{ product_id: 'prod_article', quantity: 1 }],
+          total_amount: 300,
+          currency: 'USD',
+          ...override,
+        },
+      })
+
+      const provider = new DodoProvider(configsService as any)
+
+      expect(await provider.verifyAndParseWebhook('{}', headers)).toEqual({
+        kind: 'ignored',
+        rawType: 'payment.succeeded',
+        reason: 'article_product_mismatch',
+      })
+    })
+
+    it('ignores an article payment when no article product is configured', async () => {
+      configsService.get.mockResolvedValue({
+        enabled: true,
+        provider: 'dodo',
+        apiKey: 'test-dodo-api-key',
+        webhookSigningKey: 'test-dodo-webhook-key',
+        environment: 'test_mode',
+      })
+      verifyMock.mockReturnValue({
+        type: 'payment.succeeded',
+        business_id: 'biz_1',
+        timestamp: '2026-01-01T00:00:00Z',
+        data: {
+          payment_id: 'pay_1',
+          metadata: {
+            kind: 'article',
+            readerId: '1000000000000000001',
+            postId: '1000000000000000002',
+          },
+          product_cart: [{ product_id: 'prod_article', quantity: 1 }],
+          total_amount: 300,
+          currency: 'USD',
+        },
+      })
+
+      const provider = new DodoProvider(configsService as any)
+
+      expect(await provider.verifyAndParseWebhook('{}', headers)).toMatchObject(
+        { kind: 'ignored', reason: 'article_product_mismatch' },
+      )
+    })
+
+    it.each(['dispute.accepted', 'dispute.lost'])(
+      'maps %s to an article refunded event',
+      async (type) => {
+        const rawEvent = {
+          type,
+          business_id: 'biz_1',
+          timestamp: '2026-01-03T00:00:00Z',
+          data: {
+            dispute_id: 'dsp_1',
+            payment_id: 'pay_1',
+            amount: '300',
+            currency: 'USD',
+          },
+        }
+        verifyMock.mockReturnValue(rawEvent)
+
+        const provider = new DodoProvider(configsService as any)
+
+        expect(await provider.verifyAndParseWebhook('{}', headers)).toEqual({
+          kind: 'article',
+          event: {
+            type: 'refunded',
+            eventId: 'evt_1',
+            occurredAt: new Date('2026-01-03T00:00:00Z'),
+            providerPaymentId: 'pay_1',
+            providerCustomerId: undefined,
+          },
+          rawType: type,
+          rawPayload: rawEvent,
+        })
+      },
+    )
+
+    it('maps refund.succeeded to an article refunded event without metadata', async () => {
+      const rawEvent = {
+        type: 'refund.succeeded',
+        business_id: 'biz_1',
+        timestamp: '2026-01-02T00:00:00Z',
+        data: {
+          refund_id: 'ref_1',
+          payment_id: 'pay_1',
+          customer: { customer_id: 'cus_1' },
+          metadata: {},
+          amount: 300,
+          currency: 'USD',
+        },
+      }
+      verifyMock.mockReturnValue(rawEvent)
+
+      const provider = new DodoProvider(configsService as any)
+
+      expect(await provider.verifyAndParseWebhook('{}', headers)).toEqual({
+        kind: 'article',
+        event: {
+          type: 'refunded',
+          eventId: 'evt_1',
+          occurredAt: new Date('2026-01-02T00:00:00Z'),
+          providerPaymentId: 'pay_1',
+          providerCustomerId: 'cus_1',
+        },
+        rawType: 'refund.succeeded',
+        rawPayload: rawEvent,
+      })
+    })
+
+    it('ignores refund.succeeded without payment_id', async () => {
+      const rawEvent = {
+        type: 'refund.succeeded',
+        business_id: 'biz_1',
+        timestamp: '2026-01-02T00:00:00Z',
+        data: {
+          refund_id: 'ref_1',
+          customer: { customer_id: 'cus_1' },
+          metadata: {},
+          amount: 300,
+          currency: 'USD',
+        },
+      }
+      verifyMock.mockReturnValue(rawEvent)
+
+      const provider = new DodoProvider(configsService as any)
+
+      expect(await provider.verifyAndParseWebhook('{}', headers)).toEqual({
+        kind: 'ignored',
+        rawType: 'refund.succeeded',
+        reason: 'missing_reader_metadata',
+      })
     })
   })
 })

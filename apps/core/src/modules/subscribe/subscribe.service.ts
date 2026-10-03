@@ -101,8 +101,6 @@ export class SubscribeService implements OnModuleInit, OnModuleDestroy {
       })
     }
 
-    const scopeCfg = { scope: EventScope.TO_VISITOR }
-
     // eslint-disable-next-line @typescript-eslint/no-this-alias
     const self = this
 
@@ -180,9 +178,19 @@ export class SubscribeService implements OnModuleInit, OnModuleDestroy {
       new Co().use(precheck, noteAndPostHandler).start(doc)
     }
 
+    const publicContentEvents = new Set<string>([
+      BusinessEvents.NOTE_CREATE,
+      BusinessEvents.NOTE_REPUBLISH,
+      BusinessEvents.POST_CREATE,
+      BusinessEvents.POST_REPUBLISH,
+    ])
+
     return [
-      this.eventManager.on(BusinessEvents.NOTE_CREATE, handleEvent, scopeCfg),
-      this.eventManager.on(BusinessEvents.POST_CREATE, handleEvent, scopeCfg),
+      this.eventManager.registerHandler((event, data, scope) => {
+        if ((scope & EventScope.TO_VISITOR) === 0) return
+        if (!publicContentEvents.has(event)) return
+        void handleEvent(data)
+      }),
     ]
   }
 
@@ -248,7 +256,7 @@ export class SubscribeService implements OnModuleInit, OnModuleDestroy {
   ) {
     const { seo, mailOptions } = await this.configService.waitForConfigReady()
     const senderEmail = mailOptions.from || mailOptions.smtp?.user
-    const sendfrom = `"${seo.title || 'Mx Space'}" <${senderEmail}>`
+    const sendfrom = `"${seo.title || 'Mix Space'}" <${senderEmail}>`
     const cacheKey = 'template'
     let finalTemplate = this.lruCache.get(cacheKey)
     if (!finalTemplate) {
@@ -260,7 +268,7 @@ export class SubscribeService implements OnModuleInit, OnModuleDestroy {
 
     const options: Mail.Options = {
       from: sendfrom,
-      subject: `[${seo.title || 'Mx Space'}] New content published`,
+      subject: `[${seo.title || 'Mix Space'}] New content published`,
       to: email,
       html: ejs.render(finalTemplate, source),
       headers: { 'List-Unsubscribe': `<${unsubscribeLink}>` },

@@ -48,6 +48,14 @@ type CreateControllerOptions = {
   ) => Promise<{ enrichments: Record<string, unknown> }>
   getTranslationsBatchFn?: () => Promise<ReturnType<typeof makeEmptyEntryMaps>>
   getCachedTitlesFn?: () => Promise<Map<string, string>>
+  resolvePostEntitlementFn?: (input: {
+    post: { isPremium?: boolean; entitlementReason?: string }
+    isOwner: boolean
+  }) => Promise<{ reason: string; locked: boolean }>
+  resolveArticlePurchaseMetaFn?: () => Promise<{
+    enabled: boolean
+    price?: { amount: number; currency: string }
+  }>
 }
 
 const createController = (opts: CreateControllerOptions = {}) => {
@@ -64,6 +72,8 @@ const createController = (opts: CreateControllerOptions = {}) => {
     }),
     getTranslationsBatchFn = async () => makeEmptyEntryMaps(),
     getCachedTitlesFn = async () => new Map<string, string>(),
+    resolvePostEntitlementFn,
+    resolveArticlePurchaseMetaFn = async () => ({ enabled: false }),
   } = opts
 
   const postService = {
@@ -114,8 +124,38 @@ const createController = (opts: CreateControllerOptions = {}) => {
     findSkillBundlesByIds: vi.fn(async () => []),
   }
 
+  const lockedFor = (post: { isPremium?: boolean }, isOwner: boolean) =>
+    Boolean(post.isPremium) && !isOwner
+  const defaultResolvePostEntitlement = async (input: {
+    post: { isPremium?: boolean; entitlementReason?: string }
+    isOwner: boolean
+  }) => {
+    if (!input.post.isPremium) return { reason: 'public', locked: false }
+    if (input.post.entitlementReason) {
+      const reason = input.post.entitlementReason
+      return { reason, locked: reason === 'locked' }
+    }
+    const locked = lockedFor(input.post, input.isOwner)
+    return { reason: locked ? 'locked' : 'owner', locked }
+  }
   const entitlementService = {
     isActiveMember: vi.fn(async () => false),
+    resolvePostEntitlement: vi.fn(
+      resolvePostEntitlementFn ?? defaultResolvePostEntitlement,
+    ),
+    resolveArticlePurchaseMeta: vi.fn(resolveArticlePurchaseMetaFn),
+    resolvePostEntitlements: vi.fn(
+      async (input: {
+        posts: Array<{ id: unknown; isPremium?: boolean }>
+        isOwner: boolean
+      }) =>
+        new Map(
+          input.posts.map((post) => [
+            String(post.id),
+            { locked: lockedFor(post, input.isOwner) },
+          ]),
+        ),
+    ),
   }
 
   const controller = new PostController(
@@ -166,8 +206,8 @@ describe('PostController.getPaginate', () => {
     expect(res.data[0].content).toBe(lexicalContent)
   })
 
-  it('overwrites title, text, content, category.name in place when translated', async () => {
-    const post = makePost()
+  it('overwrites title, text, summary, content, category.name in place when translated', async () => {
+    const post = makePost({ summary: '中文摘要' })
 
     const translatedResult = {
       isTranslated: true,
@@ -175,7 +215,7 @@ describe('PostController.getPaginate', () => {
       text: 'translated body',
       content: 'translated content',
       contentFormat: 'markdown',
-      summary: null,
+      summary: 'English summary',
       tags: [],
       sourceLang: 'zh',
       translationMeta: {
@@ -206,24 +246,38 @@ describe('PostController.getPaginate', () => {
 
     const entityMap = new Map([[String(post.category!.id), 'Technology']])
 
-    const { controller, enrichmentService } = createController({
-      posts: [post],
-      collectArticleTranslationsFn: async () => ({
-        results: translationResults as any,
-        meta: translationMeta as any,
-      }),
-      getTranslationsBatchFn: async () => ({
-        entityMaps: new Map([['category.name', entityMap]]),
-        dictMaps: new Map(),
-      }),
-    })
+    const { controller, enrichmentService, translationService } =
+      createController({
+        posts: [post],
+        collectArticleTranslationsFn: async () => ({
+          results: translationResults as any,
+          meta: translationMeta as any,
+        }),
+        getTranslationsBatchFn: async () => ({
+          entityMaps: new Map([['category.name', entityMap]]),
+          dictMaps: new Map(),
+        }),
+      })
 
     const res = await controller.getPaginate({} as any, false, 'en')
 
     expect(res.data[0].title).toBe('Translated title')
     expect(res.data[0].text).toBe('translated body')
+    expect(res.data[0].summary).toBe('English summary')
     expect(res.data[0].content).toBe('translated content')
     expect((res.data[0] as any).category.name).toBe('Technology')
+
+    expect(translationService.collectArticleTranslations).toHaveBeenCalledWith(
+      expect.objectContaining({
+        fields: expect.arrayContaining(['summary']),
+        articles: [
+          expect.objectContaining({
+            id: String(post.id),
+            summary: '中文摘要',
+          }),
+        ],
+      }),
+    )
 
     expect(res.meta?.translation).toBeDefined()
     const translationBlock = (res.meta?.translation as any)?.[String(post.id)]
@@ -294,6 +348,37 @@ describe('PostController.getPaginate', () => {
 
     expect(res.data[0].title).toBe('A translated')
     expect(res.data[1].title).toBe('B')
+  })
+
+  it('keeps the original summary when the translation has no summary', async () => {
+    const post = makePost({ summary: '中文摘要' })
+
+    const translationResults = new Map([
+      [
+        String(post.id),
+        {
+          isTranslated: true,
+          title: 'Translated title',
+          text: 'translated body',
+          summary: null,
+          sourceLang: 'zh',
+          availableTranslations: ['en'],
+        },
+      ],
+    ])
+
+    const { controller } = createController({
+      posts: [post],
+      collectArticleTranslationsFn: async () => ({
+        results: translationResults as any,
+        meta: new Map(),
+      }),
+    })
+
+    const res = await controller.getPaginate({} as any, false, 'en')
+
+    expect(res.data[0].title).toBe('Translated title')
+    expect(res.data[0].summary).toBe('中文摘要')
   })
 
   it('fails closed to an empty teaser for a premium post whose content is not a string', async () => {
@@ -426,5 +511,87 @@ describe('PostController.getByCateAndSlug', () => {
     >
     expect(calledWith.text).toBe('translated body for enrichment check')
     expect(calledWith.content).toBe('translated content for enrichment check')
+  })
+})
+
+describe('PostController.getById — paywall meta', () => {
+  it('free-window: full content, locked false, reason free-window', async () => {
+    const post = makePost({ isPremium: true, entitlementReason: 'free-window' })
+
+    const { controller } = createController({ posts: [post] })
+
+    const res = await controller.getById(
+      { id: post.id } as any,
+      false,
+      undefined,
+      undefined,
+    )
+
+    expect(res.data.content).toBe(lexicalContent)
+    expect(res.meta?.paywall).toMatchObject({
+      locked: false,
+      entitlement: { reason: 'free-window' },
+    })
+    expect(res.meta?.paywall?.previewBlocks).toBeUndefined()
+  })
+
+  it('locked: truncated content and purchase block present', async () => {
+    const post = makePost({ isPremium: true, entitlementReason: 'locked' })
+
+    const { controller } = createController({
+      posts: [post],
+      resolveArticlePurchaseMetaFn: async () => ({
+        enabled: true,
+        price: { amount: 299, currency: 'usd' },
+      }),
+    })
+
+    const res = await controller.getById(
+      { id: post.id } as any,
+      false,
+      undefined,
+      undefined,
+    )
+
+    expect(res.meta?.paywall?.locked).toBe(true)
+    expect(typeof res.meta?.paywall?.previewBlocks).toBe('number')
+    expect(res.meta?.paywall?.purchase).toEqual({
+      enabled: true,
+      price: { amount: 299, currency: 'usd' },
+    })
+  })
+
+  it('purchase reader: full content, reason purchase, locked false', async () => {
+    const post = makePost({ isPremium: true, entitlementReason: 'purchase' })
+
+    const { controller } = createController({ posts: [post] })
+
+    const res = await controller.getById(
+      { id: post.id } as any,
+      false,
+      undefined,
+      'reader-1',
+    )
+
+    expect(res.data.content).toBe(lexicalContent)
+    expect(res.meta?.paywall).toMatchObject({
+      locked: false,
+      entitlement: { reason: 'purchase' },
+    })
+  })
+
+  it('non-premium: no paywall meta emitted', async () => {
+    const post = makePost({ isPremium: false })
+
+    const { controller } = createController({ posts: [post] })
+
+    const res = await controller.getById(
+      { id: post.id } as any,
+      false,
+      undefined,
+      undefined,
+    )
+
+    expect(res.meta?.paywall).toBeUndefined()
   })
 })

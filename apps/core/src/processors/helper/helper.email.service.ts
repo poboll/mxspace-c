@@ -1,6 +1,7 @@
 import type { OnModuleDestroy, OnModuleInit } from '@nestjs/common'
 import { Injectable, Logger } from '@nestjs/common'
 import { OnEvent } from '@nestjs/event-emitter'
+import { delay } from 'es-toolkit'
 import type Mail from 'nodemailer/lib/mailer'
 
 import { AppErrorCode, createAppException } from '~/common/errors'
@@ -11,9 +12,10 @@ import {
   ConfigVersionScopes,
   ConfigVersionService,
 } from '~/processors/redis/config-version.service'
-import { sleep } from '~/utils/tool.util'
 
 import { AssetService } from './helper.asset.service'
+
+type AddressInput = string | { address?: string } | AddressInput[]
 
 type MailProvider = 'smtp' | 'resend'
 type MailClient = {
@@ -156,13 +158,7 @@ export class EmailService implements OnModuleInit, OnModuleDestroy {
         const resend = new Resend(apiKey)
         this.instance = {
           sendMail: async (options: Mail.Options) => {
-            const from = this.normalizeSingleAddress(
-              options.from as unknown as
-                | string
-                | Mail.Address
-                | Array<string | Mail.Address>
-                | undefined,
-            )
+            const from = this.normalizeSingleAddress(options.from)
             const to = this.normalizeAddressList(options.to)
             if (!from || !to) {
               throw createAppException(AppErrorCode.INTERNAL_ERROR, {
@@ -265,7 +261,7 @@ export class EmailService implements OnModuleInit, OnModuleDestroy {
     const mailOptions = await this.configsService.get('mailOptions')
     const senderEmail = mailOptions.from || mailOptions.smtp?.user
     return this.send({
-      from: `"Mx Space" <${senderEmail}>`,
+      from: `"Mix Space" <${senderEmail}>`,
       to: owner.mail,
       subject: 'Test email',
       text: 'This is a test email',
@@ -296,7 +292,7 @@ export class EmailService implements OnModuleInit, OnModuleDestroy {
         const now = Date.now()
         const waitTime = this.lastSendTime + minIntervalMs - now
         if (waitTime > 0) {
-          await sleep(waitTime)
+          await delay(waitTime)
         }
 
         const item = this.pendingQueue.shift()
@@ -318,7 +314,7 @@ export class EmailService implements OnModuleInit, OnModuleDestroy {
             this.logger.warn(
               `Failed to send email, retry ${item.attempts}: ${error instanceof Error ? error.message : String(error)}`,
             )
-            await sleep(1000 * item.attempts)
+            await delay(1000 * item.attempts)
             this.pendingQueue.push(item)
             continue
           }
@@ -337,43 +333,33 @@ export class EmailService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  private normalizeSingleAddress(
-    input: string | Mail.Address | Array<string | Mail.Address> | undefined,
-  ): string | undefined {
+  private collectAddresses(input: AddressInput | undefined): string[] {
     if (!input) {
-      return undefined
+      return []
     }
     if (typeof input === 'string') {
-      return input
+      return [input]
     }
     if (Array.isArray(input)) {
-      const value = input
-        .map((item) => (typeof item === 'string' ? item : item.address))
-        .find(Boolean)
-      return value
+      return input.flatMap((item) => this.collectAddresses(item))
     }
-    return input.address
+    return input.address ? [input.address] : []
+  }
+
+  private normalizeSingleAddress(
+    input: AddressInput | undefined,
+  ): string | undefined {
+    return this.collectAddresses(input)[0]
   }
 
   private normalizeAddressList(
-    input: string | Mail.Address | Array<string | Mail.Address> | undefined,
+    input: AddressInput | undefined,
   ): string | string[] | undefined {
-    if (!input) {
+    const list = this.collectAddresses(input)
+    if (list.length === 0) {
       return undefined
     }
-    if (typeof input === 'string') {
-      return input
-    }
-    if (Array.isArray(input)) {
-      const list = input
-        .map((item) => (typeof item === 'string' ? item : item.address))
-        .filter(Boolean)
-      if (list.length === 0) {
-        return undefined
-      }
-      return list.length === 1 ? list[0] : list
-    }
-    return input.address
+    return list.length === 1 ? list[0] : list
   }
 
   private normalizeContent(input: unknown): string | undefined {

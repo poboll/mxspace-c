@@ -5,21 +5,22 @@ import {
   Param,
   Patch,
   Post,
-  Req,
+  UploadedFile,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common'
-import type { FastifyRequest } from 'fastify'
+import type { UploadedMultipartFile } from '@nestjs/platform-fastify'
 
 import { ApiController } from '~/common/decorators/api-controller.decorator'
 import { AppErrorCode, createAppException } from '~/common/errors'
-import { UploadService } from '~/processors/helper/helper.upload.service'
-import { isZipMinetype } from '~/utils/mine.util'
+import { ZipUploadInterceptor } from '~/common/interceptors/zip-upload.interceptor'
+import { requiredFilePipe } from '~/common/pipes/required-file.pipe'
 
 import { BackupService } from '../backup/backup.service'
 import { ConfigsService } from '../configs/configs.service'
-import { ConfigKeyDto } from '../option/option.schema'
+import { type ConfigKeyDto, ConfigKeySchema } from '../option/option.schema'
 import { InitGuard } from './init.guard'
-import { InitOwnerCreateDto } from './init.schema'
+import { type InitOwnerCreateDto, InitOwnerCreateSchema } from './init.schema'
 import { InitService } from './init.service'
 
 @ApiController('/init')
@@ -29,7 +30,6 @@ export class InitController {
     private readonly configs: ConfigsService,
     private readonly initService: InitService,
     private readonly backupService: BackupService,
-    private readonly uploadService: UploadService,
   ) {}
 
   private async assertNotInitialized(forbiddenMode = false) {
@@ -56,7 +56,7 @@ export class InitController {
 
   @Patch('/configs/:key')
   async patch(
-    @Param() params: ConfigKeyDto,
+    @Param({ schema: ConfigKeySchema }) params: ConfigKeyDto,
     @Body() body: Record<string, any>,
   ) {
     await this.assertNotInitialized()
@@ -67,26 +67,25 @@ export class InitController {
   }
 
   @Post('/owner')
-  async createOwner(@Body() body: InitOwnerCreateDto) {
+  async createOwner(
+    @Body({ schema: InitOwnerCreateSchema }) body: InitOwnerCreateDto,
+  ) {
     await this.assertNotInitialized()
     return this.initService.createOwner(body)
   }
 
   @Post('/restore')
   @HttpCode(200)
-  async uploadAndRestore(@Req() req: FastifyRequest) {
+  @UseInterceptors(
+    ZipUploadInterceptor((got) =>
+      createAppException(AppErrorCode.INIT_INVALID_MIME_TYPE, { got }),
+    ),
+  )
+  async uploadAndRestore(
+    @UploadedFile(requiredFilePipe) data: UploadedMultipartFile,
+  ) {
     await this.assertNotInitialized()
-    const data = await this.uploadService.getAndValidMultipartField(req, {
-      maxFileSize: 1024 * 1024 * 100,
-    })
-    const { mimetype } = data
-    if (!isZipMinetype(mimetype)) {
-      throw createAppException(AppErrorCode.INIT_INVALID_MIME_TYPE, {
-        got: mimetype,
-      })
-    }
-
-    await this.backupService.saveTempBackupByUpload(await data.toBuffer())
+    await this.backupService.saveTempBackupByUpload(data.buffer!)
 
     return
   }

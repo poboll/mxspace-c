@@ -1,5 +1,5 @@
 import { CacheKey, CacheTTL } from '@nestjs/cache-manager'
-import { Get, Query } from '@nestjs/common'
+import { forwardRef, Get, Inject, Query } from '@nestjs/common'
 import { merge, omit } from 'es-toolkit/compat'
 
 import { ApiController } from '~/common/decorators/api-controller.decorator'
@@ -16,22 +16,57 @@ import {
   TranslationService,
 } from '~/processors/helper/helper.translation.service'
 
+import { ActivityService } from '../activity/activity.service'
 import { TranslationEntryService } from '../ai/ai-translation/translation-entry.service'
 import { AnalyzeService } from '../analyze/analyze.service'
 import { ConfigsService } from '../configs/configs.service'
+import { DraftService } from '../draft/draft.service'
+import type { DraftBranchView } from '../draft/draft.types'
 import { NoteService } from '../note/note.service'
 import { OwnerService } from '../owner/owner.service'
 import { SnippetService } from '../snippet/snippet.service'
 import {
-  AggregateQueryDto,
-  LatestQueryDto,
+  type AggregateQueryDto,
+  AggregateQuerySchema,
+  type LatestQueryDto,
+  LatestQuerySchema,
   ReadAndLikeCountDocumentType,
-  ReadAndLikeCountTypeDto,
-  TimelineQueryDto,
-  TopQueryDto,
+  type ReadAndLikeCountTypeDto,
+  ReadAndLikeCountTypeSchema,
+  type TimelineQueryDto,
+  TimelineQuerySchema,
+  type TopQueryDto,
+  TopQuerySchema,
 } from './aggregate.schema'
 import { AggregateService } from './aggregate.service'
 import { resolveSeo } from './resolve-seo.util'
+
+const dashboardDraftLimit = 5
+const dashboardDraftExcerptLength = 240
+
+function toDeskDraft(draft: DraftBranchView) {
+  const text = draft.headRevision.text ?? ''
+  return {
+    id: draft.id,
+    documentId: draft.documentId,
+    status: draft.status,
+    relationToPublished: draft.relationToPublished,
+    createdAt: draft.createdAt,
+    updatedAt: draft.updatedAt,
+    document: {
+      refId: draft.document.refId,
+      refType: draft.document.refType,
+    },
+    headRevision: {
+      title: draft.headRevision.title,
+      excerpt: text
+        .replaceAll(/\s+/g, ' ')
+        .trim()
+        .slice(0, dashboardDraftExcerptLength),
+      chars: text.replaceAll(/\s/g, '').length,
+    },
+  }
+}
 
 type TitledItem = {
   id: string
@@ -65,6 +100,10 @@ export class AggregateController {
     private readonly ownerService: OwnerService,
     private readonly translationService: TranslationService,
     private readonly translationEntryService: TranslationEntryService,
+    @Inject(forwardRef(() => ActivityService))
+    private readonly activityService: ActivityService,
+    @Inject(forwardRef(() => DraftService))
+    private readonly draftService: DraftService,
   ) {}
 
   private async getThemeConfig(theme?: string, lang?: string) {
@@ -190,26 +229,19 @@ export class AggregateController {
     ttl: 10 * 60,
     withQuery: true,
   })
-  async aggregate(@Query() query: AggregateQueryDto, @Lang() lang?: string) {
+  async aggregate(
+    @Query({ schema: AggregateQuerySchema }) query: AggregateQueryDto,
+    @Lang() lang?: string,
+  ) {
     const { theme } = query
 
-    const [
-      user,
-      url,
-      seo,
-      commentOptions,
-      latestNoteId,
-      themeConfig,
-      aiConfig,
-    ] = await Promise.all([
+    const [user, config, latestNoteId, themeConfig] = await Promise.all([
       this.ownerService.getOwner(),
-      this.configsService.get('url'),
-      this.configsService.get('seo'),
-      this.configsService.get('commentOptions'),
+      this.configsService.getConfig(),
       this.noteService.getLatestNoteId(),
       this.getThemeConfig(theme, lang),
-      this.configsService.get('ai'),
     ])
+    const { url, seo, commentOptions, ai: aiConfig } = config
 
     return {
       user,
@@ -236,10 +268,9 @@ export class AggregateController {
     withQuery: true,
   })
   async site(@Lang() lang?: string) {
-    const [user, url, seo] = await Promise.all([
+    const [user, { url, seo }] = await Promise.all([
       this.ownerService.getOwner(),
-      this.configsService.get('url'),
-      this.configsService.get('seo'),
+      this.configsService.getConfig(),
     ])
 
     return {
@@ -255,7 +286,7 @@ export class AggregateController {
 
   @Get('/top')
   async top(
-    @Query() query: TopQueryDto,
+    @Query({ schema: TopQuerySchema }) query: TopQueryDto,
     @HasAdminAccess() isAuthenticated: boolean,
     @Lang() lang?: string,
   ) {
@@ -275,6 +306,7 @@ export class AggregateController {
       lang,
       allItems,
       notes,
+      categoryPosts: posts,
     })
 
     if (translationMeta.size === 0) return result
@@ -286,7 +318,10 @@ export class AggregateController {
   }
 
   @Get('/latest')
-  async getLatest(@Query() query: LatestQueryDto, @Lang() lang?: string) {
+  async getLatest(
+    @Query({ schema: LatestQuerySchema }) query: LatestQueryDto,
+    @Lang() lang?: string,
+  ) {
     const { limit = 5, types, combined = false } = query
     const result = await this.aggregateService.getLatest(limit, types, combined)
 
@@ -296,17 +331,18 @@ export class AggregateController {
     const notes: TitledItem[] = isCombined
       ? (result as TitledItem[]).filter((i) => i.type === 'note')
       : (((result as Record<string, any>).notes ?? []) as TitledItem[])
+    const posts: TitledItem[] = isCombined
+      ? (result as TitledItem[]).filter((i) => i.type === 'post')
+      : (((result as Record<string, any>).posts ?? []) as TitledItem[])
     const allItems: TitledItem[] = isCombined
       ? (result as TitledItem[])
-      : [
-          ...(((result as Record<string, any>).posts ?? []) as TitledItem[]),
-          ...notes,
-        ]
+      : [...posts, ...notes]
 
     const translationMeta = await this.translateTitledItems({
       lang,
       allItems,
       notes,
+      categoryPosts: posts,
     })
 
     if (translationMeta.size === 0) return result
@@ -318,7 +354,10 @@ export class AggregateController {
   }
 
   @Get('/timeline')
-  async getTimeline(@Query() query: TimelineQueryDto, @Lang() lang?: string) {
+  async getTimeline(
+    @Query({ schema: TimelineQuerySchema }) query: TimelineQueryDto,
+    @Lang() lang?: string,
+  ) {
     const { sort = 1, type, year } = query
     const data = await this.aggregateService.getTimeline(year, type, sort)
 
@@ -359,7 +398,61 @@ export class AggregateController {
 
   @Get('/stat')
   @Auth()
-  async stat() {
+  stat() {
+    return this.buildStat()
+  }
+
+  @Get('/desk')
+  @Auth()
+  async desk() {
+    return await this.aggregateService.getDesk()
+  }
+
+  @Get('/dashboard')
+  @Auth()
+  async dashboard() {
+    const [
+      ownerName,
+      stat,
+      reads,
+      desk,
+      drafts,
+      onThisDay,
+      publishHeatmap,
+      topArticles,
+      recentComments,
+      recentLikes,
+    ] = await Promise.all([
+      this.ownerService
+        .getOwner()
+        .then((owner) => owner.name ?? null)
+        .catch(() => null),
+      this.buildStat(),
+      this.aggregateService.getAllReadAndLikeCount(
+        ReadAndLikeCountDocumentType.All,
+      ),
+      this.aggregateService.getDesk(),
+      this.draftService.list(1, dashboardDraftLimit),
+      this.aggregateService.getOnThisDay(),
+      this.aggregateService.getPublishHeatmap(),
+      this.aggregateService.getTopArticles(),
+      this.activityService.getRecentComment(),
+      this.activityService.getRecentLikes(),
+    ])
+    return {
+      ownerName,
+      stat,
+      reads,
+      desk,
+      drafts: drafts.data.map(toDeskDraft),
+      onThisDay,
+      publishHeatmap,
+      topArticles,
+      recent: { comment: recentComments, like: recentLikes },
+    }
+  }
+
+  private async buildStat() {
     const [count, callTime, todayIpAccess] = await Promise.all([
       this.aggregateService.getCounts(),
       this.analyzeService.getCallTime(),
@@ -372,26 +465,11 @@ export class AggregateController {
     }
   }
 
-  @Get('/desk')
-  @Auth()
-  async desk() {
-    return await this.aggregateService.getDesk()
-  }
-
-  @Get('/on-this-day')
-  @Auth()
-  async onThisDay() {
-    return await this.aggregateService.getOnThisDay()
-  }
-
-  @Get('/publish-heatmap')
-  @Auth()
-  async publishHeatmap() {
-    return await this.aggregateService.getPublishHeatmap()
-  }
-
   @Get('/count_read_and_like')
-  async getAllReadAndLikeCount(@Query() query: ReadAndLikeCountTypeDto) {
+  async getAllReadAndLikeCount(
+    @Query({ schema: ReadAndLikeCountTypeSchema })
+    query: ReadAndLikeCountTypeDto,
+  ) {
     const { type = ReadAndLikeCountDocumentType.All } = query
     return await this.aggregateService.getAllReadAndLikeCount(type)
   }

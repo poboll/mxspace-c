@@ -4,6 +4,9 @@ import type {
   ChatBubble,
 } from '@haklex/rich-agent-core'
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { toast } from 'sonner'
+
+import { translate } from '~/i18n/translate'
 
 import type { AgentConversation } from '../api/ai-agent'
 import {
@@ -228,7 +231,10 @@ export function useAgentSessionManager({
               .catch(() => {})
           }
         })
-        .catch(() => {})
+        .catch((error: unknown) => {
+          console.error('[agent-session] failed to persist conversation', error)
+          toast.error(translate('write.agent.toast.sessionSyncFailed'))
+        })
     },
     [store],
   )
@@ -417,10 +423,13 @@ export function useAgentSessionManager({
         })
           .then((conversation) => {
             if (epoch !== sessionEpochRef.current) return
+            activeSessionIdRef.current = conversation.id
             setActiveSessionId(conversation.id)
             isCreatingSessionRef.current = false
             isPendingCreationRef.current = false
             setSessions((current) => [toSessionMeta(conversation), ...current])
+            // Tool results may arrive while conversation creation is in flight.
+            syncMessages(conversation.id)
           })
           .catch(() => {
             isCreatingSessionRef.current = false
@@ -431,7 +440,7 @@ export function useAgentSessionManager({
 
       scheduleMessagesSync(activeSessionIdRef.current)
     })
-  }, [scheduleMessagesSync, store])
+  }, [scheduleMessagesSync, store, syncMessages])
 
   useEffect(() => {
     const previousSessionId = prevSessionIdRef.current

@@ -14,6 +14,7 @@ export interface CommentRow {
   url: string | null
   text: string
   state: number
+  moderationStatus?: string | null
   parentCommentId: EntityId | null
   rootCommentId: EntityId | null
   replyCount: number
@@ -55,6 +56,8 @@ export interface CommentCreateInput {
   mail?: string | null
   url?: string | null
   state?: number
+  moderationStatus?: string | null
+  moderationReceiptHash?: string
   parentCommentId?: EntityId | string | null
   rootCommentId?: EntityId | string | null
   pin?: boolean
@@ -72,9 +75,12 @@ export interface CommentCreateInput {
 }
 
 export interface CommentFindFilter {
+  excludeJunk?: boolean
+  isDeleted?: boolean
   state?: number
   refType?: CommentRefType
   refId?: EntityId | string
+  readerId?: string
   search?: string
   tab?: CommentTab
   author?: string
@@ -85,12 +91,7 @@ export interface CommentFindFilter {
  * deprecated parameter; `tab` semantics supersede it (spec §6.1).
  */
 export type CommentTab =
-  | 'unread'
-  | 'read'
-  | 'junk'
-  | 'whispers'
-  | 'awaiting'
-  | 'all'
+  'unread' | 'read' | 'junk' | 'whispers' | 'awaiting' | 'all'
 
 export interface CommentTabCounts {
   unread: number
@@ -143,6 +144,7 @@ export interface CommentSourceCandidate {
 export type CommentRootSort = 'pinned' | 'newest' | 'oldest'
 
 export interface CommentPublicFilterOptions {
+  blockedReaderIds?: string[]
   isAuthenticated: boolean
   commentShouldAudit: boolean
   hasAnchor?: boolean

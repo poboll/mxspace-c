@@ -22,6 +22,7 @@ import { TaskQueueEmitter } from './task-queue.emitter'
 import {
   LUA_ACQUIRE_TASK,
   LUA_CANCEL_PENDING,
+  LUA_CLAIM_DEDUP,
   LUA_RECOVER_STALE,
   LUA_UPDATE_STATUS,
 } from './task-queue.lua'
@@ -49,6 +50,26 @@ type LogLevel = 'info' | 'warn' | 'error'
 
 function isTerminalStatus(status: TaskStatus): boolean {
   return TERMINAL_STATUSES.has(status)
+}
+
+function payloadTargetsRef(
+  rawPayload: string | null | undefined,
+  refId: string,
+): boolean {
+  if (!rawPayload) return false
+  let payload: unknown
+  try {
+    payload = JSON.parse(rawPayload)
+  } catch {
+    return false
+  }
+  if (!payload || typeof payload !== 'object') return false
+  const { refId: taskRefId, refIds } = payload as {
+    refId?: unknown
+    refIds?: unknown
+  }
+  if (taskRefId === refId) return true
+  return Array.isArray(refIds) && refIds.includes(refId)
 }
 
 /**
@@ -140,24 +161,23 @@ export class TaskQueueService implements OnModuleDestroy {
   ): Promise<{ taskId: string; created: boolean }> {
     const { type, payload, dedupKey, groupId, scope } = options
     const payloadHash = this.computeDedupHash(type, dedupKey)
+    const taskId = this.generateTaskId()
 
     if (dedupKey) {
       const dedupRedisKey = this.getKey(TASK_QUEUE_KEYS.dedup(payloadHash))
-      const existingTaskId = await this.redis.get(dedupRedisKey)
-
-      if (existingTaskId) {
-        const existingTask = await this.getTask(existingTaskId)
-        if (
-          existingTask &&
-          (existingTask.status === TaskStatus.Pending ||
-            existingTask.status === TaskStatus.Running)
-        ) {
-          return { taskId: existingTaskId, created: false }
-        }
+      const owner = await this.redis.eval(
+        LUA_CLAIM_DEDUP,
+        1,
+        dedupRedisKey,
+        taskId,
+        this.getKey(TASK_QUEUE_KEYS.task('')),
+        TASK_QUEUE_TTL.dedup,
+      )
+      if (owner !== taskId) {
+        return { taskId: String(owner), created: false }
       }
     }
 
-    const taskId = this.generateTaskId()
     const now = Date.now()
 
     const taskData: TaskRedis = {
@@ -210,11 +230,6 @@ export class TaskQueueService implements OnModuleDestroy {
       const indexGroup = this.getKey(TASK_QUEUE_KEYS.indexByGroup(groupId))
       pipeline.zadd(indexGroup, now, taskId)
       pipeline.expire(indexGroup, TASK_QUEUE_TTL.taskDefault)
-    }
-
-    if (dedupKey) {
-      const dedupRedisKey = this.getKey(TASK_QUEUE_KEYS.dedup(payloadHash))
-      pipeline.set(dedupRedisKey, taskId, 'EX', TASK_QUEUE_TTL.dedup)
     }
 
     await pipeline.exec()
@@ -344,8 +359,18 @@ export class TaskQueueService implements OnModuleDestroy {
     page: number
     size: number
     includeSubTasks?: boolean
+    /** Keep only tasks whose payload acts on this ref (`refId`, or `refIds`). */
+    refId?: string
   }): Promise<{ data: Task[]; total: number }> {
-    const { status, type, scope, page, size, includeSubTasks = false } = options
+    const {
+      status,
+      type,
+      scope,
+      page,
+      size,
+      includeSubTasks = false,
+      refId,
+    } = options
 
     const statuses = Array.isArray(status) ? status : status ? [status] : []
     const singleStatus = statuses.length === 1 ? statuses[0] : undefined
@@ -377,22 +402,23 @@ export class TaskQueueService implements OnModuleDestroy {
 
       const pipeline = this.redis.pipeline()
       for (const taskId of taskIds) {
-        pipeline.hmget(
-          this.getKey(TASK_QUEUE_KEYS.task(taskId)),
-          'status',
-          'scope',
-          'groupId',
-        )
+        const taskKey = this.getKey(TASK_QUEUE_KEYS.task(taskId))
+        if (refId) {
+          pipeline.hmget(taskKey, 'status', 'scope', 'groupId', 'payload')
+        } else {
+          pipeline.hmget(taskKey, 'status', 'scope', 'groupId')
+        }
       }
       const rows = await pipeline.exec()
 
       for (let i = 0; i < taskIds.length; i++) {
         const row = rows?.[i]
         if (!row || row[0]) continue
-        const [taskStatus, taskScope, groupId] = row[1] as [
+        const [taskStatus, taskScope, groupId, payload] = row[1] as [
           string | null,
           string | null,
           string | null,
+          string | null | undefined,
         ]
         if (!taskStatus) continue
         if (
@@ -404,6 +430,7 @@ export class TaskQueueService implements OnModuleDestroy {
         }
         if (scope && !scopeAlreadyIndexed && taskScope !== scope) continue
         if (!includeSubTasks && groupId) continue
+        if (refId && !payloadTargetsRef(payload, refId)) continue
 
         if (total >= start && pageTaskIds.length < size) {
           pageTaskIds.push(taskIds[i])
@@ -830,9 +857,16 @@ export class TaskQueueService implements OnModuleDestroy {
     // Forward totalCost only when present (pre-spec-2 hashes lack it; zero is
     // treated as "no spend yet" and elided to keep the wire patch small).
     if (fresh.totalCost !== undefined) statusPatch.totalCost = fresh.totalCost
-    this.emitter.emitStatus(meta, statusPatch)
+    const isTerminal = isTerminalStatus(status)
+    const hasResult =
+      isTerminal && fresh.result !== undefined && fresh.result !== null
+    if (hasResult) {
+      this.emitter.emitResult(meta, statusPatch, fresh.result)
+    } else {
+      this.emitter.emitStatus(meta, statusPatch)
+    }
 
-    if (!isTerminalStatus(status)) {
+    if (!isTerminal) {
       // Non-terminal status changes (e.g. Running re-emit) — no child→parent
       // recompute, no throttle cleanup yet.
       return
@@ -841,14 +875,7 @@ export class TaskQueueService implements OnModuleDestroy {
     // Always release throttle state when a task reaches a terminal status.
     this.emitter.dispose(taskId)
 
-    const shouldEmitResult =
-      (status === TaskStatus.Completed ||
-        status === TaskStatus.PartialFailed) &&
-      fresh.result !== undefined &&
-      fresh.result !== null
-    if (shouldEmitResult) {
-      this.emitter.emitResult(meta, statusPatch, fresh.result)
-    } else if (
+    if (
       status === TaskStatus.Completed &&
       (fresh.result === undefined || fresh.result === null)
     ) {

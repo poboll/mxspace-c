@@ -22,6 +22,7 @@ import {
 import type { AllowLoginResponse } from '../types/login'
 import { checkIsInit } from '../utils/check-init'
 import { readErrorMessage, readInitial } from '../utils/login'
+import { AppleIcon } from './AppleIcon'
 import { GithubIcon } from './GithubIcon'
 import { GoogleIcon } from './GoogleIcon'
 import { LoginIconButton } from './LoginIconButton'
@@ -61,7 +62,8 @@ export function LoginRouteViewContent() {
   const hasAlternativeAuth =
     Boolean(settings?.passkey) ||
     Boolean(settings?.github) ||
-    Boolean(settings?.google)
+    Boolean(settings?.google) ||
+    Boolean(settings?.apple)
 
   const callbackURL = useMemo(() => {
     const callbackPath = searchParams.get('to') || fromPath
@@ -144,7 +146,7 @@ export function LoginRouteViewContent() {
     }
   }
 
-  const handleSocialLogin = (provider: 'github' | 'google') => {
+  const handleSocialLogin = (provider: 'apple' | 'github' | 'google') => {
     void authClient.signIn.social({
       callbackURL,
       provider,
@@ -153,7 +155,7 @@ export function LoginRouteViewContent() {
 
   return (
     <main
-      className="relative flex min-h-screen items-center justify-center overflow-hidden bg-neutral-950 p-4 text-white"
+      className="relative flex min-h-dvh items-center justify-center overflow-hidden bg-neutral-950 p-4 text-white"
       style={{
         backgroundImage: `linear-gradient(rgba(10,10,10,.42), rgba(10,10,10,.58)), url(${bgUrl})`,
         backgroundPosition: 'center',
@@ -230,6 +232,15 @@ export function LoginRouteViewContent() {
                 onClick={() => handleSocialLogin('google')}
               >
                 <GoogleIcon />
+              </LoginIconButton>
+            ) : null}
+
+            {settings?.apple ? (
+              <LoginIconButton
+                label={t('auth.login.apple')}
+                onClick={() => handleSocialLogin('apple')}
+              >
+                <AppleIcon />
               </LoginIconButton>
             ) : null}
           </div>

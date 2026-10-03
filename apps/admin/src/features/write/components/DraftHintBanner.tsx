@@ -1,16 +1,19 @@
 import type { LucideIcon } from 'lucide-react'
-import { AlertCircle, History, X } from 'lucide-react'
+import { AlertCircle, CloudDownload, History, X } from 'lucide-react'
 
 import { useI18n } from '~/i18n'
 import { Button } from '~/ui/primitives/button'
 import { cn } from '~/utils/cn'
 
 interface DraftHintBannerProps {
-  variant: 'list' | 'recovery'
+  variant: 'list' | 'recovery' | 'remote-update'
   message: string
   actionLabel: string
   onAction: () => void
-  onDismiss: () => void
+  onDelete?: () => void
+  onDismiss?: () => void
+  onSecondaryAction?: () => void
+  secondaryActionLabel?: string
 }
 
 const variantConfig: Record<
@@ -19,6 +22,7 @@ const variantConfig: Record<
     icon: LucideIcon
     cardClass: string
     iconClass: string
+    messageClass: string
     actionVariant: 'primary' | 'secondary'
     dismissClass: string
   }
@@ -27,6 +31,7 @@ const variantConfig: Record<
     icon: History,
     cardClass: 'bg-surface-card border-border',
     iconClass: 'text-fg-muted',
+    messageClass: 'text-fg',
     actionVariant: 'secondary',
     dismissClass:
       'text-fg-subtle hover:bg-black/[0.06] hover:text-fg dark:hover:bg-white/[0.08]',
@@ -36,9 +41,19 @@ const variantConfig: Record<
     cardClass:
       'bg-amber-50 border-amber-200 dark:bg-amber-950/30 dark:border-amber-900/40',
     iconClass: 'text-amber-600 dark:text-amber-400',
+    messageClass: 'text-amber-900 dark:text-amber-100',
     actionVariant: 'primary',
     dismissClass:
       'text-amber-700/70 hover:bg-amber-100 hover:text-amber-900 dark:text-amber-300/70 dark:hover:bg-amber-900/40 dark:hover:text-amber-200',
+  },
+  'remote-update': {
+    icon: CloudDownload,
+    cardClass: 'bg-surface-card border-border',
+    iconClass: 'text-accent',
+    messageClass: 'text-fg',
+    actionVariant: 'primary',
+    dismissClass:
+      'text-fg-subtle hover:bg-black/[0.06] hover:text-fg dark:hover:bg-white/[0.08]',
   },
 }
 
@@ -47,6 +62,7 @@ export function DraftHintBanner(props: DraftHintBannerProps) {
     icon: Icon,
     cardClass,
     iconClass,
+    messageClass,
     actionVariant,
     dismissClass,
   } = variantConfig[props.variant]
@@ -55,7 +71,7 @@ export function DraftHintBanner(props: DraftHintBannerProps) {
   return (
     <div
       className={cn(
-        'flex items-center gap-3 rounded-lg border px-3 py-2',
+        'flex flex-wrap items-center gap-2 rounded-lg border px-3 py-2 sm:gap-3',
         cardClass,
       )}
       role={props.variant === 'recovery' ? 'alert' : 'status'}
@@ -63,15 +79,13 @@ export function DraftHintBanner(props: DraftHintBannerProps) {
       <Icon aria-hidden="true" className={cn('size-4 shrink-0', iconClass)} />
       <span
         className={cn(
-          'min-w-0 flex-1 truncate text-sm',
-          props.variant === 'recovery'
-            ? 'text-amber-900 dark:text-amber-100'
-            : 'text-fg',
+          'min-w-0 flex-1 text-sm max-sm:basis-[calc(100%-2rem)]',
+          messageClass,
         )}
       >
         {props.message}
       </span>
-      <div className="flex shrink-0 items-center gap-1">
+      <div className="flex shrink-0 flex-wrap items-center gap-1 max-sm:w-full max-sm:pl-6">
         <Button
           className="h-7 px-2.5 text-xs"
           onClick={props.onAction}
@@ -80,17 +94,39 @@ export function DraftHintBanner(props: DraftHintBannerProps) {
         >
           {props.actionLabel}
         </Button>
-        <button
-          aria-label={t('write.draftHint.dismissAria')}
-          className={cn(
-            'inline-flex size-7 items-center justify-center rounded-sm transition-colors focus-visible:outline-hidden focus-visible:ring-[3px] focus-visible:ring-accent/15',
-            dismissClass,
-          )}
-          onClick={props.onDismiss}
-          type="button"
-        >
-          <X aria-hidden="true" className="size-3.5" />
-        </button>
+        {props.onSecondaryAction && props.secondaryActionLabel ? (
+          <Button
+            className="h-7 px-2.5 text-xs"
+            onClick={props.onSecondaryAction}
+            type="button"
+            variant="secondary"
+          >
+            {props.secondaryActionLabel}
+          </Button>
+        ) : null}
+        {props.onDelete ? (
+          <Button
+            className="h-7 px-2.5 text-xs text-red-600 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300"
+            onClick={props.onDelete}
+            type="button"
+            variant="ghost"
+          >
+            {t('write.recovery.deleteAction')}
+          </Button>
+        ) : null}
+        {props.onDismiss ? (
+          <button
+            aria-label={t('write.draftHint.dismissAria')}
+            className={cn(
+              'inline-flex size-7 items-center justify-center rounded-sm transition-colors focus-visible:outline-hidden focus-visible:ring-[3px] focus-visible:ring-accent/15',
+              dismissClass,
+            )}
+            onClick={props.onDismiss}
+            type="button"
+          >
+            <X aria-hidden="true" className="size-3.5" />
+          </button>
+        ) : null}
       </div>
     </div>
   )

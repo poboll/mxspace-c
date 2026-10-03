@@ -3,10 +3,12 @@ import type { LucideIcon } from 'lucide-react'
 import type { ConfigFormGroup } from '~/api/options'
 import type { TranslationKey } from '~/i18n/types'
 
-export type AIProviderType = 'anthropic' | 'generic' | 'openai-compatible'
-export type AIProviderCapability = 'image' | 'speech' | 'text'
+export type AIProviderType =
+  'anthropic' | 'generic' | 'google-vertex' | 'openai-compatible' | 'typesafe'
+export type AIProviderCapability = 'decision' | 'image' | 'speech' | 'text'
 
 export interface AIProviderCapabilities {
+  decision?: boolean
   image: boolean
   speech: boolean
   text: boolean
@@ -24,6 +26,7 @@ export interface AIProviderConfig {
   maxTokens?: number | null
   modelListUrl?: string
   name: string
+  projectId?: string
   type: AIProviderType
   voiceListUrl?: string
 }
@@ -38,18 +41,13 @@ export interface AIModelAssignment {
 
 export interface AIConfig {
   version?: 2
+  decisionModel?: AIModelAssignment | null
   commentReviewModel?: AIModelAssignment | null
-  enableAutoGenerateInsightsOnCreate?: boolean
-  enableAutoGenerateInsightsOnUpdate?: boolean
-  enableAutoGenerateSummaryOnCreate?: boolean
-  enableAutoGenerateSummaryOnUpdate?: boolean
-  enableAutoGenerateTranslation?: boolean
   enableAutoTranslateInsights?: boolean
   enableInsights?: boolean
   enableSummary?: boolean
   enableTranslation?: boolean
   enableTranslationReview?: boolean
-  insightsMinTextLength?: number
   insightsModel?: AIModelAssignment | null
   insightsTargetLanguages?: string[]
   insightsTranslationModel?: AIModelAssignment | null
@@ -61,11 +59,11 @@ export interface AIConfig {
     model?: AIModelAssignment | null
   }
   providers?: AIProviderConfig[]
-  summaryMinTextLength?: number
   summaryModel?: AIModelAssignment | null
   summaryTargetLanguages?: string[]
   translationModel?: AIModelAssignment | null
   translationReviewModel?: AIModelAssignment | null
+  fieldTranslationModel?: AIModelAssignment | null
   translationTargetLanguages?: string[]
   tts?: {
     concurrency?: number
@@ -102,26 +100,38 @@ export interface SeoI18nOverlay {
 
 export type SettingsGroupType =
   'account' | 'maintenance' | 'meta-preset' | 'system' | 'user'
-export type OauthProviderType = 'github' | 'google'
+export type OauthProviderType = 'apple' | 'github' | 'google'
 
 export interface OauthOptions {
   providers?: Array<{
     enabled?: boolean
     type: OauthProviderType
   }>
-  public?: Partial<
-    Record<
-      OauthProviderType,
-      {
-        clientId?: string
-      }
-    >
-  >
+  public?: Partial<Record<OauthProviderType, Record<string, string>>>
+}
+
+export interface OauthProviderField {
+  descriptionKey?: TranslationKey
+  key: string
+  label: string
+  multiline?: boolean
+  optional?: boolean
+  placeholder?: string
+  placeholderKey?: TranslationKey
+  secret?: boolean
 }
 
 export interface FlatOauthProvider {
-  clientId: string
+  configured: boolean
   enabled: boolean
+  public: Record<string, string>
+  type: OauthProviderType
+}
+
+export interface OauthProviderPayload {
+  enabled: boolean
+  public: Record<string, string>
+  secrets: Record<string, string>
   type: OauthProviderType
 }
 

@@ -1,7 +1,13 @@
 import { createPrivateKey, sign } from 'node:crypto'
 import { connect } from 'node:http2'
 
-import type { PushEvent } from '@mx-space/push-protocol'
+import {
+  COMMENT_CREATED_EVENT,
+  COMMENT_REPLIED_EVENT,
+  CONTENT_PUBLISHED_EVENT,
+  PUSH_PROTOCOL_VERSION,
+  type PushEvent,
+} from '@mx-space/push-protocol'
 
 import type { ApnsAppConfig, ApnsKeyConfig } from './config.js'
 import type { ApnsProvider, ApnsResult } from './types.js'
@@ -99,18 +105,157 @@ export class Http2ApnsProvider implements ApnsProvider {
   }
 }
 
-export const buildApnsPayload = (event: PushEvent) => ({
-  aps: {
-    alert: {
-      title: 'New comment',
-      body: 'A new comment is ready to review.',
-    },
-    sound: 'default',
-    'thread-id': 'comments',
-    category: 'SPACE_COMMENT',
-  },
-  schema_version: 1,
+const customFields = (
+  event: PushEvent,
+  extras: Record<string, unknown> = {},
+) => ({
+  ...extras,
+  schema_version: PUSH_PROTOCOL_VERSION,
   source_id: event.source.replace('urn:mx-core:instance:', ''),
   resource_type: event.data.resource_type,
   resource_id: event.data.resource_id,
 })
+
+const thinkingTitleKey = {
+  watched: 'PUSH_THINKING_WATCHED',
+  read: 'PUSH_THINKING_READ',
+  listened: 'PUSH_THINKING_LISTENED',
+  studied: 'PUSH_THINKING_STUDIED',
+  linked: 'PUSH_THINKING_LINKED',
+} as const
+
+const thinkingFactTypeKey = {
+  tv: 'PUSH_THINKING_FACT_TV',
+  movie: 'PUSH_THINKING_FACT_MOVIE',
+  book: 'PUSH_THINKING_FACT_BOOK',
+  album: 'PUSH_THINKING_FACT_ALBUM',
+  song: 'PUSH_THINKING_FACT_SONG',
+} as const
+
+const summaryAlert = (body?: string) =>
+  body
+    ? {
+        'loc-key': 'PUSH_CONTENT_SUMMARY',
+        'loc-args': [body],
+      }
+    : {}
+
+const thinkingSubtitle = (
+  data: Extract<PushEvent, { type: typeof CONTENT_PUBLISHED_EVENT }>['data'],
+) => {
+  if (data.resource_type !== 'recently' || data.kind !== 'enriched') return {}
+  if (data.fact_creator && data.fact_year) {
+    return {
+      'subtitle-loc-key': 'PUSH_THINKING_FACT_CREATOR',
+      'subtitle-loc-args': [data.fact_creator, data.fact_year],
+    }
+  }
+  if (data.fact_creator) {
+    return {
+      'subtitle-loc-key': 'PUSH_THINKING_FACT_CREATOR_ONLY',
+      'subtitle-loc-args': [data.fact_creator],
+    }
+  }
+  if (data.fact_type && data.fact_year) {
+    return {
+      'subtitle-loc-key': thinkingFactTypeKey[data.fact_type],
+      'subtitle-loc-args': [data.fact_year],
+    }
+  }
+  return {}
+}
+
+export const buildApnsPayload = (event: PushEvent) => {
+  if (event.type === COMMENT_CREATED_EVENT) {
+    return {
+      aps: {
+        alert: {
+          title: 'New comment',
+          body: 'A new comment is ready to review.',
+        },
+        sound: 'default',
+        'thread-id': 'comments',
+        category: 'SPACE_COMMENT',
+      },
+      ...customFields(event),
+    }
+  }
+
+  if (event.type === CONTENT_PUBLISHED_EVENT) {
+    if (event.data.resource_type === 'recently') {
+      const data = event.data
+      const alert =
+        data.kind === 'enriched'
+          ? {
+              'title-loc-key': thinkingTitleKey[data.verb],
+              'title-loc-args': [data.owner_name, data.work_title],
+              ...thinkingSubtitle(data),
+              ...summaryAlert(data.description),
+            }
+          : {
+              'title-loc-key': 'PUSH_THINKING_PLAIN',
+              'title-loc-args': [data.owner_name, data.text],
+              ...summaryAlert(data.summary),
+            }
+      return {
+        aps: {
+          alert,
+          sound: 'default',
+          'thread-id': 'recently',
+          category: 'YOHAKU_CONTENT',
+        },
+        ...customFields(event, {
+          event_type: event.type,
+          target_path: data.target_path,
+        }),
+      }
+    }
+
+    return {
+      aps: {
+        alert: {
+          'title-loc-key': 'PUSH_CONTENT_TITLE',
+          'title-loc-args': [event.data.display_title],
+          ...summaryAlert(event.data.summary),
+        },
+        sound: 'default',
+        'thread-id': event.data.resource_type === 'post' ? 'posts' : 'notes',
+        category: 'YOHAKU_CONTENT',
+      },
+      ...customFields(event, {
+        event_type: event.type,
+        target_path: event.data.target_path,
+      }),
+    }
+  }
+
+  if (event.type === COMMENT_REPLIED_EVENT) {
+    return {
+      aps: {
+        alert: {
+          'title-loc-key': 'PUSH_REPLY_TITLE',
+          'title-loc-args': [event.data.sender_name],
+          'loc-key': 'PUSH_REPLY_BODY',
+          'loc-args': [event.data.target_title],
+        },
+        sound: 'default',
+        'thread-id': 'comment-replies',
+        category: 'YOHAKU_COMMENT_REPLIED',
+        'mutable-content': 1,
+      },
+      ...customFields(event, {
+        event_type: event.type,
+        sender_id: event.data.sender_id,
+        sender_name: event.data.sender_name,
+        ...(event.data.sender_avatar_url
+          ? { sender_avatar_url: event.data.sender_avatar_url }
+          : {}),
+        target_title: event.data.target_title,
+        target_path: event.data.target_path,
+      }),
+    }
+  }
+
+  const exhaustive: never = event
+  return exhaustive
+}

@@ -1,89 +1,67 @@
-import { Args, Command } from '@effect/cli'
-import { Effect } from 'effect'
+import { Effect, Option } from 'effect'
+import { Argument, Command, Flag } from 'effect/cli'
 
-import { openAdminEdit } from '../../domain/admin-link'
+import { openAdminDraftEdit } from '../../domain/admin-link'
 import { Generic } from '../../domain/errors'
 import { Api } from '../../services/Api'
 import { Renderer } from '../../services/Renderer'
-import { extractId, openFlag, silentFlag } from '../post/_flags'
+import { openFlag, silentFlag } from '../post/_flags'
 import {
-  camelizeDeep,
-  type DraftRow,
   normalizeDraftRow,
-  parseTypeSpecificData,
+  parseAiResourcesFlag,
+  publishSavedDraft,
   REF_TYPE_TO_RESOURCE,
-  unwrapData,
 } from './_shared'
 
-const id = Args.text({ name: 'id' })
+const id = Argument.String('id')
+const ai = Flag.String('ai').pipe(
+  Flag.withDescription(
+    'AI resources to generate, e.g. summary:sync,insights:async,translation (sync waits before going live; a bare name is async). Omit to reuse the last publish choices; "none" generates nothing.',
+  ),
+  Flag.optional,
+)
 
 export const publish = Command.make(
   'publish',
-  { id, open: openFlag, silent: silentFlag },
-  ({ id, open, silent }) =>
+  { ai, id, open: openFlag, silent: silentFlag },
+  ({ ai, id, open, silent }) =>
     Effect.gen(function* () {
+      const aiResources = yield* Effect.try({
+        try: () => Option.getOrUndefined(Option.map(ai, parseAiResourcesFlag)),
+        catch: (error) => new Generic({ message: (error as Error).message }),
+      })
       const api = yield* Api
       const renderer = yield* Renderer
       const draft = normalizeDraftRow(
-        unwrapData<DraftRow>(
-          yield* api.request(`/drafts/${encodeURIComponent(id)}`),
-        ),
+        yield* api.request(`/drafts/${encodeURIComponent(id)}`),
       )
-      if (!draft?.id || !draft.refType) {
+      if (!draft) {
         return yield* Effect.fail(
           new Generic({ message: `draft not found: ${id}` }),
         )
       }
-      const resource = REF_TYPE_TO_RESOURCE[draft.refType]
+      const resource = REF_TYPE_TO_RESOURCE[draft.document.refType]
       if (!resource) {
         return yield* Effect.fail(
           new Generic({
-            message: `unsupported draft refType: ${draft.refType}`,
+            message: `unsupported draft refType: ${draft.document.refType}`,
           }),
         )
       }
 
-      const body: Record<string, unknown> = {
-        ...parseTypeSpecificData(draft.typeSpecificData),
-      }
-      if (draft.title !== undefined) body.title = draft.title
-      if (draft.text !== undefined) body.text = draft.text
-      if (draft.content !== undefined && draft.content !== null)
-        body.content = draft.content
-      if (draft.contentFormat !== undefined)
-        body.contentFormat = draft.contentFormat
-      if (draft.meta !== undefined && draft.meta !== null)
-        body.meta = camelizeDeep(draft.meta)
-      // Sending draftId makes the server link the draft to the created
-      // resource and mark its current version as published; the draft is
-      // retained with its history.
-      body.draftId = draft.id
+      const res = yield* publishSavedDraft(api, draft, aiResources)
 
-      let res: unknown
-      if (draft.refId) {
-        // Draft is attached to an existing resource: apply changes and make
-        // sure the result is live.
-        if (draft.refType !== 'page') body.isPublished = true
-        res = yield* api.request(`/${resource}/${draft.refId}`, {
-          method: 'PATCH',
-          body,
-        })
-      } else {
-        if (draft.refType !== 'page') body.isPublished = true
-        res = yield* api.request(`/${resource}`, {
-          method: 'POST',
-          body,
-        })
-      }
-
-      const publishedId = extractId(res) ?? draft.refId
-      yield* renderer.emitSuccess(silent ? { ok: true, id: publishedId } : res)
-      if (open && publishedId && draft.refType !== 'page') {
-        yield* openAdminEdit(resource as 'posts' | 'notes', publishedId)
+      yield* renderer.emitSuccess(silent ? { ok: true } : res)
+      if (open) {
+        yield* openAdminDraftEdit(
+          resource as 'notes' | 'pages' | 'posts',
+          draft.id,
+          draft.document.refId ?? undefined,
+        )
       }
     }),
 ).pipe(
   Command.withDescription(
-    'publish a draft: creates the post/note/page (or applies to the linked one) and marks it live',
+    'publish the current head revision of one draft branch',
   ),
 )

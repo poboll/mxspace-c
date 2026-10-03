@@ -21,7 +21,7 @@ RUN node -p "require('./apps/admin/package.json').version" > ./out/admin/version
 
 FROM node:24-alpine AS runner
 
-RUN apk add zip unzip postgresql-client bash fish rsync jq curl openrc --no-cache
+RUN apk add zip unzip postgresql-client bash fish rsync jq curl openrc tini --no-cache
 
 # Chromium + fonts/nss for the agent-browser headless fallback used by the
 # Open Graph enrichment provider (fetchMode = "browser"). Alpine's chromium
@@ -36,15 +36,20 @@ RUN apk add --no-cache \
     ttf-freefont \
     font-noto-cjk
 
-RUN npm i -g agent-browser
+ARG AGENT_BROWSER_VERSION=0.37.1
+RUN npm i -g agent-browser@${AGENT_BROWSER_VERSION}
 
 WORKDIR /app
 COPY --from=builder /app/out .
 
 RUN npm i sharp -g
 RUN npm i sharp
+# Nest 12 WsAdapter loads `ws` at runtime via createRequire(import.meta.url).
+# The production image only copies the Vite bundle, so install it next to sharp.
+RUN npm i ws@8.21.3
 
 COPY --chmod=755 docker-entrypoint.sh .
+COPY docker-browser-watchdog.mjs .
 
 # V8 code cache for the bundle. Warmed at build time so the cache ships inside
 # the image — a fresh container (rolling deploy) hits it on first boot instead
@@ -66,4 +71,4 @@ ENV AGENT_BROWSER_CHROME_ARGS="--no-sandbox --disable-dev-shm-usage --disable-gp
 
 EXPOSE 2333
 
-ENTRYPOINT [ "./docker-entrypoint.sh" ]
+ENTRYPOINT [ "/sbin/tini", "--", "./docker-entrypoint.sh" ]

@@ -2,6 +2,7 @@ import { Injectable, Logger, type OnModuleInit } from '@nestjs/common'
 import { OnEvent } from '@nestjs/event-emitter'
 import pLimit from 'p-limit'
 
+import { OperationContext } from '~/common/contexts/operation.context'
 import { AppErrorCode, createAppException } from '~/common/errors'
 import { BusinessEvents } from '~/constants/business-event.constant'
 import { DatabaseService } from '~/processors/database/database.service'
@@ -16,6 +17,7 @@ import { throwIfAborted } from '~/utils/abort.util'
 
 import { ConfigsService } from '../../configs/configs.service'
 import { FileService } from '../../file/file.service'
+import { MAX_LANGS_PER_TASK } from '../ai.constants'
 import { AiGenerationMetricsService } from '../ai-generation-metrics/ai-generation-metrics.service'
 import { parseLanguageCode } from '../ai-language.util'
 import { AITaskType, type TtsTaskPayload } from '../ai-task/ai-task.types'
@@ -36,6 +38,7 @@ import { withTtsLangLock } from './tts-lang-lock'
 import {
   buildTtsObjectKey,
   computeTtsObjectFingerprint,
+  resolveTtsObjectKeyPrefix,
 } from './tts-object-key'
 import {
   resolveTtsLanguageControl,
@@ -47,7 +50,6 @@ import { resolveTtsSourceContent } from './tts-source-content'
 // concurrency 3 would otherwise open sixty provider connections at once.
 const GLOBAL_SPEECH_LIMIT = pLimit(8)
 
-const MAX_LANGS_PER_TASK = 8
 const DEFAULT_AUDIO_FORMAT = 'mp3'
 
 interface LanguageRunInput {
@@ -132,6 +134,7 @@ export class AiTtsService implements OnModuleInit {
     }
 
     const { prefix } = await this.configService.get('imageStorageOptions')
+    const objectKeyPrefix = resolveTtsObjectKeyPrefix(prefix)
 
     const perLang: TtsLanguageResult[] = []
     const skipped: Array<{ lang: string; reason: string }> = []
@@ -148,11 +151,13 @@ export class AiTtsService implements OnModuleInit {
       force: Boolean(payload.force),
       maxCharsPerChunk: config.maxCharsPerChunk,
       maxCharsPerRun: config.maxCharsPerRun,
-      objectKeyPrefix: prefix,
+      objectKeyPrefix,
       provider: {
         provider: provider.id,
         apiKey: provider.apiKey,
         endpoint: provider.endpoint || undefined,
+        projectId: provider.projectId,
+        providerType: provider.type,
       },
       refId: payload.refId,
       sourceLang,
@@ -390,6 +395,7 @@ export class AiTtsService implements OnModuleInit {
     const runtime = new TtsRuntimeAdapter({
       ...input.provider,
       model: voice.model,
+      sessionId: OperationContext.currentId(),
     })
     const limit = pLimit(input.concurrency)
     const displaced: TtsStoredObject[] = []

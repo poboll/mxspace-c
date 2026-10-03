@@ -1,13 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useMemo } from 'react'
 import { toast } from 'sonner'
-import type { OauthOptions, OauthProviderType } from '../../types/settings'
 
 import { getOption, patchOption } from '~/api/options'
 import { useI18n } from '~/i18n'
 import { adminQueryKeys } from '~/query/keys'
 
 import { accountQueryKey, oauthProviders } from '../../constants'
+import type { OauthOptions, OauthProviderPayload } from '../../types/settings'
 import { flattenOauthOptions } from '../../utils/oauth'
 import { getErrorMessage } from '../../utils/settings'
 import { SettingsSection } from '../SettingsPrimitives'
@@ -23,30 +23,22 @@ export function OauthSection() {
   })
 
   const saveMutation = useMutation({
-    mutationFn: (payload: {
-      clientId: string
-      clientSecret: string
-      enabled: boolean
-      type: OauthProviderType
-    }) =>
+    mutationFn: (payload: OauthProviderPayload) =>
       patchOption('oauth', {
         providers: [{ enabled: payload.enabled, type: payload.type }],
-        public: {
-          [payload.type]: {
-            clientId: payload.clientId,
-          },
-        },
-        secrets: {
-          [payload.type]: {
-            clientSecret: payload.clientSecret,
-          },
-        },
+        public: { [payload.type]: payload.public },
+        secrets: { [payload.type]: payload.secrets },
       }),
     onError: (error: unknown) =>
       toast.error(getErrorMessage(error, t('settings.oauth.error.save'))),
     onSuccess: async () => {
       toast.success(t('settings.oauth.success.save'))
-      await queryClient.invalidateQueries({ queryKey: accountQueryKey })
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: accountQueryKey }),
+        queryClient.invalidateQueries({
+          queryKey: adminQueryKeys.settings.reviewDemo(),
+        }),
+      ])
     },
   })
 
@@ -74,6 +66,7 @@ export function OauthSection() {
           {oauthProviders.map((provider) => (
             <OauthProviderSection
               data={oauthData[provider.type]}
+              fields={provider.fields}
               key={provider.type}
               label={provider.label}
               onSave={(payload) => saveMutation.mutate(payload)}

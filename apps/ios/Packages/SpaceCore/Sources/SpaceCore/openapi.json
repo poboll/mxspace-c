@@ -1,7 +1,7 @@
 {
   "openapi": "3.1.0",
   "info": {
-    "title": "MX Space Core API",
+    "title": "Mix Space Core API",
     "version": "v3",
     "description": "Endpoints consumed by the Space iOS client. Generated from Zod schemas — do not edit by hand."
   },
@@ -245,16 +245,11 @@
     "/notifications/push/activate": {
       "post": {
         "operationId": "activatePushNotifications",
-        "summary": "Bind this authenticated owner installation to a Push Relay",
+        "summary": "Claim a Push Relay activation ticket for this device, optionally associating the current reader",
         "tags": [
           "notifications"
         ],
         "parameters": [],
-        "security": [
-          {
-            "bearerAuth": []
-          }
-        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -286,115 +281,6 @@
                 }
               }
             }
-          },
-          "4XX": {
-            "description": "Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "5XX": {
-            "description": "Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/notifications/push/status": {
-      "get": {
-        "operationId": "getPushNotificationStatus",
-        "summary": "Read the current owner push binding status",
-        "tags": [
-          "notifications"
-        ],
-        "parameters": [],
-        "security": [
-          {
-            "bearerAuth": []
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "OK",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "required": [
-                    "data"
-                  ],
-                  "properties": {
-                    "data": {
-                      "$ref": "#/components/schemas/PushStatus"
-                    },
-                    "meta": {
-                      "$ref": "#/components/schemas/ResponseMeta"
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "4XX": {
-            "description": "Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "5XX": {
-            "description": "Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/notifications/push/{binding_id}": {
-      "delete": {
-        "operationId": "deactivatePushNotifications",
-        "summary": "Revoke one mobile push binding",
-        "tags": [
-          "notifications"
-        ],
-        "parameters": [
-          {
-            "name": "binding_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 128
-            }
-          }
-        ],
-        "security": [
-          {
-            "bearerAuth": []
-          }
-        ],
-        "responses": {
-          "204": {
-            "description": "No Content"
           },
           "4XX": {
             "description": "Error",
@@ -1655,6 +1541,88 @@
         }
       }
     },
+    "/recently/ref-candidates": {
+      "get": {
+        "operationId": "listRecentlyRefCandidates",
+        "summary": "Search internal content that can be attached as Recently context",
+        "tags": [
+          "recently"
+        ],
+        "parameters": [
+          {
+            "name": "search",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 120
+            }
+          },
+          {
+            "name": "size",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "default": 12,
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 20
+            }
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/RecentlyRefCandidate"
+                      }
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/ResponseMeta"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "4XX": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/recently/{id}": {
       "put": {
         "operationId": "updateRecently",
@@ -1810,6 +1778,99 @@
                   "properties": {
                     "data": {
                       "$ref": "#/components/schemas/EnrichmentResult"
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/ResponseMeta"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "4XX": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/enrichment/search/{provider}": {
+      "get": {
+        "operationId": "searchEnrichment",
+        "summary": "Search a configured enrichment provider by text",
+        "tags": [
+          "recently"
+        ],
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            }
+          },
+          {
+            "name": "query",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
+            }
+          },
+          {
+            "name": "size",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "default": 8,
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 20
+            }
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/EnrichmentResult"
+                      }
                     },
                     "meta": {
                       "$ref": "#/components/schemas/ResponseMeta"
@@ -2058,29 +2119,6 @@
           "enabled",
           "relay_url",
           "binding_id"
-        ],
-        "additionalProperties": false
-      },
-      "PushStatus": {
-        "type": "object",
-        "properties": {
-          "configured": {
-            "type": "boolean"
-          },
-          "enabled": {
-            "type": "boolean"
-          },
-          "relay_url": {
-            "type": "string",
-            "format": "uri"
-          },
-          "binding_id": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "configured",
-          "enabled"
         ],
         "additionalProperties": false
       },
@@ -3517,6 +3555,42 @@
           "ref_id": {
             "type": "string"
           },
+          "ref": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "post",
+                  "note",
+                  "page",
+                  "recently"
+                ]
+              },
+              "title": {
+                "type": "string"
+              },
+              "slug": {
+                "type": "string"
+              },
+              "nid": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "url": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "type"
+            ],
+            "additionalProperties": false
+          },
           "up": {
             "type": "integer",
             "minimum": -9007199254740991,
@@ -3537,8 +3611,14 @@
           },
           "metadata": {
             "type": "object",
-            "propertyNames": {
-              "type": "string"
+            "properties": {
+              "selected_enrichment_urls": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "format": "uri"
+                }
+              }
             },
             "additionalProperties": {}
           },
@@ -3560,6 +3640,31 @@
         ],
         "additionalProperties": {}
       },
+      "RecentlyRefCandidate": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "post",
+              "note",
+              "page",
+              "recently"
+            ]
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "type"
+        ],
+        "additionalProperties": false
+      },
       "RecentlyCreate": {
         "type": "object",
         "properties": {
@@ -3571,7 +3676,29 @@
             "type": "string"
           },
           "refType": {
-            "type": "string"
+            "type": "string",
+            "enum": [
+              "post",
+              "note",
+              "page",
+              "recently"
+            ]
+          },
+          "clearRef": {
+            "type": "boolean"
+          },
+          "metadata": {
+            "type": "object",
+            "properties": {
+              "selectedEnrichmentUrls": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "format": "uri"
+                }
+              }
+            },
+            "additionalProperties": {}
           }
         },
         "required": [
@@ -3604,6 +3731,42 @@
           "ref_id": {
             "type": "string"
           },
+          "ref": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "post",
+                  "note",
+                  "page",
+                  "recently"
+                ]
+              },
+              "title": {
+                "type": "string"
+              },
+              "slug": {
+                "type": "string"
+              },
+              "nid": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "url": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "type"
+            ],
+            "additionalProperties": false
+          },
           "up": {
             "type": "integer",
             "minimum": -9007199254740991,
@@ -3624,8 +3787,14 @@
           },
           "metadata": {
             "type": "object",
-            "propertyNames": {
-              "type": "string"
+            "properties": {
+              "selected_enrichment_urls": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "format": "uri"
+                }
+              }
             },
             "additionalProperties": {}
           },
@@ -3637,13 +3806,6 @@
             "additionalProperties": {
               "$ref": "#/components/schemas/EnrichmentResult"
             }
-          },
-          "ref": {
-            "type": "object",
-            "propertyNames": {
-              "type": "string"
-            },
-            "additionalProperties": {}
           }
         },
         "required": [

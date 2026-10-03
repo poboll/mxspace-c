@@ -1,8 +1,14 @@
-import type { Message as PiMessage, Tool, TSchema } from '@earendil-works/pi-ai'
+import type {
+  Api,
+  Message as PiMessage,
+  Tool,
+  TSchema,
+} from '@earendil-works/pi-ai'
 
 import type { AIProviderType } from '../ai.types'
 
 export interface RuntimeProviderInfo {
+  api?: Api
   id: string
   type: AIProviderType
   model: string
@@ -94,6 +100,8 @@ export interface StreamMessageOptions extends Omit<
    * for multi-turn tool-call conversations. The adapter detects per-element.
    */
   messages: (Message | PiMessage)[]
+  /** Stable provider-affinity key for a conversation or agent workflow. */
+  sessionId?: string
   systemPrompt?: string
   tools?: Tool[]
 }
@@ -115,9 +123,13 @@ export interface ModelInfo {
 export interface RuntimeConfig {
   apiKey: string
   endpoint?: string
+  /** Google Cloud project used by the native Vertex AI transport. */
+  projectId?: string
   modelListUrl?: string
   appendV1?: boolean
   model: string
   providerType: AIProviderType
   providerId: string
+  /** Default provider-affinity key for calls made through this runtime. */
+  sessionId?: string
 }

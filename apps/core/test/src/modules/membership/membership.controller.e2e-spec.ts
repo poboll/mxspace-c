@@ -1,5 +1,6 @@
 import * as schema from '@mx-space/db-schema/schema'
 import type { ModuleMetadata } from '@nestjs/common'
+import { eq } from 'drizzle-orm'
 import { drizzle } from 'drizzle-orm/node-postgres'
 import { Pool } from 'pg'
 import { createIsolatedPgDatabase } from 'test/helper/pg-testcontainer'
@@ -17,17 +18,57 @@ import { AppErrorCode, createAppException } from '~/common/errors'
 import { PG_DB_TOKEN } from '~/constants/system.constant'
 import { AuthService } from '~/modules/auth/auth.service'
 import { ConfigsService } from '~/modules/configs/configs.service'
+import { ArticlePurchaseRepository } from '~/modules/membership/article-purchase.repository'
+import { ArticlePurchaseService } from '~/modules/membership/article-purchase.service'
 import { BillingWebhookEventRepository } from '~/modules/membership/billing-webhook-event.repository'
 import { EntitlementService } from '~/modules/membership/entitlement.service'
 import { MembershipController } from '~/modules/membership/membership.controller'
 import { MembershipRepository } from '~/modules/membership/membership.repository'
 import { MembershipService } from '~/modules/membership/membership.service'
+import { AppleProvider } from '~/modules/membership/providers/apple.provider'
+import { appleAccountTokenForReader } from '~/modules/membership/providers/apple-transaction'
 import { DodoProvider } from '~/modules/membership/providers/dodo.provider'
 import { PaymentProviderRegistry } from '~/modules/membership/providers/provider.registry'
+import { SponsorsService } from '~/modules/membership/sponsors.service'
+import { PostRepository } from '~/modules/post/post.repository'
 import type { AppDatabase } from '~/processors/database/postgres.provider'
 import { SnowflakeService } from '~/shared/id/snowflake.service'
 
 import { createE2EApp } from '../../../helper/create-e2e-app'
+
+vi.mock('octokit', () => ({
+  Octokit: class {
+    graphql = async () => ({
+      viewer: {
+        sponsorshipsAsMaintainer: {
+          pageInfo: { hasNextPage: false, endCursor: null },
+          nodes: [
+            {
+              createdAt: '2025-01-01T00:00:00.000Z',
+              isActive: true,
+              tier: { name: '$5 a month', monthlyPriceInDollars: 5 },
+              sponsorEntity: {
+                databaseId: 4242,
+                login: 'sponsor-registered',
+                avatarUrl: 'https://avatars.example/4242',
+              },
+            },
+            {
+              createdAt: '2024-01-01T00:00:00.000Z',
+              isActive: false,
+              tier: null,
+              sponsorEntity: {
+                databaseId: 9999,
+                login: 'sponsor-unknown',
+                avatarUrl: 'https://avatars.example/9999',
+              },
+            },
+          ],
+        },
+      },
+    })
+  },
+}))
 
 const snowflake = new SnowflakeService()
 
@@ -37,6 +78,7 @@ const liveSubReaderId = snowflake.nextId()
 const expiredReaderId = snowflake.nextId()
 const checkoutActiveReaderId = snowflake.nextId()
 const checkoutExpiredReaderId = snowflake.nextId()
+const appleConfirmReaderId = snowflake.nextId()
 
 const readerUser = {
   id: readerId,
@@ -66,6 +108,13 @@ const checkoutExpiredReaderUser = {
   role: 'reader' as const,
 }
 
+const appleConfirmReaderUser = {
+  id: appleConfirmReaderId,
+  email: 'apple-confirm@example.com',
+  name: 'Reader Apple Confirm',
+  role: 'reader' as const,
+}
+
 const membershipConfig: {
   enabled: boolean
   provider: string | undefined
@@ -88,6 +137,8 @@ const configsServiceMock = {
   get: vi.fn(async (key: string) => {
     if (key === 'membership') return membershipConfig
     if (key === 'url') return urlConfig
+    if (key === 'thirdPartyServiceIntegration')
+      return { github: { token: 'gh-token' } }
     return {}
   }),
 }
@@ -113,6 +164,12 @@ const authServiceMock = {
         session: { token: 'checkout-expired-token' },
       }
     }
+    if (header === 'apple-confirm') {
+      return {
+        user: appleConfirmReaderUser,
+        session: { token: 'apple-confirm-token' },
+      }
+    }
     return null
   }),
 }
@@ -126,10 +183,18 @@ const createCheckoutMock = vi.fn(
 const verifyAndParseWebhookMock = vi.fn(
   async (rawBody: Buffer, headers: Record<string, string>) => {
     if (headers['x-signature'] !== 'valid') {
-      throw createAppException(AppErrorCode.WEBHOOK_VERIFY_FAILED)
+      throw createAppException(AppErrorCode.WEBHOOK_SIGNATURE_INVALID)
     }
     const body = JSON.parse(rawBody.toString('utf8'))
+    if (body.ignoredReason) {
+      return {
+        kind: 'ignored' as const,
+        rawType: body.providerEventType,
+        reason: body.ignoredReason,
+      }
+    }
     return {
+      kind: 'membership' as const,
       event: {
         eventId: body.eventId,
         provider: 'dodo',
@@ -159,15 +224,26 @@ const dodoProviderMock = {
   getPlanPricing: getPlanPricingMock,
 }
 
+const verifySignedTransactionMock = vi.fn()
+
+const appleProviderMock = {
+  verifySignedTransaction: verifySignedTransactionMock,
+}
+
 const membershipModule: ModuleMetadata = {
   controllers: [MembershipController],
   providers: [
     MembershipService,
     MembershipRepository,
+    ArticlePurchaseRepository,
+    ArticlePurchaseService,
     BillingWebhookEventRepository,
     EntitlementService,
+    PostRepository,
+    SponsorsService,
     { provide: SnowflakeService, useValue: snowflake },
     { provide: DodoProvider, useValue: dodoProviderMock },
+    { provide: AppleProvider, useValue: appleProviderMock },
     PaymentProviderRegistry,
     { provide: AuthService, useValue: authServiceMock },
     { provide: ConfigsService, useValue: configsServiceMock },
@@ -194,6 +270,7 @@ beforeAll(async () => {
     { id: expiredReaderId, name: 'Reader Expired', role: 'reader' },
     { id: checkoutActiveReaderId, name: 'Checkout Active', role: 'reader' },
     { id: checkoutExpiredReaderId, name: 'Checkout Expired', role: 'reader' },
+    { id: appleConfirmReaderId, name: 'Apple Confirm', role: 'reader' },
   ])
 }, 120_000)
 
@@ -210,9 +287,19 @@ describe('MembershipController (e2e)', () => {
     membershipConfig.enabled = true
     membershipConfig.provider = 'dodo'
     membershipConfig.webhookSigningKey = 'webhook-key'
+    delete (membershipConfig as { appleAppAppleId?: string }).appleAppAppleId
+    delete (membershipConfig as { appleBundleId?: string }).appleBundleId
+    delete (membershipConfig as { appleKeyId?: string }).appleKeyId
+    delete (membershipConfig as { appleIssuerId?: string }).appleIssuerId
+    delete (membershipConfig as { applePrivateKey?: string }).applePrivateKey
+    delete (membershipConfig as { appleMonthlyProductId?: string })
+      .appleMonthlyProductId
+    delete (membershipConfig as { appleYearlyProductId?: string })
+      .appleYearlyProductId
     urlConfig.webUrl = undefined
     createCheckoutMock.mockClear()
     verifyAndParseWebhookMock.mockClear()
+    verifySignedTransactionMock.mockReset()
   })
 
   describe('GET /membership/config-status', () => {
@@ -227,6 +314,7 @@ describe('MembershipController (e2e)', () => {
       expect(res.json()).toEqual({
         data: {
           api_key_configured: true,
+          apple_private_key_configured: false,
           supported_providers: ['dodo'],
           webhook_signing_key_configured: true,
         },
@@ -432,6 +520,8 @@ describe('MembershipController (e2e)', () => {
       expect(res.statusCode).toBe(200)
       expect(res.json()).toEqual({
         data: {
+          apple_iap: { enabled: false },
+          article_purchase: { enabled: false },
           enabled: true,
           plans: [
             {
@@ -480,7 +570,143 @@ describe('MembershipController (e2e)', () => {
       })
 
       expect(res.statusCode).toBe(200)
-      expect(res.json()).toEqual({ data: { enabled: false, plans: [] } })
+      expect(res.json()).toEqual({
+        data: {
+          apple_iap: { enabled: false },
+          article_purchase: { enabled: false },
+          enabled: false,
+          plans: [],
+        },
+      })
+    })
+
+    it('reports appleIap when Apple fields are configured', async () => {
+      Object.assign(membershipConfig, {
+        appleAppAppleId: '1234567890',
+        appleBundleId: 'dev.yohaku.app',
+        appleKeyId: 'KEYID',
+        appleIssuerId: 'ISSUER',
+        applePrivateKey:
+          '-----BEGIN PRIVATE KEY-----\\nX\\n-----END PRIVATE KEY-----',
+        appleMonthlyProductId: 'yohaku.membership.monthly',
+        appleYearlyProductId: 'yohaku.membership.yearly',
+      })
+
+      const res = await proxy.app.inject({
+        method: 'GET',
+        url: '/membership/plans',
+      })
+
+      expect(res.statusCode).toBe(200)
+      expect(res.json().data.apple_iap).toEqual({
+        enabled: true,
+        monthly_product_id: 'yohaku.membership.monthly',
+        yearly_product_id: 'yohaku.membership.yearly',
+      })
+    })
+  })
+
+  describe('GET /membership/apple/account-token', () => {
+    it('returns the authenticated reader token', async () => {
+      const res = await proxy.app.inject({
+        method: 'GET',
+        url: '/membership/apple/account-token',
+        headers: { 'x-test-reader': 'apple-confirm' },
+      })
+
+      expect(res.statusCode).toBe(200)
+      expect(res.json().data).toEqual({
+        account_token: appleAccountTokenForReader(appleConfirmReaderId),
+      })
+    })
+
+    it('returns 401 without a reader session', async () => {
+      const res = await proxy.app.inject({
+        method: 'GET',
+        url: '/membership/apple/account-token',
+      })
+      expect(res.statusCode).toBe(401)
+    })
+  })
+
+  describe('POST /membership/apple/confirm', () => {
+    it('returns the new apple membership for a signed-in reader', async () => {
+      Object.assign(membershipConfig, {
+        appleAppAppleId: '1234567890',
+        appleBundleId: 'dev.yohaku.app',
+        appleKeyId: 'KEYID',
+        appleIssuerId: 'ISSUER',
+        applePrivateKey:
+          '-----BEGIN PRIVATE KEY-----\\nX\\n-----END PRIVATE KEY-----',
+        appleMonthlyProductId: 'yohaku.membership.monthly',
+        appleYearlyProductId: 'yohaku.membership.yearly',
+      })
+      verifySignedTransactionMock.mockResolvedValueOnce({
+        appAccountToken: appleAccountTokenForReader(appleConfirmReaderId),
+        environment: 'production',
+        expiresDate: Date.now() + 86_400_000,
+        originalTransactionId: 'orig-e2e',
+        productId: 'yohaku.membership.monthly',
+        signedDate: Date.now(),
+        transactionId: 'txn-e2e',
+      })
+
+      const res = await proxy.app.inject({
+        method: 'POST',
+        url: '/membership/apple/confirm',
+        headers: { 'x-test-reader': 'apple-confirm' },
+        payload: { signedTransactionInfo: 'jws' },
+      })
+
+      expect(res.statusCode).toBe(200)
+      expect(res.json().data).toMatchObject({
+        plan: 'monthly',
+        provider: 'apple',
+        status: 'active',
+      })
+    })
+
+    it('rejects a signed transaction owned by another reader', async () => {
+      Object.assign(membershipConfig, {
+        appleAppAppleId: '1234567890',
+        appleBundleId: 'dev.yohaku.app',
+        appleKeyId: 'KEYID',
+        appleIssuerId: 'ISSUER',
+        applePrivateKey:
+          '-----BEGIN PRIVATE KEY-----\\nX\\n-----END PRIVATE KEY-----',
+        appleMonthlyProductId: 'yohaku.membership.monthly',
+        appleYearlyProductId: 'yohaku.membership.yearly',
+      })
+      verifySignedTransactionMock.mockResolvedValueOnce({
+        appAccountToken: appleAccountTokenForReader(otherReaderId),
+        environment: 'production',
+        expiresDate: Date.now() + 86_400_000,
+        originalTransactionId: 'orig-other-reader',
+        productId: 'yohaku.membership.monthly',
+        signedDate: Date.now(),
+        transactionId: 'txn-other-reader',
+      })
+
+      const res = await proxy.app.inject({
+        method: 'POST',
+        url: '/membership/apple/confirm',
+        headers: { 'x-test-reader': 'apple-confirm' },
+        payload: { signedTransactionInfo: 'jws' },
+      })
+
+      expect(res.statusCode).toBe(400)
+      expect(res.json()).toMatchObject({
+        error: { code: AppErrorCode.MEMBERSHIP_APPLE_TRANSACTION_INVALID },
+      })
+    })
+
+    it('returns 401 without a reader session', async () => {
+      const res = await proxy.app.inject({
+        method: 'POST',
+        url: '/membership/apple/confirm',
+        payload: { signedTransactionInfo: 'jws' },
+      })
+      expect(res.statusCode).toBe(401)
     })
   })
 
@@ -591,6 +817,34 @@ describe('MembershipController (e2e)', () => {
       })
     })
 
+    it('returns 200 without persisting an audit row for an ignored event', async () => {
+      const res = await proxy.app.inject({
+        method: 'POST',
+        url: '/membership/webhook/dodo',
+        headers: { 'x-signature': 'valid', 'content-type': 'application/json' },
+        payload: {
+          eventId: 'evt_ignored_1',
+          providerEventType: 'payment.succeeded',
+          ignoredReason: 'unsupported_event',
+        },
+      })
+
+      expect(res.statusCode).toBe(200)
+      expect(res.json()).toMatchObject({
+        data: { ok: true, applied: false, ignored: 'unsupported_event' },
+      })
+
+      const webhookEventRepository = proxy.app.get(
+        BillingWebhookEventRepository,
+      )
+      expect(
+        await webhookEventRepository.findByProviderAndEventId(
+          'dodo',
+          'evt_ignored_1',
+        ),
+      ).toBeFalsy()
+    })
+
     it('returns 400 on signature verification failure', async () => {
       const res = await proxy.app.inject({
         method: 'POST',
@@ -604,11 +858,11 @@ describe('MembershipController (e2e)', () => {
 
       expect(res.statusCode).toBe(400)
       expect(res.json()).toMatchObject({
-        error: { code: 'WEBHOOK_VERIFY_FAILED' },
+        error: { code: 'WEBHOOK_SIGNATURE_INVALID' },
       })
     })
 
-    it('returns 400 for an unknown provider param', async () => {
+    it('returns 404 for an unknown provider param', async () => {
       const res = await proxy.app.inject({
         method: 'POST',
         url: '/membership/webhook/unknown-provider',
@@ -616,9 +870,9 @@ describe('MembershipController (e2e)', () => {
         payload: {},
       })
 
-      expect(res.statusCode).toBe(400)
+      expect(res.statusCode).toBe(404)
       expect(res.json()).toMatchObject({
-        error: { code: 'WEBHOOK_VERIFY_FAILED' },
+        error: { code: 'MEMBERSHIP_PROVIDER_NOT_SUPPORTED' },
       })
       expect(verifyAndParseWebhookMock).not.toHaveBeenCalled()
     })
@@ -754,6 +1008,144 @@ describe('MembershipController (e2e)', () => {
       expect(res.json()).toMatchObject({
         error: { code: 'READER_NOT_FOUND' },
       })
+    })
+  })
+
+  describe('GitHub sponsors import', () => {
+    beforeAll(async () => {
+      await proxy.app
+        .get<AppDatabase>(PG_DB_TOKEN)
+        .insert(schema.accounts)
+        .values({
+          id: 'acc-github-other',
+          userId: otherReaderId,
+          accountId: '4242',
+          providerId: 'github',
+          providerAccountId: '4242',
+        })
+    })
+
+    it('lists sponsors matched against github-linked readers', async () => {
+      const res = await proxy.app.inject({
+        method: 'GET',
+        url: '/membership/sponsors/github',
+        headers: { 'test-token': '1' },
+      })
+
+      expect(res.statusCode).toBe(200)
+      const rows = res.json().data
+      expect(rows).toHaveLength(2)
+      expect(rows[0]).toMatchObject({
+        github_id: '4242',
+        login: 'sponsor-registered',
+        reader: { id: otherReaderId },
+      })
+      expect(rows[1]).toMatchObject({ github_id: '9999', reader: null })
+    })
+
+    it('grants months to selected readers and reports skips', async () => {
+      const before = await proxy.app
+        .get(MembershipRepository)
+        .findByReaderId(otherReaderId)
+
+      const res = await proxy.app.inject({
+        method: 'POST',
+        url: '/membership/sponsors/import',
+        headers: { 'test-token': '1', 'content-type': 'application/json' },
+        payload: {
+          grants: [
+            { readerId: otherReaderId, months: 3 },
+            { readerId: liveSubReaderId, months: 3 },
+          ],
+        },
+      })
+
+      expect(res.statusCode).toBe(200)
+      expect(res.json().data).toMatchObject({
+        granted: 1,
+        skipped: [{ reader_id: liveSubReaderId }],
+      })
+
+      const after = await proxy.app
+        .get(MembershipRepository)
+        .findByReaderId(otherReaderId)
+      const expectedBase =
+        before &&
+        before.status === 'active' &&
+        before.currentPeriodEnd > new Date()
+          ? before.currentPeriodEnd
+          : new Date()
+      const expected = new Date(expectedBase)
+      expected.setUTCMonth(expected.getUTCMonth() + 3)
+      expect(after?.provider).toBe('manual')
+      expect(
+        Math.abs(after!.currentPeriodEnd.getTime() - expected.getTime()),
+      ).toBeLessThan(5000)
+    })
+
+    it('rejects callers without the owner test-token header', async () => {
+      const res = await proxy.app.inject({
+        method: 'GET',
+        url: '/membership/sponsors/github',
+      })
+      expect(res.statusCode).toBe(401)
+    })
+  })
+
+  describe('sponsors CSV preview', () => {
+    beforeAll(async () => {
+      await proxy.app
+        .get<AppDatabase>(PG_DB_TOKEN)
+        .update(schema.readers)
+        .set({ email: 'Expired-Reader@Example.com', handle: 'expired-handle' })
+        .where(eq(schema.readers.id, expiredReaderId))
+    })
+
+    it('matches rows by github id, email or handle and keeps unmatched rows', async () => {
+      const csv = [
+        'github_id,email,handle,months,note',
+        '4242,,,12,"tier, $5"',
+        ',expired-reader@example.com,,,',
+        ',,expired-handle,3,',
+        '9999,nobody@example.com,,1,',
+      ].join('\n')
+      const res = await proxy.app.inject({
+        method: 'POST',
+        url: '/membership/sponsors/csv/preview',
+        headers: { 'test-token': '1', 'content-type': 'application/json' },
+        payload: { csv },
+      })
+
+      expect(res.statusCode).toBe(200)
+      const rows = res.json().data
+      expect(rows).toHaveLength(4)
+      expect(rows[0]).toMatchObject({
+        line: 2,
+        github_id: '4242',
+        months: 12,
+        note: 'tier, $5',
+        reader: { id: otherReaderId },
+      })
+      expect(rows[1]).toMatchObject({
+        email: 'expired-reader@example.com',
+        reader: { id: expiredReaderId },
+      })
+      expect(rows[2]).toMatchObject({
+        handle: 'expired-handle',
+        months: 3,
+        reader: { id: expiredReaderId },
+      })
+      expect(rows[3]).toMatchObject({ github_id: '9999', reader: null })
+    })
+
+    it('rejects a CSV without identity columns', async () => {
+      const res = await proxy.app.inject({
+        method: 'POST',
+        url: '/membership/sponsors/csv/preview',
+        headers: { 'test-token': '1', 'content-type': 'application/json' },
+        payload: { csv: 'months,note\n1,x' },
+      })
+      expect(res.statusCode).toBe(400)
     })
   })
 })

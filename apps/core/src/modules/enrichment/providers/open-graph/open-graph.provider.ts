@@ -114,6 +114,7 @@ export class OpenGraphProvider implements EnrichmentProvider {
         timeoutMs,
         maxBodyBytes,
         captureScreenshot,
+        ...(ctx?.signal ? { signal: ctx.signal } : {}),
       })
       safe = fetched.html
       screenshotBytes = fetched.screenshotBytes

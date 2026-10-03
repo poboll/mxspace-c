@@ -2,183 +2,241 @@ import SpaceCore
 import SpaceUI
 import SwiftUI
 
-struct RecentlyComposerView: View {
-    @Environment(\.dismiss) private var dismiss
-    @FocusState private var isEditorFocused: Bool
-
-    let service: RecentlyService
-    let navigationTitle: String
-    private let confirmationTitle: String
-    private let initialText: String
-    private let onDirtyChange: ((Bool) -> Void)?
-    /// Returns nil on success, or a message to show in place.
-    let onSave: (String) async -> String?
-
-    @State private var text: String
-    @State private var preview: MediaCard?
-    @State private var previewedURL: String?
-    @State private var isResolving = false
-    @State private var isPosting = false
-    @State private var postFailure: String?
-    @State private var confirmDiscard = false
-    @State private var previewTask: Task<Void, Never>?
-
-    init(
-        service: RecentlyService,
-        initialText: String = "",
-        navigationTitle: String = "New Recently",
-        onDirtyChange: ((Bool) -> Void)? = nil,
-        onSave: @escaping (String) async -> String?
-    ) {
-        self.service = service
-        self.navigationTitle = navigationTitle
-        self.confirmationTitle = initialText.isEmpty ? "Publish" : "Save"
-        self.initialText = initialText
-        self.onDirtyChange = onDirtyChange
-        self.onSave = onSave
-        _text = State(initialValue: initialText)
-    }
-
-    private var isDirty: Bool {
-        text != initialText
-    }
+struct RecentlyInlineComposerView: View {
+    @Bindable var store: RecentlyComposerStore
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @FocusState private var inputFocused: Bool
 
     var body: some View {
-        NavigationStack {
-            VStack(alignment: .leading, spacing: Spacing.regular) {
-                TextEditor(text: $text)
-                    .focused($isEditorFocused)
-                    .frame(minHeight: 140)
-                    .scrollContentBackground(.hidden)
-                    .padding(Spacing.tight)
-                    .background(
-                        RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
-                            .fill(Color(.secondarySystemBackground))
-                    )
-                    .accessibilityIdentifier("recently.composer.text")
+        VStack(spacing: Spacing.xSmall) {
+            if store.isEditing {
+                editingBanner
+            }
 
-                previewSection
+            if !store.isShowingComposerPanel {
+                metadataTray
 
-                if let postFailure {
-                    Label(postFailure, systemImage: "exclamationmark.triangle")
+                if let error = store.errorMessage {
+                    Label(error, systemImage: "exclamationmark.triangle")
                         .font(.caption)
-                        .foregroundStyle(.red)
+                        .foregroundStyle(Color(SpacePalette.danger))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .lineLimit(2)
                         .accessibilityIdentifier("recently.composer.error")
                 }
+            }
 
-                Spacer()
-            }
-            .padding(Spacing.regular)
-            .navigationTitle(navigationTitle)
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") {
-                        if isDirty {
-                            confirmDiscard = true
-                        } else {
-                            dismiss()
-                        }
-                    }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button(confirmationTitle, action: post)
-                        .disabled(trimmed.isEmpty || isPosting)
-                        .accessibilityIdentifier("recently.composer.post")
-                }
-            }
-            .confirmationDialog(
-                "Discard this draft?",
-                isPresented: $confirmDiscard,
-                titleVisibility: .visible
-            ) {
-                Button("Discard Draft", role: .destructive) { dismiss() }
-                Button("Keep Editing", role: .cancel) {}
-            }
-            .onChange(of: text) { _, newValue in
-                onDirtyChange?(newValue != initialText)
-                schedulePreview(for: newValue)
-            }
-            .onDisappear { previewTask?.cancel() }
-            .task { isEditorFocused = true }
+            inputRow
+        }
+        .padding(.horizontal, Spacing.small)
+        .padding(.vertical, Spacing.xSmall)
+        .onChange(of: store.text) { _, _ in
+            store.textDidChange()
+        }
+        .onChange(of: store.contextSearch) { _, _ in
+            store.contextSearchDidChange()
+        }
+        .onChange(of: store.focusRequestID) { _, _ in
+            inputFocused = true
+        }
+        .onChange(of: store.dismissRequestID) { _, _ in
+            inputFocused = false
         }
     }
 
     @ViewBuilder
-    private var previewSection: some View {
-        if isResolving {
-            HStack(spacing: Spacing.tight) {
-                ProgressView()
-                Text("Resolving link…").font(.caption).foregroundStyle(.secondary)
+    private var metadataTray: some View {
+        if store.context != nil || !store.selectedLinks.isEmpty {
+            RecentlyComposerSelectionTray(store: store)
+        }
+    }
+
+    private var editingBanner: some View {
+        HStack(spacing: Spacing.small) {
+            Label("Editing", systemImage: "pencil")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(Color(SpacePalette.accent))
+            Spacer()
+            Button("Cancel") {
+                store.cancelEditing()
             }
-        } else if let preview {
-            VStack(alignment: .leading, spacing: Spacing.tight) {
-                EnrichmentCardView(card: preview)
-                if needsIsolation { isolationHint }
+            .font(.caption)
+            .buttonStyle(.plain)
+            .foregroundStyle(Color(SpacePalette.accent))
+        }
+        .frame(minHeight: 24)
+    }
+
+    private func executeSlashCommand(_ command: RecentlySlashCommand) {
+        store.executeSlashCommand(command)
+    }
+
+    private var inputRow: some View {
+        HStack(alignment: .bottom, spacing: Spacing.xSmall) {
+            Button {
+                store.toggleContextPicker()
+            } label: {
+                Image(systemName: "paperclip")
+                    .font(.system(size: 22, weight: .medium))
+                    .foregroundStyle(
+                        store.context != nil || store.isChoosingContext || !store.links.isEmpty
+                            ? Color(SpacePalette.accent)
+                            : Color(SpacePalette.primary)
+                    )
+                    .frame(width: 44, height: 44)
+                    .background {
+                        if reduceTransparency {
+                            Circle().fill(Color(SpacePalette.surface))
+                        } else {
+                            Circle()
+                                .fill(.clear)
+                                .glassEffect(.regular.interactive(), in: Circle())
+                        }
+                    }
+                    .overlay {
+                        Circle()
+                            .stroke(Color.white.opacity(0.52), lineWidth: 0.5)
+                    }
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Add context or media")
+            .accessibilityHint("Search internal context or TMDB")
+            .accessibilityIdentifier("recently.composer.context")
+
+            HStack(alignment: .bottom, spacing: 0) {
+                TextField(inputPlaceholder, text: inputText, axis: .vertical)
+                    .lineLimit(store.isChoosingContext ? 1 ... 1 : 1 ... 6)
+                    .focused($inputFocused)
+                    .font(.body)
+                    .autocorrectionDisabled(store.isChoosingContext)
+                    .padding(.leading, 14)
+                    .padding(.vertical, 10)
+                    .frame(minHeight: 44, alignment: .leading)
+                    .layoutPriority(1)
+                    .onSubmit {
+                        guard !store.isChoosingContext else { return }
+                        if let command = store.slashCommands.first {
+                            executeSlashCommand(command)
+                        }
+                    }
+                    .accessibilityIdentifier(
+                        store.isChoosingContext
+                            ? "recently.composer.attachment.search"
+                            : "recently.composer.text"
+                    )
+
+                if store.isChoosingContext {
+                    searchTrailingControl
+                } else {
+                    submitButton
+                }
+            }
+            .background {
+                let shape = RoundedRectangle(
+                    cornerRadius: Radius.composer,
+                    style: .continuous
+                )
+                if reduceTransparency {
+                    shape.fill(Color(SpacePalette.inset))
+                } else {
+                    shape
+                        .fill(.clear)
+                        .glassEffect(.regular, in: shape)
+                }
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: Radius.composer, style: .continuous)
+                    .stroke(Color.white.opacity(0.42), lineWidth: 0.5)
             }
         }
     }
 
-    /// The server only cardifies a link that owns its whole paragraph, so a
-    /// resolvable link sitting mid-sentence previews here but would post as
-    /// plain text. Offer the one-tap rewrite rather than a passive warning.
-    private var needsIsolation: Bool {
-        guard let previewedURL else { return false }
-        return !RecentlyService.cardableURLs(in: text).contains(previewedURL)
-    }
-
-    private var isolationHint: some View {
-        HStack(alignment: .top, spacing: Spacing.tight) {
-            Image(systemName: "info.circle")
-            Text("Posts as plain text unless the link sits on its own line.")
-            Spacer(minLength: 0)
-            Button("Fix") {
-                guard let previewedURL else { return }
-                text = RecentlyService.isolatingLink(previewedURL, in: text)
+    private var inputText: Binding<String> {
+        Binding(
+            get: { store.isChoosingContext ? store.contextSearch : store.text },
+            set: { value in
+                if store.isChoosingContext {
+                    store.contextSearch = value
+                } else {
+                    store.text = value
+                }
             }
-            .buttonStyle(.borderless)
-            .accessibilityIdentifier("recently.composer.isolateLink")
-        }
-        .font(.caption)
-        .foregroundStyle(.secondary)
+        )
     }
 
-    private var trimmed: String {
-        text.trimmingCharacters(in: .whitespacesAndNewlines)
+    private var inputPlaceholder: String {
+        store.isChoosingContext ? store.attachmentSearchPlaceholder : "Share something…"
     }
 
-    /// Debounced so a URL typed character by character resolves once, not once
-    /// per keystroke — the resolve endpoint is rate limited.
-    private func schedulePreview(for value: String) {
-        previewTask?.cancel()
-        guard let url = RecentlyService.firstDetectedURL(in: value) else {
-            preview = nil
-            previewedURL = nil
-            isResolving = false
-            return
-        }
-        if url == previewedURL, preview != nil { return }
-
-        previewTask = Task {
-            try? await Task.sleep(for: .milliseconds(600))
-            guard !Task.isCancelled else { return }
-            isResolving = true
-            defer { isResolving = false }
-            preview = (try? await service.resolve(url: url)).flatMap { $0 }.map(MediaCard.init)
-            previewedURL = preview == nil ? nil : url
+    @ViewBuilder
+    private var searchTrailingControl: some View {
+        if store.contextSearch.isEmpty {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(Color(SpacePalette.subtle))
+                .frame(width: 44, height: 44)
+                .accessibilityHidden(true)
+        } else {
+            Button("Clear search", systemImage: "xmark.circle.fill") {
+                store.contextSearch = ""
+            }
+            .labelStyle(.iconOnly)
+            .buttonStyle(.plain)
+            .font(.system(size: 17, weight: .semibold))
+            .foregroundStyle(Color(SpacePalette.subtle))
+            .frame(width: 44, height: 44)
+            .contentShape(.rect)
         }
     }
 
-    private func post() {
-        isPosting = true
-        postFailure = nil
-        Task {
-            defer { isPosting = false }
-            if let failure = await onSave(trimmed) {
-                postFailure = failure
+    private var submitButton: some View {
+        Button {
+            if let command = store.slashCommands.first {
+                executeSlashCommand(command)
             } else {
-                dismiss()
+                Task { await store.submit() }
+            }
+        } label: {
+            Group {
+                if store.isSaving {
+                    ProgressView()
+                        .controlSize(.small)
+                } else {
+                    Image(systemName: "paperplane.fill")
+                }
+            }
+            .font(.system(size: 17, weight: .semibold))
+            .foregroundStyle(.white)
+            .frame(width: 40, height: 40)
+            .background {
+                let tint = store.canSubmit || store.isSaving
+                    ? Color(SpacePalette.accent)
+                    : Color(SpacePalette.subtle).opacity(0.18)
+                if reduceTransparency {
+                    Circle().fill(tint)
+                } else {
+                    Circle()
+                        .fill(.clear)
+                        .glassEffect(.regular.tint(tint).interactive(), in: Circle())
+                }
+            }
+            .overlay {
+                Circle()
+                    .stroke(Color.white.opacity(0.58), lineWidth: 0.5)
             }
         }
+        .buttonStyle(.plain)
+        .frame(width: 44, height: 44)
+        .contentShape(.rect)
+        .disabled(!store.canSubmit)
+        .accessibilityLabel(submitAccessibilityLabel)
+        .accessibilityIdentifier("recently.composer.post")
+    }
+
+    private var submitAccessibilityLabel: String {
+        if store.isSaving { return "Publishing" }
+        if let command = store.slashCommands.first { return "Run \(command.title)" }
+        return store.isEditing ? "Save" : "Publish"
     }
 }

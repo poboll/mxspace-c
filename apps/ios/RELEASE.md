@@ -6,9 +6,12 @@ App Store Connect.
 
 ## Trigger
 
-- A push to any branch runs the workflow only when `apps/ios/**` changed.
+- A push to `master` runs the workflow only when `apps/ios/**` or
+  `.github/workflows/mobile-testflight.yml` changed.
 - `workflow_dispatch` supports an explicit release from any selected ref after
   the workflow exists on the default branch.
+- Core CI skips iOS-only commits (`apps/ios/**`); those still go through this
+  workflow on `master`.
 
 ## GitHub Actions secrets
 
@@ -31,5 +34,7 @@ Create the iOS app record for bundle ID `dev.innei.space` before the first
 upload. The workflow uses `GITHUB_RUN_NUMBER` as the build number and keeps the
 marketing version in `project.yml`.
 
-The open-source build leaves `SPACE_PUSH_RELAY_URL` empty, so Notifications are
-hidden until the official relay is configured and verified separately.
+The open-source tree leaves `SPACE_PUSH_RELAY_URL` empty, so local builds hide
+Notifications. Official TestFlight reads the origin from the repository
+variable `SPACE_PUSH_RELAY_URL` and overrides the build setting at archive
+time.

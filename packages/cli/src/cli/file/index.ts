@@ -1,4 +1,4 @@
-import { Command } from '@effect/cli'
+import { Command } from 'effect/cli'
 
 import { registerCommandHelp } from '../help/registry'
 import { del } from './delete'
@@ -9,6 +9,7 @@ import { upload } from './upload'
 const help = registerCommandHelp({
   name: 'file',
   description: 'upload and manage static files (images, icons, avatars)',
+  skillChapter: 'commands-file',
   verbs: [
     {
       name: 'upload',

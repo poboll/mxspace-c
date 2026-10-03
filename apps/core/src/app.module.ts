@@ -1,4 +1,3 @@
-import { LoggerModule } from '@innei/pretty-logger-nestjs'
 import type {
   DynamicModule,
   MiddlewareConsumer,
@@ -25,7 +24,9 @@ import { ActivityModule } from './modules/activity/activity.module'
 import { AggregateModule } from './modules/aggregate/aggregate.module'
 import { AiModule } from './modules/ai/ai.module'
 import { AnalyzeModule } from './modules/analyze/analyze.module'
+import { ArticleBodyModule } from './modules/article-body/article-body.module'
 import { AuthModule } from './modules/auth/auth.module'
+import { ReviewDemoModule } from './modules/auth/review-demo.module'
 import { BackupModule } from './modules/backup/backup.module'
 import { CategoryModule } from './modules/category/category.module'
 import { CommentModule } from './modules/comment/comment.module'
@@ -54,6 +55,7 @@ import { PageProxyModule } from './modules/pageproxy/pageproxy.module'
 import { PollModule } from './modules/poll/poll.module'
 import { PostModule } from './modules/post/post.module'
 import { ProjectModule } from './modules/project/project.module'
+import { PublishModule } from './modules/publish/publish.module'
 import { PushModule } from './modules/push/push.module'
 import { ReaderModule } from './modules/reader/reader.module'
 import { RecentlyModule } from './modules/recently/recently.module'
@@ -74,13 +76,14 @@ import { AgentBrowserModule } from './processors/agent-browser/agent-browser.mod
 import { DatabaseModule } from './processors/database/database.module'
 import { GatewayModule } from './processors/gateway/gateway.module'
 import { HelperModule } from './processors/helper/helper.module'
+import { PrettyLoggerModule } from './processors/logger/pretty-logger.module'
 import { RedisModule } from './processors/redis/redis.module'
 import { TaskQueueModule } from './processors/task-queue/task-queue.module'
 import { SampleResponseInterceptor } from './shared/sample/sample-response.interceptor'
 
 @Module({
   imports: [
-    LoggerModule,
+    PrettyLoggerModule,
     DatabaseModule,
     AppMigrationsModule,
     RedisModule,
@@ -91,9 +94,11 @@ import { SampleResponseInterceptor } from './shared/sample/sample-response.inter
     AckModule,
     ActivityModule,
     AggregateModule,
+    ArticleBodyModule,
     AnalyzeModule,
     EnrichmentModule,
     AuthModule.forRoot(),
+    ReviewDemoModule,
     BackupModule,
     BizHelperModule,
     CategoryModule,
@@ -117,6 +122,7 @@ import { SampleResponseInterceptor } from './shared/sample/sample-response.inter
     PageModule,
     PollModule,
     PostModule,
+    PublishModule,
     ProjectModule,
     PushModule,
     RecentlyModule,

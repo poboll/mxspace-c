@@ -1,17 +1,7 @@
-import {
-  Body,
-  Delete,
-  Get,
-  Param,
-  Patch,
-  Post,
-  Put,
-  Query,
-} from '@nestjs/common'
+import { Body, Delete, Get, Param, Patch, Query } from '@nestjs/common'
 
 import { ApiController } from '~/common/decorators/api-controller.decorator'
 import { Auth } from '~/common/decorators/auth.decorator'
-import { HTTPDecorators } from '~/common/decorators/http.decorator'
 import { Lang } from '~/common/decorators/lang.decorator'
 import { AppErrorCode, createAppException } from '~/common/errors'
 import { withMeta } from '~/common/response/envelope.types'
@@ -26,18 +16,17 @@ import {
   buildArticleTranslationMeta,
   TranslationService,
 } from '~/processors/helper/helper.translation.service'
-import { EntityIdDto } from '~/shared/dto/id.dto'
-import { BasicPagerDto } from '~/shared/dto/pager.dto'
+import { type EntityIdDto, EntityIdSchema } from '~/shared/dto/id.dto'
+import { type BasicPagerDto, BasicPagerSchema } from '~/shared/dto/pager.dto'
 
 import { EnrichmentService } from '../enrichment/enrichment.service'
 import {
-  PageDetailQueryDto,
-  PageDto,
-  PageReorderDto,
-  PartialPageDto,
+  type PageDetailQueryDto,
+  PageDetailQuerySchema,
+  type PageReorderDto,
+  PageReorderSchema,
 } from './page.schema'
 import { PageService } from './page.service'
-import type { PageModel } from './page.types'
 
 @ApiController('pages')
 export class PageController {
@@ -48,7 +37,10 @@ export class PageController {
   ) {}
 
   @Get('/')
-  async getPagesSummary(@Query() query: BasicPagerDto, @Lang() lang?: string) {
+  async getPagesSummary(
+    @Query({ schema: BasicPagerSchema }) query: BasicPagerDto,
+    @Lang() lang?: string,
+  ) {
     const { size, page } = query
     const result = await this.pageService.listPaginated(page, size)
 
@@ -141,7 +133,10 @@ export class PageController {
 
   @Get('/:id')
   @Auth()
-  async getPageById(@Param() params: EntityIdDto, @Lang() lang?: string) {
+  async getPageById(
+    @Param({ schema: EntityIdSchema }) params: EntityIdDto,
+    @Lang() lang?: string,
+  ) {
     const page = await this.pageService.findById(params.id)
     if (!page) {
       throw createAppException(AppErrorCode.PAGE_NOT_FOUND, { id: params.id })
@@ -153,7 +148,7 @@ export class PageController {
   @Get('/slug/:slug')
   async getPageBySlug(
     @Param('slug') slug: string,
-    @Query() query: PageDetailQueryDto,
+    @Query({ schema: PageDetailQuerySchema }) query: PageDetailQueryDto,
     @Lang() lang?: string,
   ) {
     if (typeof slug !== 'string') {
@@ -167,31 +162,9 @@ export class PageController {
     return this.buildPageDetailResponse(page, lang, 'detail')
   }
 
-  @Post('/')
-  @Auth()
-  @HTTPDecorators.Idempotence()
-  create(@Body() body: PageDto) {
-    return this.pageService.create(body as unknown as PageModel)
-  }
-
-  @Put('/:id')
-  @Auth()
-  async modify(@Body() body: PageDto, @Param() params: EntityIdDto) {
-    const { id } = params
-    await this.pageService.updateById(id, body as unknown as PageModel)
-    return this.pageService.findById(id)
-  }
-
-  @Patch('/:id')
-  @Auth()
-  async patch(@Body() body: PartialPageDto, @Param() params: EntityIdDto) {
-    const { id } = params
-    await this.pageService.updateById(id, body as unknown as Partial<PageModel>)
-  }
-
   @Patch('/reorder')
   @Auth()
-  async reorder(@Body() body: PageReorderDto) {
+  async reorder(@Body({ schema: PageReorderSchema }) body: PageReorderDto) {
     const { seq } = body
     const orders = seq.map(($) => $.order)
     const uniq = new Set(orders)
@@ -207,7 +180,7 @@ export class PageController {
 
   @Delete('/:id')
   @Auth()
-  async deletePage(@Param() params: EntityIdDto) {
+  async deletePage(@Param({ schema: EntityIdSchema }) params: EntityIdDto) {
     await this.pageService.deleteById(params.id)
   }
 }

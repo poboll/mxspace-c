@@ -1,42 +1,37 @@
-import type { AIProviderConfig, AIReasoningEffort } from '../ai.types'
-import { AIProviderType } from '../ai.types'
+import type {
+  AIProviderConfig,
+  AIProviderType,
+  AIReasoningEffort,
+} from '../ai.types'
 import type { IModelRuntime } from './model-runtime.interface'
-import { PiRuntimeAdapter } from './pi-runtime.adapter'
-import type { RuntimeConfig } from './types'
+import type { TextProtocolAdapterConfig } from './text-protocol.registry'
+import { defaultTextProtocolAdapterRegistry } from './text-protocol.registry'
 
 export function createModelRuntime(
   config: AIProviderConfig,
   modelOverride?: string,
-  options?: { reasoningEffort?: AIReasoningEffort },
+  options?: { reasoningEffort?: AIReasoningEffort; sessionId?: string },
 ): IModelRuntime {
+  if (config.type === 'typesafe')
+    throw new Error('Decision providers cannot generate text')
   const model = modelOverride || config.defaultModel
 
-  const runtimeConfig: RuntimeConfig = {
+  const runtimeConfig: TextProtocolAdapterConfig = {
     apiKey: config.apiKey,
     endpoint: config.endpoint,
+    projectId: config.projectId,
     modelListUrl: config.modelListUrl,
     appendV1: config.appendV1,
     model,
     providerType: config.type,
     providerId: config.id,
+    contextWindow: config.contextWindow ?? undefined,
+    maxTokens: config.maxTokens ?? undefined,
+    reasoningEffort: options?.reasoningEffort,
+    sessionId: options?.sessionId,
   }
 
-  switch (config.type) {
-    case AIProviderType.Anthropic:
-    case AIProviderType.OpenAICompatible:
-    case AIProviderType.Generic: {
-      return new PiRuntimeAdapter({
-        ...runtimeConfig,
-        contextWindow: config.contextWindow ?? undefined,
-        maxTokens: config.maxTokens ?? undefined,
-        reasoningEffort: options?.reasoningEffort,
-      })
-    }
-
-    default: {
-      throw new Error(`Unsupported provider type: ${config.type as string}`)
-    }
-  }
+  return defaultTextProtocolAdapterRegistry.resolve(runtimeConfig)
 }
 
 export function createRuntimeForModelList(

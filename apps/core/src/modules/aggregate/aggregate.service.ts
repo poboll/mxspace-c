@@ -218,7 +218,7 @@ export class AggregateService {
     const baseURL = urlConfig.webUrl?.replace(/\/$/, '') ?? ''
     const items = latest as Array<Record<string, any>>
     return {
-      title: seo.title || owner.name || 'Mx Space',
+      title: seo.title || owner.name || 'Mix Space',
       url: urlConfig.webUrl ?? '',
       author: owner.name || '',
       description: seo.description || '',
@@ -387,13 +387,16 @@ export class AggregateService {
       this.postService.repository.countPublishedByDay(since),
       this.noteService.repository.countPublishedByDay(since),
     ])
-    const merged = new Map<string, number>()
-    for (const { date, count } of [...postDays, ...noteDays]) {
-      merged.set(date, (merged.get(date) ?? 0) + count)
+    const merged = new Map<string, HeatmapDay>()
+    const bump = (date: string, key: 'notes' | 'posts', count: number) => {
+      const day = merged.get(date) ?? { date, count: 0, posts: 0, notes: 0 }
+      day[key] += count
+      day.count += count
+      merged.set(date, day)
     }
-    return [...merged.entries()]
-      .map(([date, count]) => ({ date, count }))
-      .sort((a, b) => a.date.localeCompare(b.date))
+    for (const { date, count } of postDays) bump(date, 'posts', count)
+    for (const { date, count } of noteDays) bump(date, 'notes', count)
+    return [...merged.values()].sort((a, b) => a.date.localeCompare(b.date))
   }
 
   async getAllReadAndLikeCount(type: ReadAndLikeCountDocumentType) {
@@ -539,6 +542,9 @@ export class AggregateService {
 
   @OnEvent(EventBusEvents.CleanAggregateCache)
   async cleanCache() {
-    await this.redisService.getClient().del(CacheKeys.Aggregate)
+    await Promise.all([
+      this.redisService.getClient().del(CacheKeys.RSS, CacheKeys.RSSXml),
+      this.redisService.deleteKeysByPattern(`${CacheKeys.Aggregate}*`),
+    ])
   }
 }

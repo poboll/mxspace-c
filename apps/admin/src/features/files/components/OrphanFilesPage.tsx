@@ -239,7 +239,20 @@ export function OrphanFilesPage() {
           setPage(1)
           await queryClient.invalidateQueries({ queryKey: filesQueryKey })
         },
-        scan: (apply) => reconcileMutation.mutateAsync(apply),
+        scan: async (apply) => {
+          const toastId = toast.loading(
+            t(
+              apply
+                ? 'files.toast.referencesApplying'
+                : 'files.toast.referencesScanning',
+            ),
+          )
+          try {
+            return await reconcileMutation.mutateAsync(apply)
+          } finally {
+            toast.dismiss(toastId)
+          }
+        },
       })
       if (!appliedResult) return
       toast.success(
@@ -261,19 +274,26 @@ export function OrphanFilesPage() {
   }
 
   const refreshing = orphansQuery.isFetching
-  const maintenanceBusy =
-    reconcileFlowActive || cleanupMutation.isPending || refreshing
+  const maintenanceRunning = reconcileFlowActive || cleanupMutation.isPending
+  const maintenanceBusy = maintenanceRunning || refreshing
   const hasSelection = selectedCount > 0 || selectAllAcross
 
   const ctxValue = useMemo(
     () => ({
       page,
+      listUpdatedAt: orphansQuery.dataUpdatedAt,
       deleteDisabled: deleteMutation.isPending,
       onBack: closeDetail,
       onDelete: (item: FileRowItem<OrphanFile>) => void confirmAndDelete(item),
       onOpenPreview: (next: { name: string; url: string }) => setPreview(next),
     }),
-    [page, deleteMutation.isPending, closeDetail, confirmAndDelete],
+    [
+      page,
+      orphansQuery.dataUpdatedAt,
+      deleteMutation.isPending,
+      closeDetail,
+      confirmAndDelete,
+    ],
   )
 
   return (
@@ -309,7 +329,7 @@ export function OrphanFilesPage() {
                   onClick={() => void orphansQuery.refetch()}
                   title={t('files.action.refresh')}
                   type="button"
-                  variant="subtle"
+                  variant="ghost"
                 >
                   <RefreshCw
                     aria-hidden="true"
@@ -319,11 +339,18 @@ export function OrphanFilesPage() {
                 <DropdownMenu>
                   <DropdownMenu.Trigger
                     aria-label={t('files.orphans.maintenance')}
-                    className="inline-flex size-10 items-center justify-center rounded-md text-fg-muted transition-colors hover:bg-surface-inset hover:text-fg focus-visible:ring-[3px] focus-visible:ring-accent/15 data-[popup-open]:bg-surface-inset"
+                    className="inline-flex size-8 items-center justify-center rounded-sm text-fg-muted outline-hidden transition-colors hover:bg-surface-inset hover:text-fg focus-visible:ring-[3px] focus-visible:ring-accent/15 data-[popup-open]:bg-surface-inset"
                     title={t('files.orphans.maintenance')}
                     type="button"
                   >
-                    <MoreHorizontal aria-hidden="true" className="size-4" />
+                    {maintenanceRunning ? (
+                      <Loader2
+                        aria-hidden="true"
+                        className="size-4 animate-spin"
+                      />
+                    ) : (
+                      <MoreHorizontal aria-hidden="true" className="size-4" />
+                    )}
                   </DropdownMenu.Trigger>
                   <DropdownMenu.Content align="end" className="w-56">
                     <DropdownMenu.Item
@@ -368,18 +395,27 @@ export function OrphanFilesPage() {
             />
 
             {filtered.length > 0 ? (
-              <div className="flex h-9 shrink-0 items-center gap-3 border-b border-border bg-surface-inset px-4 text-xs">
-                <Checkbox
+              <div
+                className="grid min-h-12 shrink-0 grid-cols-[2.5rem_minmax(0,1fr)_auto] items-center gap-x-1 border-b border-border bg-surface-inset px-2 py-1 text-xs"
+                data-testid="orphan-files-selection-bar"
+              >
+                <label
                   aria-label={t('files.orphans.selectCurrentPage')}
-                  checked={allVisibleSelected || selectAllAcross}
-                  indeterminate={indeterminate}
-                  onCheckedChange={(checked) => {
-                    setSelectAllAcross(false)
-                    if (checked) selection.selectAll()
-                    else selection.clear()
-                  }}
-                />
-                <span className="text-fg-muted">
+                  className="inline-flex size-10 cursor-pointer items-center justify-center"
+                  title={t('files.orphans.selectCurrentPage')}
+                >
+                  <Checkbox
+                    aria-label={t('files.orphans.selectCurrentPage')}
+                    checked={allVisibleSelected || selectAllAcross}
+                    indeterminate={indeterminate}
+                    onCheckedChange={(checked) => {
+                      setSelectAllAcross(false)
+                      if (checked) selection.selectAll()
+                      else selection.clear()
+                    }}
+                  />
+                </label>
+                <span className="min-w-0 truncate whitespace-nowrap tabular-nums text-fg-muted">
                   {selectAllAcross
                     ? t('files.orphans.allSelected', { count: total })
                     : selectedCount > 0
@@ -388,9 +424,29 @@ export function OrphanFilesPage() {
                         })
                       : t('files.orphans.selectCurrentPage')}
                 </span>
+                <button
+                  aria-hidden={!hasSelection}
+                  className={cn(
+                    'inline-flex h-10 shrink-0 items-center gap-1 rounded px-2 text-xs text-red-600 transition-colors hover:bg-red-50 disabled:pointer-events-none disabled:opacity-50 dark:text-red-400 dark:hover:bg-red-950/40',
+                    !hasSelection && 'pointer-events-none invisible',
+                  )}
+                  disabled={!hasSelection || batchDeleteMutation.isPending}
+                  onClick={() => void confirmBatchDelete()}
+                  tabIndex={hasSelection ? undefined : -1}
+                  type="button"
+                >
+                  <Trash2 aria-hidden="true" className="size-3.5" />
+                  <span className="whitespace-nowrap tabular-nums">
+                    {selectAllAcross
+                      ? t('files.orphans.deleteAll', { count: total })
+                      : t('files.orphans.deleteSelected', {
+                          count: selectedCount,
+                        })}
+                  </span>
+                </button>
                 {allVisibleSelected && pageCount > 1 && !selectAllAcross ? (
                   <button
-                    className="text-fg underline-offset-2 hover:underline"
+                    className="col-start-2 col-end-4 inline-flex min-h-10 min-w-0 items-center self-stretch text-left leading-tight text-fg underline-offset-2 hover:underline"
                     onClick={() => setSelectAllAcross(true)}
                     type="button"
                   >
@@ -399,7 +455,7 @@ export function OrphanFilesPage() {
                 ) : null}
                 {selectAllAcross ? (
                   <button
-                    className="text-fg underline-offset-2 hover:underline"
+                    className="col-start-2 col-end-4 inline-flex min-h-10 min-w-0 items-center self-stretch text-left leading-tight text-fg underline-offset-2 hover:underline"
                     onClick={() => {
                       setSelectAllAcross(false)
                       selection.clear()
@@ -409,22 +465,6 @@ export function OrphanFilesPage() {
                     {t('files.orphans.deselectAll')}
                   </button>
                 ) : null}
-                <button
-                  className={cn(
-                    'ml-auto inline-flex h-6 items-center gap-1 rounded px-2 text-xs text-red-600 transition-colors hover:bg-red-50 disabled:pointer-events-none disabled:opacity-50 dark:text-red-400 dark:hover:bg-red-950/40',
-                    !hasSelection && 'pointer-events-none invisible',
-                  )}
-                  disabled={!hasSelection || batchDeleteMutation.isPending}
-                  onClick={() => void confirmBatchDelete()}
-                  type="button"
-                >
-                  <Trash2 aria-hidden="true" className="size-3.5" />
-                  {selectAllAcross
-                    ? t('files.orphans.deleteAll', { count: total })
-                    : t('files.orphans.deleteSelected', {
-                        count: selectedCount,
-                      })}
-                </button>
               </div>
             ) : null}
 

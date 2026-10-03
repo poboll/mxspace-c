@@ -94,6 +94,25 @@ import Testing
         #expect(try await service.resolve(url: "https://a.example") == nil)
     }
 
+    @Test func searchesTMDBThroughTheAuthenticatedEnrichmentEndpoint() async throws {
+        let (service, transport) = makeService([
+            .init(
+                operationID: "searchEnrichment",
+                status: .ok,
+                json: #"{"data":[{"title":"Dune","description":"A desert epic","url":"https://www.themoviedb.org/movie/438631","category":"media","subtype":"movie","published_at":"2021-09-15","fetched_at":"","thumbnail_image":{"url":"https://image.tmdb.org/t/p/w500/dune.jpg"}}]}"#
+            ),
+        ])
+
+        let result = try #require(try await service.searchTMDB(query: "Dune", size: 6).first)
+
+        #expect(result.title == "Dune")
+        #expect(result.url == "https://www.themoviedb.org/movie/438631")
+        #expect(transport.operationIDs == ["searchEnrichment"])
+        #expect(transport.requestPaths.first?.contains("query=Dune") == true)
+        #expect(transport.requestPaths.first?.contains("size=6") == true)
+        #expect(transport.requestPaths.first?.contains("/enrichment/search/tmdb") == true)
+    }
+
     /// Mirrors `UrlExtractorService.extractFromMarkdown`: only a link that owns
     /// its whole *paragraph* becomes a card. A single newline is not a
     /// paragraph break in markdown — verified against a live instance.
@@ -137,6 +156,17 @@ import Testing
         #expect(RecentlyService.firstCardableURL(in: rewritten) == url)
     }
 
+    @Test func preparingAppendsASelectedSearchResultAsACardifiableLink() {
+        let url = "https://www.themoviedb.org/movie/438631"
+        let prepared = RecentlyService.preparing(
+            content: "Watched Dune tonight.",
+            selectedEnrichmentURLs: [url]
+        )
+
+        #expect(prepared == "Watched Dune tonight.\n\n\(url)")
+        #expect(RecentlyService.cardableURLs(in: prepared) == [url])
+    }
+
     @Test func deleteRollsBackNothingOnSuccess() async throws {
         let (service, transport) = makeService([.init(status: .noContent, json: "")])
         try await service.delete(id: "1")
@@ -160,5 +190,59 @@ import Testing
         #expect(entry.content == "edited")
         #expect(object["content"] == "edited")
         #expect(transport.requestPaths.first?.contains("/recently/1") == true)
+    }
+
+    @Test func editCanClearContextAndPersistTheSelectedLinkSet() async throws {
+        let (service, transport) = makeService([
+            .init(
+                status: .ok,
+                json: #"{"data":{"id":"1","content":"edited","type":"link","metadata":{"selected_enrichment_urls":["https://a.example"]},"ref_type":null,"ref_id":null,"comments_index":0,"allow_comment":true,"up":0,"down":0,"created_at":"2026-08-04T19:06:00Z","modified_at":"2026-08-07T03:00:00Z","enrichments":{}}}"#
+            ),
+        ])
+
+        _ = try await service.update(
+            id: "1",
+            content: "edited",
+            clearContext: true,
+            selectedEnrichmentURLs: ["https://a.example"]
+        )
+        let body = try #require(transport.requestBodies.first?.data(using: .utf8))
+        let object = try #require(
+            JSONSerialization.jsonObject(with: body) as? [String: Any]
+        )
+        let metadata = try #require(object["metadata"] as? [String: Any])
+
+        #expect(object["clearRef"] as? Bool == true)
+        #expect(metadata["selectedEnrichmentUrls"] as? [String] == ["https://a.example"])
+    }
+
+    @Test func loadsTypedInternalContextCandidates() async throws {
+        let (service, transport) = makeService([
+            .init(
+                operationID: "listRecentlyRefCandidates",
+                status: .ok,
+                json: #"{"data":[{"id":"post-1","type":"post","title":"Design notes"}]}"#
+            ),
+        ])
+
+        let candidates = try await service.refCandidates(search: "design", size: 8)
+
+        #expect(candidates == [
+            RecentlyContext(id: "post-1", kind: .post, title: "Design notes"),
+        ])
+        #expect(transport.requestPaths.first?.contains("search=design") == true)
+        #expect(transport.requestPaths.first?.contains("size=8") == true)
+    }
+
+    @Test func responseMetadataRestoresAnExplicitLinkSelection() async throws {
+        let (service, _) = makeService([
+            .init(
+                status: .ok,
+                json: #"{"data":[{"id":"1","content":"https://a.example\n\nhttps://b.example","type":"link","created_at":"2026-08-04T10:00:00Z","metadata":{"selected_enrichment_urls":["https://b.example"]},"enrichments":{}}]}"#
+            ),
+        ])
+
+        let entry = try #require(try await service.list().first)
+        #expect(entry.selectedEnrichmentURLs == ["https://b.example"])
     }
 }

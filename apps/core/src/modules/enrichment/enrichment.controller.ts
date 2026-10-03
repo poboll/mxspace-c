@@ -23,19 +23,31 @@ import { ConfigsService } from '~/modules/configs/configs.service'
 
 import { EnrichmentRepository } from './enrichment.repository'
 import {
-  AdminCaptureListQueryDto,
-  AdminListQueryDto,
-  AdminProbeBodyDto,
-  ResolveQueryDto,
+  type AdminCaptureListQueryDto,
+  AdminCaptureListQuerySchema,
+  type AdminListQueryDto,
+  AdminListQuerySchema,
+  type AdminProbeBodyDto,
+  AdminProbeBodySchema,
+  type EnrichmentSearchQueryDto,
+  EnrichmentSearchQuerySchema,
+  type ResolveQueryDto,
+  ResolveQuerySchema,
 } from './enrichment.schema'
 import { EnrichmentService } from './enrichment.service'
-import type { EnrichmentResult, ProviderMeta } from './enrichment.types'
-import { ProviderDisabledError, TokenMissingError } from './enrichment.types'
+import {
+  EnrichmentDeferredError,
+  type EnrichmentResult,
+  ProviderDisabledError,
+  type ProviderMeta,
+  TokenMissingError,
+} from './enrichment.types'
 import { EnrichmentCaptureRepository } from './enrichment-capture.repository'
 import { EnrichmentOriginGuard } from './enrichment-origin.guard'
 import { CaptureStorageService } from './providers/open-graph/capture-storage.service'
 
 const PUBLIC_RESOLVE_THROTTLE = { default: { limit: 30, ttl: 60_000 } }
+const SEARCH_THROTTLE = { default: { limit: 60, ttl: 60_000 } }
 const ADMIN_PROBE_THROTTLE = { default: { limit: 30, ttl: 60_000 } }
 
 const DEFAULT_CAPTURE_MAX_ITEMS = 500
@@ -55,7 +67,7 @@ export class EnrichmentController {
   @Throttle(PUBLIC_RESOLVE_THROTTLE)
   @UseGuards(EnrichmentOriginGuard)
   async resolve(
-    @Query() query: ResolveQueryDto,
+    @Query({ schema: ResolveQuerySchema }) query: ResolveQueryDto,
     @Lang() lang: string | undefined,
     @Res({ passthrough: true }) res: any,
   ): Promise<EnrichmentResult | undefined> {
@@ -69,6 +81,36 @@ export class EnrichmentController {
       }
       this.bumpCaptureAccess(result)
       return result as EnrichmentResult
+    } catch (error) {
+      if (
+        error instanceof EnrichmentDeferredError ||
+        error instanceof ProviderDisabledError ||
+        error instanceof TokenMissingError
+      ) {
+        res.status(204)
+        return
+      }
+      throw error
+    }
+  }
+
+  @Get('search/:provider')
+  @Auth()
+  @Throttle(SEARCH_THROTTLE)
+  async search(
+    @Param('provider') provider: string,
+    @Query({ schema: EnrichmentSearchQuerySchema })
+    query: EnrichmentSearchQueryDto,
+    @Lang() lang: string | undefined,
+    @Res({ passthrough: true }) res: any,
+  ): Promise<EnrichmentResult[] | undefined> {
+    try {
+      return await this.enrichmentService.search(
+        provider,
+        query.query,
+        lang,
+        query.size,
+      )
     } catch (error) {
       if (
         error instanceof ProviderDisabledError ||
@@ -88,11 +130,20 @@ export class EnrichmentController {
     @Param('provider') provider: string,
     @Req() req: FastifyRequest,
     @Lang() lang: string | undefined,
-  ): Promise<EnrichmentResult> {
+    @Res({ passthrough: true }) res: any,
+  ): Promise<EnrichmentResult | undefined> {
     const id = decodeURIComponent((req.params as Record<string, string>)['*'])
-    const result = await this.enrichmentService.getOne(provider, id, lang)
-    this.bumpCaptureAccess(result)
-    return result
+    try {
+      const result = await this.enrichmentService.getOne(provider, id, lang)
+      this.bumpCaptureAccess(result)
+      return result
+    } catch (error) {
+      if (error instanceof EnrichmentDeferredError) {
+        res.status(204)
+        return
+      }
+      throw error
+    }
   }
 
   private bumpCaptureAccess(result: EnrichmentResult | undefined): void {
@@ -104,7 +155,9 @@ export class EnrichmentController {
 
   @Get('admin/list')
   @Auth()
-  async list(@Query() query: AdminListQueryDto) {
+  async list(
+    @Query({ schema: AdminListQuerySchema }) query: AdminListQueryDto,
+  ) {
     const result = await this.enrichmentService.list(query.page, query.size, {
       onlyFailed: query.onlyFailed,
       locale: query.locale,
@@ -124,7 +177,7 @@ export class EnrichmentController {
     @Query('lang') lang?: string,
   ): Promise<EnrichmentResult> {
     const id = decodeURIComponent((req.params as Record<string, string>)['*'])
-    return this.enrichmentService.refresh(provider, id, lang)
+    return this.enrichmentService.refresh(provider, id, lang, { force: true })
   }
 
   @Delete('admin/cache/:provider/*')
@@ -180,7 +233,10 @@ export class EnrichmentController {
 
   @Get('admin/captures')
   @Auth()
-  async listCaptures(@Query() query: AdminCaptureListQueryDto) {
+  async listCaptures(
+    @Query({ schema: AdminCaptureListQuerySchema })
+    query: AdminCaptureListQueryDto,
+  ) {
     const result = await this.captureRepository.listJoined(
       query.page,
       query.size,
@@ -236,6 +292,7 @@ export class EnrichmentController {
       row.locale,
       {
         url: row.url,
+        force: true,
       },
     )
 
@@ -251,7 +308,7 @@ export class EnrichmentController {
   @Auth()
   @Throttle(ADMIN_PROBE_THROTTLE)
   @HttpCode(200)
-  probe(@Body() body: AdminProbeBodyDto) {
+  probe(@Body({ schema: AdminProbeBodySchema }) body: AdminProbeBodyDto) {
     return this.enrichmentService.probe(body.url, body.useCache === true)
   }
 

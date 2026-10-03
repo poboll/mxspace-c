@@ -4,6 +4,7 @@ import { Navigate, Outlet, useLocation } from 'react-router'
 
 import { checkLogged } from '~/api/auth'
 import { loggedStatusQueryKey } from '~/features/auth/constants'
+import { PublishProcessDock } from '~/features/write/components/PublishProcessDock'
 import { useI18n } from '~/i18n'
 import { AdminShell } from '~/shell'
 import { SocketBridge } from '~/socket/SocketBridge'
@@ -23,7 +24,7 @@ export function ProtectedLayout() {
 
   if (loggedQuery.isLoading) {
     return (
-      <main className="flex h-screen items-center justify-center bg-white text-sm text-neutral-500 dark:bg-neutral-950 dark:text-neutral-400">
+      <main className="flex h-dvh items-center justify-center bg-white text-sm text-neutral-500 dark:bg-neutral-950 dark:text-neutral-400">
         {t('app.loading.auth')}
       </main>
     )
@@ -46,6 +47,7 @@ export function ProtectedLayout() {
           <Suspense fallback={<ShellContentLoader />}>
             <Outlet />
           </Suspense>
+          <PublishProcessDock />
         </AdminShell>
       </CommandPaletteProvider>
     </KeyboardShortcutsProvider>

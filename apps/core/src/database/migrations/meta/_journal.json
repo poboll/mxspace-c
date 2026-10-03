@@ -225,6 +225,76 @@
       "when": 1786435200000,
       "tag": "0031_ai_translations_updated_at_repair",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1786521600000,
+      "tag": "0032_ai_summaries_multilang",
+      "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1786974601234,
+      "tag": "0033_push_binding_optional_owner",
+      "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1787596646000,
+      "tag": "0034_webhook_event_names",
+      "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1788177600000,
+      "tag": "0035_tree_content_revisions",
+      "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1788360246000,
+      "tag": "0036_reader_blocks",
+      "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1789000000000,
+      "tag": "0037_draft_share_links",
+      "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1789257600000,
+      "tag": "0038_enrichment_fetch_state",
+      "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "7",
+      "when": 1789344000000,
+      "tag": "0039_article_purchases",
+      "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "7",
+      "when": 1790045227587,
+      "tag": "0040_comment_moderation",
+      "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1790877150039,
+      "tag": "0041_publish_ai_resources",
+      "breakpoints": true
     }
   ]
 }

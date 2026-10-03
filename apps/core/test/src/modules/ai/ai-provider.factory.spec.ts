@@ -1,17 +1,29 @@
-import { describe, expect, it } from 'vitest'
+import { Type } from '@earendil-works/pi-ai'
+import { registerBuiltInApiProviders } from '@earendil-works/pi-ai/compat'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { AIProviderType } from '~/modules/ai/ai.types'
 import { createModelRuntime } from '~/modules/ai/runtime'
 import { PiRuntimeAdapter } from '~/modules/ai/runtime/pi-runtime.adapter'
 
 interface AdapterInternals {
-  api: 'openai-completions' | 'anthropic-messages'
+  api: 'openai-completions' | 'anthropic-messages' | 'google-vertex'
+  buildStreamOptions: (options: object) => {
+    headers?: Record<string, string | null>
+    location?: string
+    project?: string
+  }
+  model: { api: string; baseUrl: string; id: string }
   piProviderId: string
 }
 
 function inspect(adapter: unknown): AdapterInternals {
   return adapter as unknown as AdapterInternals
 }
+
+afterEach(() => {
+  vi.restoreAllMocks()
+})
 
 describe('createModelRuntime — enum coverage', () => {
   it('constructs PiRuntimeAdapter with openai-completions api for OpenAICompatible', () => {
@@ -27,6 +39,7 @@ describe('createModelRuntime — enum coverage', () => {
     expect(runtime).toBeInstanceOf(PiRuntimeAdapter)
     expect(runtime.providerInfo.type).toBe(AIProviderType.OpenAICompatible)
     expect(runtime.providerInfo.model).toBe('deepseek-chat')
+    expect(runtime.providerInfo.api).toBe('openai-completions')
     expect(inspect(runtime).api).toBe('openai-completions')
   })
 
@@ -43,6 +56,7 @@ describe('createModelRuntime — enum coverage', () => {
     expect(runtime).toBeInstanceOf(PiRuntimeAdapter)
     expect(runtime.providerInfo.type).toBe(AIProviderType.Anthropic)
     expect(runtime.providerInfo.model).toBe('claude-sonnet-4-20250514')
+    expect(runtime.providerInfo.api).toBe('anthropic-messages')
     expect(inspect(runtime).api).toBe('anthropic-messages')
   })
 
@@ -61,6 +75,118 @@ describe('createModelRuntime — enum coverage', () => {
     expect(inspect(runtime).api).toBe('openai-completions')
   })
 
+  it('constructs a native Vertex text runtime from the persisted provider', () => {
+    const runtime = createModelRuntime({
+      id: 'vertex',
+      name: 'Vertex',
+      type: AIProviderType.GoogleVertex,
+      apiKey: 'vertex-key',
+      projectId: 'example-project',
+      endpoint:
+        'https://aiplatform.googleapis.com/v1/projects/example-project/locations/global/endpoints/openapi',
+      defaultModel: 'google/gemini-3.6-flash',
+      enabled: true,
+    })
+    expect(runtime).toBeInstanceOf(PiRuntimeAdapter)
+    expect(runtime.providerInfo.type).toBe(AIProviderType.GoogleVertex)
+    expect(runtime.providerInfo.api).toBe('google-vertex')
+    expect(inspect(runtime).api).toBe('google-vertex')
+    expect(inspect(runtime).piProviderId).toBe('google-vertex')
+    expect(inspect(runtime).model).toMatchObject({
+      api: 'google-vertex',
+      baseUrl: 'https://{location}-aiplatform.googleapis.com',
+      id: 'gemini-3.6-flash',
+    })
+    expect(inspect(runtime).buildStreamOptions({})).toMatchObject({
+      apiKey: 'vertex-key',
+      location: 'global',
+      project: 'example-project',
+    })
+    expect(inspect(runtime).buildStreamOptions({}).headers).toBeUndefined()
+  })
+
+  it('uses native Vertex generateContent for text and structured streams', async () => {
+    registerBuiltInApiProviders()
+    const requests: Request[] = []
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const request =
+        input instanceof Request ? input : new Request(input.toString(), init)
+      requests.push(request)
+      const content =
+        requests.length === 1
+          ? { parts: [{ text: 'native text' }], role: 'model' }
+          : {
+              parts: [
+                {
+                  functionCall: {
+                    args: { score: 8, title: 'native Vertex' },
+                    name: 'structured_output',
+                  },
+                },
+              ],
+              role: 'model',
+            }
+      return new Response(
+        `data: ${JSON.stringify({
+          candidates: [
+            {
+              content,
+              finishReason: 'STOP',
+            },
+          ],
+          usageMetadata: {
+            candidatesTokenCount: 2,
+            promptTokenCount: 5,
+            totalTokenCount: 7,
+          },
+        })}\n\n`,
+        { headers: { 'Content-Type': 'text/event-stream' }, status: 200 },
+      )
+    })
+
+    const runtime = createModelRuntime({
+      id: 'vertex',
+      name: 'Vertex',
+      type: AIProviderType.GoogleVertex,
+      apiKey: 'vertex-key',
+      projectId: 'example-project',
+      endpoint:
+        'https://aiplatform.googleapis.com/v1/projects/example-project/locations/global/endpoints/openapi',
+      defaultModel: 'google/gemini-3.6-flash',
+      enabled: true,
+    })
+    await expect(
+      runtime.generateText({ prompt: 'Return text.' }),
+    ).resolves.toMatchObject({ text: 'native text' })
+    const chunks = []
+    for await (const chunk of runtime.streamStructured({
+      prompt: 'Return a scored title.',
+      schema: Type.Object({ score: Type.Number(), title: Type.String() }),
+    })) {
+      chunks.push(chunk)
+    }
+
+    expect(chunks.at(-1)).toMatchObject({
+      done: true,
+      final: { score: 8, title: 'native Vertex' },
+    })
+    expect(requests).toHaveLength(2)
+    expect(requests[0]?.url).toContain(
+      '/v1/publishers/google/models/gemini-3.6-flash:streamGenerateContent',
+    )
+    expect(requests[1]?.url).not.toContain('/endpoints/openapi')
+    expect(requests[1]?.headers.get('x-goog-api-key')).toBe('vertex-key')
+
+    const payload = (await requests[1]!.clone().json()) as {
+      toolConfig?: { functionCallingConfig?: { mode?: string } }
+      tools?: Array<{ functionDeclarations?: Array<{ name?: string }> }>
+    }
+    expect(payload.toolConfig?.functionCallingConfig?.mode).toBe('ANY')
+    expect(payload.tools?.[0]?.functionDeclarations?.[0]?.name).toBe(
+      'structured_output',
+    )
+  })
+
   it('uses model override when provided', () => {
     const runtime = createModelRuntime(
       {
@@ -77,6 +203,47 @@ describe('createModelRuntime — enum coverage', () => {
     expect(runtime.providerInfo.model).toBe('gpt-4o-mini')
   })
 
+  it('sends the runtime session id on OpenRouter requests', async () => {
+    registerBuiltInApiProviders()
+    const requestHeaders: Headers[] = []
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      requestHeaders.push(
+        new Headers(input instanceof Request ? input.headers : init?.headers),
+      )
+      return new Response(
+        JSON.stringify({ error: { message: 'expected test stop' } }),
+        {
+          headers: { 'Content-Type': 'application/json' },
+          status: 400,
+        },
+      )
+    })
+    const runtime = createModelRuntime(
+      {
+        id: 'openrouter',
+        name: 'OpenRouter',
+        type: AIProviderType.OpenAICompatible,
+        apiKey: 'sk-xxx',
+        endpoint: 'https://openrouter.ai/api/v1',
+        defaultModel: 'openai/gpt-4o-mini',
+        enabled: true,
+      },
+      undefined,
+      { sessionId: 'business-session' },
+    )
+
+    if (!runtime.streamMessage) throw new Error('streamMessage is unavailable')
+    const events = runtime.streamMessage({
+      messages: [{ role: 'user', content: 'probe' }],
+    })
+    for await (const _event of events) {
+      // Consume the expected provider error event.
+    }
+
+    expect(requestHeaders).toHaveLength(1)
+    expect(requestHeaders[0]?.get('x-session-id')).toBe('business-session')
+  })
+
   it('throws for unsupported provider type', () => {
     expect(() =>
       createModelRuntime({
@@ -87,7 +254,7 @@ describe('createModelRuntime — enum coverage', () => {
         defaultModel: 'model',
         enabled: true,
       }),
-    ).toThrow('Unsupported provider type')
+    ).toThrow('No protocol adapter supports the runtime configuration')
   })
 })
 

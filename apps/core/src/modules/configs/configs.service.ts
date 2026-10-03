@@ -59,6 +59,27 @@ function normalizeS3StorageOptionNulls<T extends object>(value: T): T {
   return normalized as T
 }
 
+function isGoogleVertexEndpoint(endpoint: string): boolean {
+  try {
+    const url = new URL(endpoint)
+    return (
+      url.hostname === 'aiplatform.googleapis.com' &&
+      url.pathname.endsWith('/endpoints/openapi')
+    )
+  } catch {
+    return false
+  }
+}
+
+function extractGoogleVertexProjectId(endpoint: string): string | undefined {
+  try {
+    const match = new URL(endpoint).pathname.match(/\/projects\/([^/]+)/)
+    return match?.[1] ? decodeURIComponent(match[1]) : undefined
+  } catch {
+    return undefined
+  }
+}
+
 /*
  * NOTE:
  * 1. Configs live in Redis. `getConfig` is the single entry point; all reads
@@ -205,14 +226,30 @@ export class ConfigsService implements OnModuleInit {
     legacyImageConfig: IConfig['imageGenerationOptions'],
     legacyTtsConfig: IConfig['ttsOptions'],
   ): IConfig['ai'] {
-    const providers = (aiConfig.providers ?? []).map((provider) => ({
-      ...provider,
-      capabilities: {
-        text: provider.capabilities?.text ?? true,
-        image: provider.capabilities?.image ?? false,
-        speech: provider.capabilities?.speech ?? false,
-      },
-    }))
+    const providers = (aiConfig.providers ?? []).map((provider) => {
+      const endpoint = provider.endpoint?.trim() ?? ''
+      const isLegacyVertex =
+        provider.type === AIProviderType.OpenAICompatible &&
+        isGoogleVertexEndpoint(endpoint)
+      return {
+        ...provider,
+        ...(isLegacyVertex
+          ? {
+              type: AIProviderType.GoogleVertex,
+              modelListUrl: undefined,
+            }
+          : {}),
+        projectId: provider.projectId ?? extractGoogleVertexProjectId(endpoint),
+        capabilities: isLegacyVertex
+          ? { text: true, image: true, speech: true }
+          : {
+              decision: provider.capabilities?.decision ?? false,
+              text: provider.capabilities?.text ?? true,
+              image: provider.capabilities?.image ?? false,
+              speech: provider.capabilities?.speech ?? false,
+            },
+      }
+    })
 
     if (storedAiConfig?.version === 2) {
       return { ...aiConfig, version: 2, providers }
@@ -274,6 +311,7 @@ export class ConfigsService implements OnModuleInit {
         type: AIProviderType.OpenAICompatible,
         apiKey: input.apiKey,
         endpoint: normalizedEndpoint,
+        projectId: undefined,
         defaultModel: input.defaultModel ?? '',
         enabled: true,
         capabilities: {
@@ -555,7 +593,9 @@ export class ConfigsService implements OnModuleInit {
       this.validateTtsProvider(nextConfig)
     }
 
-    encryptObject(instanceValue, key)
+    if (key !== 'oauth') {
+      encryptObject(instanceValue, key)
+    }
 
     switch (key) {
       case 'url': {
@@ -580,7 +620,10 @@ export class ConfigsService implements OnModuleInit {
         const value = instanceValue as unknown as OAuthConfig
         const current = await this.get('oauth')
 
-        const currentProvidersMap = (current.providers || []).reduce(
+        const currentProviders = (current.providers || []).map((provider) => ({
+          ...provider,
+        }))
+        const currentProvidersMap = currentProviders.reduce(
           (acc, item) => {
             acc[item.type] = item
             return acc
@@ -588,7 +631,6 @@ export class ConfigsService implements OnModuleInit {
           {} as Record<string, any>,
         )
 
-        const currentProviders = current.providers || []
         ;(value.providers || []).forEach((p) => {
           if (!currentProvidersMap[p.type]) {
             currentProviders.push(p)
@@ -597,20 +639,13 @@ export class ConfigsService implements OnModuleInit {
           }
         })
 
-        let nextAuthSecrets = value.secrets
-        if (value.secrets) {
-          nextAuthSecrets = merge(current.secrets, nextAuthSecrets)
-        }
-
-        let nextAuthPublic = value.public
-        if (value.public) {
-          nextAuthPublic = merge(current.public, nextAuthPublic)
-        }
-        const option = await this.patch(key as 'oauth', {
+        const nextOauth = {
           providers: currentProviders,
-          secrets: nextAuthSecrets,
-          public: nextAuthPublic,
-        })
+          public: merge(cloneDeep(current.public || {}), value.public || {}),
+          secrets: merge(cloneDeep(current.secrets || {}), value.secrets || {}),
+        }
+        encryptObject(nextOauth, key)
+        const option = await this.patch(key as 'oauth', nextOauth)
 
         await this.configVersionService.bump(ConfigVersionScopes.OAuth)
         return option
@@ -710,6 +745,16 @@ export class ConfigsService implements OnModuleInit {
           message: `ai.providers: duplicate provider id "${provider.id}"`,
         })
       }
+      if (
+        provider.type === 'typesafe' &&
+        ((provider.capabilities?.text ?? true) ||
+          provider.capabilities?.image ||
+          provider.capabilities?.speech)
+      ) {
+        throw createAppException(AppErrorCode.CONFIG_VALIDATION_FAILED, {
+          message: 'TypeSafe supports decision capability only',
+        })
+      }
       providerIds.add(provider.id)
     }
 
@@ -719,6 +764,7 @@ export class ConfigsService implements OnModuleInit {
       ['commentReviewModel', aiConfig.commentReviewModel],
       ['translationModel', aiConfig.translationModel],
       ['translationReviewModel', aiConfig.translationReviewModel],
+      ['fieldTranslationModel', aiConfig.fieldTranslationModel],
       ['insightsModel', aiConfig.insightsModel],
       ['insightsTranslationModel', aiConfig.insightsTranslationModel],
     ] as const
@@ -740,6 +786,23 @@ export class ConfigsService implements OnModuleInit {
       if (!assignment.model?.trim() && !provider.defaultModel.trim()) {
         throw createAppException(AppErrorCode.CONFIG_VALIDATION_FAILED, {
           message: `ai.${key}.model: a model or provider default model is required`,
+        })
+      }
+    }
+
+    const decision = aiConfig.decisionModel
+    if (decision?.providerId) {
+      const provider = aiConfig.providers?.find(
+        (p) => p.id === decision.providerId,
+      )
+      if (
+        !provider?.capabilities?.decision ||
+        provider.type !== 'typesafe' ||
+        !(decision.model?.trim() || provider.defaultModel?.trim())
+      ) {
+        throw createAppException(AppErrorCode.CONFIG_VALIDATION_FAILED, {
+          message:
+            'Decision model requires a TypeSafe provider with decision capability and a model',
         })
       }
     }
@@ -803,7 +866,7 @@ export class ConfigsService implements OnModuleInit {
     }
   }
 
-  private validWithDto(schema: z.ZodTypeAny, value: unknown): any {
+  private validWithDto(schema: z.ZodType, value: unknown): any {
     const result = schema.safeParse(value)
     if (!result.success) {
       const zodError = result.error as ZodError

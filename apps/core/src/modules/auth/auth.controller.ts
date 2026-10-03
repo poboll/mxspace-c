@@ -10,7 +10,6 @@ import {
 } from '@nestjs/common'
 import { EventEmitter2 } from '@nestjs/event-emitter'
 import { omit } from 'es-toolkit/compat'
-import { createZodDto } from 'nestjs-zod'
 import { z } from 'zod'
 
 import { ApiController } from '~/common/decorators/api-controller.decorator'
@@ -18,14 +17,15 @@ import { Auth } from '~/common/decorators/auth.decorator'
 import { HttpCache } from '~/common/decorators/cache.decorator'
 import { AppErrorCode, createAppException } from '~/common/errors'
 import { EventBusEvents } from '~/constants/event-bus.constant'
-import { StringIdDto } from '~/shared/dto/id.dto'
+import { type StringIdDto, StringIdSchema } from '~/shared/dto/id.dto'
 import type { FastifyBizRequest } from '~/transformers/get-req.transformer'
 
 import { AuthInstanceInjectKey } from './auth.constant'
 import type { InjectAuthInstance } from './auth.interface'
 import { AuthService } from './auth.service'
+import { ReviewDemoService } from './review-demo.service'
 
-const TokenSchema = z.object({
+export const TokenSchema = z.object({
   expired: z.preprocess(
     (val) => (val ? new Date(val as string) : undefined),
     z.date().optional(),
@@ -33,7 +33,7 @@ const TokenSchema = z.object({
   name: z.string().min(1),
 })
 
-export class TokenDto extends createZodDto(TokenSchema) {}
+export type TokenDto = z.infer<typeof TokenSchema>
 @ApiController({
   path: 'auth',
 })
@@ -43,6 +43,7 @@ export class AuthController {
     private readonly eventEmitter: EventEmitter2,
     @Inject(AuthInstanceInjectKey)
     private readonly authInstance: InjectAuthInstance,
+    private readonly reviewDemoService: ReviewDemoService,
   ) {}
 
   @Get('token')
@@ -63,13 +64,13 @@ export class AuthController {
 
   @Post('token')
   @Auth()
-  async generateToken(@Body() body: TokenDto) {
+  async generateToken(@Body({ schema: TokenSchema }) body: TokenDto) {
     return this.authService.createAccessToken(body)
   }
 
   @Delete('token')
   @Auth()
-  async deleteToken(@Query() query: StringIdDto) {
+  async deleteToken(@Query({ schema: StringIdSchema }) query: StringIdDto) {
     const { id } = query
     const secret = await this.authService.getTokenSecret(id)
     const token = secret?.token
@@ -119,5 +120,14 @@ export class AuthController {
   })
   async getProviders() {
     return this.authInstance.get().api.getProviders()
+  }
+
+  @Get('review-demo')
+  @Auth()
+  @HttpCache({
+    disable: true,
+  })
+  getReviewDemo() {
+    return this.reviewDemoService.getCredentials()
   }
 }

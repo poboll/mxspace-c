@@ -56,12 +56,12 @@
   },
   "dependencies": {
     "drizzle-orm": "^0.45.2",
-    "zod": "4.4.3"
+    "zod": "4.5.4"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "5.20260804.1",
-    "@types/node": "26.1.2",
-    "tsdown": "0.22.14",
+    "@cloudflare/workers-types": "5.20260930.1",
+    "@types/node": "26.6.3",
+    "tsdown": "0.23.0",
     "typescript": "6.0.3"
   }
 }

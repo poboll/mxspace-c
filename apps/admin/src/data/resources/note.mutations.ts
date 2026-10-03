@@ -1,11 +1,5 @@
-import type { CreateNoteData, PatchNoteData } from '~/api/notes'
-import {
-  createNote,
-  deleteNote,
-  getNoteById,
-  patchNotePublish,
-  updateNote,
-} from '~/api/notes'
+import type { PatchNoteData } from '~/api/notes'
+import { deleteNote, getNoteById, patchNotePublish } from '~/api/notes'
 import { createTransaction } from '~/data/resource/transaction'
 import type { NoteModel } from '~/models/note'
 
@@ -26,7 +20,10 @@ export async function publishNote(
   tx.update(notes, id, (draft) => {
     draft.isPublished = isPublished
   })
-  const result = await tx.commit(() => patchNotePublish(id, isPublished))
+  const result = await tx.commit(async () => {
+    await patchNotePublish(id, isPublished)
+    return getNoteById(id, { single: true })
+  })
   notes.hydrate([result])
   return result
 }
@@ -67,46 +64,4 @@ export function removeNotes(ids: string[]): Promise<BatchRemoveResult> {
       successCount: fulfilledKeys.length,
     }
   })
-}
-
-function toOptimisticNotePatch(data: CreateNoteData): Partial<NoteModel> {
-  const patch: Partial<NoteModel> = {
-    bookmark: data.bookmark,
-    contentFormat: data.contentFormat,
-    coordinates: data.coordinates,
-    isPublished: data.isPublished,
-    location: data.location,
-    meta: data.meta,
-    publicAt: data.publicAt,
-    text: data.text,
-    title: data.title,
-    topicId: data.topicId,
-  }
-  if (data.content !== undefined) patch.content = data.content
-  if (data.images !== undefined) patch.images = data.images
-  if (data.mood !== undefined) patch.mood = data.mood
-  if (data.slug !== undefined) patch.slug = data.slug
-  if (data.weather !== undefined) patch.weather = data.weather
-  return patch
-}
-
-export async function saveNote(
-  id: string,
-  data: CreateNoteData,
-): Promise<NoteModel> {
-  if (!id) {
-    const result = await createNote(data)
-    notes.upsert(result)
-    return result
-  }
-
-  await ensureNoteHydrated(id)
-  const patch = toOptimisticNotePatch(data)
-  const tx = createTransaction()
-  tx.update(notes, id, (draft) => {
-    Object.assign(draft, patch)
-  })
-  const result = await tx.commit(() => updateNote(id, data))
-  notes.hydrate([result])
-  return result
 }

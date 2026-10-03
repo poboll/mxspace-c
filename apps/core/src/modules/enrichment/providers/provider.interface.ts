@@ -9,6 +9,8 @@ export const ENRICHMENT_PROVIDER_TOKEN = Symbol('ENRICHMENT_PROVIDER')
  * source URL) need {@link url} to reconstruct the upstream call.
  */
 export interface EnrichmentFetchContext {
+  /** Cancel upstream work when its execution lease is lost. */
+  signal?: AbortSignal
   /**
    * Source URL the user originally pasted, after registry-side normalization.
    * Available on cold paths (resolve) and on refresh paths where a cached row
@@ -39,6 +41,17 @@ export interface EnrichmentProvider<TRaw = unknown> {
     locale?: string,
     ctx?: EnrichmentFetchContext,
   ) => Promise<EnrichmentResult<TRaw>>
+
+  /**
+   * Optional text search for providers that expose a discovery API. Results
+   * use the same normalized shape as URL resolution so clients can preview a
+   * choice and then persist its canonical URL through the existing pipeline.
+   */
+  search?: (
+    query: string,
+    locale?: string,
+    limit?: number,
+  ) => Promise<EnrichmentResult<TRaw>[]>
 
   readonly requiredConfigKeys?: string[]
   readonly featureGateConfigKey?: string

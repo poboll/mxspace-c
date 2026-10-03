@@ -11,6 +11,259 @@ export interface S3UploaderOptions {
   endpoint?: string
 }
 
+const S3_TRANSPORT_DIAGNOSTIC_BEGIN = 'begin=S3_TRANSPORT_DIAGNOSTIC'
+const S3_TRANSPORT_DIAGNOSTIC_END = 'end=S3_TRANSPORT_DIAGNOSTIC'
+// Keep the deployment contract's lowercase hexadecimal grammar literal.
+// eslint-disable-next-line unicorn/better-regex
+const S3_TRANSPORT_DIAGNOSTIC_NONCE_PATTERN = /^[0-9a-f]{32}$/
+
+const S3_TRANSPORT_NAMES = [
+  'AbortError',
+  'BodyTimeoutError',
+  'ConnectTimeoutError',
+  'HeadersTimeoutError',
+  'RequestContentLengthMismatchError',
+  'SocketError',
+  'TimeoutError',
+  'UnknownError',
+] as const
+
+const S3_TRANSPORT_CODES = [
+  'ABORT_ERR',
+  'CERT_HAS_EXPIRED',
+  'DEPTH_ZERO_SELF_SIGNED_CERT',
+  'EAI_AGAIN',
+  'ECONNREFUSED',
+  'ECONNRESET',
+  'EHOSTUNREACH',
+  'ENETUNREACH',
+  'ENOTFOUND',
+  'EPIPE',
+  'ERR_SSL_WRONG_VERSION_NUMBER',
+  'ERR_TLS_CERT_ALTNAME_INVALID',
+  'ETIMEDOUT',
+  'SELF_SIGNED_CERT_IN_CHAIN',
+  'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
+  'UND_ERR_ABORTED',
+  'UND_ERR_BODY_TIMEOUT',
+  'UND_ERR_CLOSED',
+  'UND_ERR_CONNECT_TIMEOUT',
+  'UND_ERR_DESTROYED',
+  'UND_ERR_HEADERS_TIMEOUT',
+  'UND_ERR_REQ_CONTENT_LENGTH_MISMATCH',
+  'UND_ERR_SOCKET',
+  'UNKNOWN',
+] as const
+
+const S3_TRANSPORT_SYSCALLS = [
+  'connect',
+  'getaddrinfo',
+  'lookup',
+  'read',
+  'recv',
+  'send',
+  'socket',
+  'tls',
+  'unknown',
+  'write',
+] as const
+
+type S3TransportName = (typeof S3_TRANSPORT_NAMES)[number]
+type S3TransportCode = (typeof S3_TRANSPORT_CODES)[number]
+type S3TransportSyscall = (typeof S3_TRANSPORT_SYSCALLS)[number]
+type S3TransportCategory =
+  | 'aborted'
+  | 'connection_refused'
+  | 'connection_timeout'
+  | 'dns_failure'
+  | 'request_content_length_mismatch'
+  | 'socket_failure'
+  | 'tls_failure'
+  | 'unknown'
+
+const S3_TRANSPORT_NAME_ALLOWLIST = new Set<string>(S3_TRANSPORT_NAMES)
+const S3_TRANSPORT_CODE_ALLOWLIST = new Set<string>(S3_TRANSPORT_CODES)
+const S3_TRANSPORT_SYSCALL_ALLOWLIST = new Set<string>(S3_TRANSPORT_SYSCALLS)
+
+const S3_TRANSPORT_CODE_CATEGORY = {
+  ABORT_ERR: 'aborted',
+  CERT_HAS_EXPIRED: 'tls_failure',
+  DEPTH_ZERO_SELF_SIGNED_CERT: 'tls_failure',
+  EAI_AGAIN: 'dns_failure',
+  ECONNREFUSED: 'connection_refused',
+  ECONNRESET: 'socket_failure',
+  EHOSTUNREACH: 'socket_failure',
+  ENETUNREACH: 'socket_failure',
+  ENOTFOUND: 'dns_failure',
+  EPIPE: 'socket_failure',
+  ERR_SSL_WRONG_VERSION_NUMBER: 'tls_failure',
+  ERR_TLS_CERT_ALTNAME_INVALID: 'tls_failure',
+  ETIMEDOUT: 'connection_timeout',
+  SELF_SIGNED_CERT_IN_CHAIN: 'tls_failure',
+  UNABLE_TO_VERIFY_LEAF_SIGNATURE: 'tls_failure',
+  UND_ERR_ABORTED: 'aborted',
+  UND_ERR_BODY_TIMEOUT: 'connection_timeout',
+  UND_ERR_CLOSED: 'socket_failure',
+  UND_ERR_CONNECT_TIMEOUT: 'connection_timeout',
+  UND_ERR_DESTROYED: 'socket_failure',
+  UND_ERR_HEADERS_TIMEOUT: 'connection_timeout',
+  UND_ERR_REQ_CONTENT_LENGTH_MISMATCH: 'request_content_length_mismatch',
+  UND_ERR_SOCKET: 'socket_failure',
+} satisfies Partial<Record<S3TransportCode, S3TransportCategory>>
+
+const S3_TRANSPORT_NAME_CATEGORY = {
+  AbortError: 'aborted',
+  BodyTimeoutError: 'connection_timeout',
+  ConnectTimeoutError: 'connection_timeout',
+  HeadersTimeoutError: 'connection_timeout',
+  RequestContentLengthMismatchError: 'request_content_length_mismatch',
+  SocketError: 'socket_failure',
+  TimeoutError: 'connection_timeout',
+} satisfies Partial<Record<S3TransportName, S3TransportCategory>>
+
+const toAllowedTransportValue = <T extends string>(
+  value: unknown,
+  allowlist: ReadonlySet<string>,
+  fallback: T,
+): T =>
+  typeof value === 'string' && allowlist.has(value) ? (value as T) : fallback
+
+const readCauseField = (
+  cause: Record<string, unknown> | undefined,
+  field: 'name' | 'code' | 'syscall',
+): unknown => {
+  try {
+    return cause?.[field]
+  } catch {
+    return undefined
+  }
+}
+
+const readNestedCauseField = (
+  cause: Record<string, unknown>,
+  field: 'cause' | 'errors',
+): unknown => {
+  try {
+    return cause[field]
+  } catch {
+    return undefined
+  }
+}
+
+const getS3TransportCause = (
+  error: unknown,
+): Record<string, unknown> | undefined => {
+  const queue: Array<{ depth: number; value: unknown }> = [
+    { depth: 0, value: error },
+  ]
+  const seen = new WeakSet<object>()
+  const maxDepth = 4
+  const maxNodes = 16
+  let visited = 0
+
+  while (queue.length > 0 && visited < maxNodes) {
+    const current = queue.shift()
+    if (
+      !current ||
+      typeof current.value !== 'object' ||
+      current.value === null ||
+      seen.has(current.value)
+    ) {
+      continue
+    }
+
+    seen.add(current.value)
+    visited++
+    const cause = current.value as Record<string, unknown>
+    const name = toAllowedTransportValue<S3TransportName>(
+      readCauseField(cause, 'name'),
+      S3_TRANSPORT_NAME_ALLOWLIST,
+      'UnknownError',
+    )
+    const code = toAllowedTransportValue<S3TransportCode>(
+      readCauseField(cause, 'code'),
+      S3_TRANSPORT_CODE_ALLOWLIST,
+      'UNKNOWN',
+    )
+    const syscall = toAllowedTransportValue<S3TransportSyscall>(
+      readCauseField(cause, 'syscall'),
+      S3_TRANSPORT_SYSCALL_ALLOWLIST,
+      'unknown',
+    )
+
+    if (
+      name !== 'UnknownError' ||
+      code !== 'UNKNOWN' ||
+      syscall !== 'unknown'
+    ) {
+      return cause
+    }
+
+    if (current.depth >= maxDepth) continue
+
+    queue.push({
+      depth: current.depth + 1,
+      value: readNestedCauseField(cause, 'cause'),
+    })
+
+    const errors = readNestedCauseField(cause, 'errors')
+    if (Array.isArray(errors)) {
+      for (let index = 0; index < errors.length && index < maxNodes; index++) {
+        let nestedError: unknown
+        try {
+          nestedError = errors[index]
+        } catch {
+          continue
+        }
+        queue.push({ depth: current.depth + 1, value: nestedError })
+      }
+    }
+  }
+
+  return undefined
+}
+
+const classifyS3TransportError = (
+  name: S3TransportName,
+  code: S3TransportCode,
+): S3TransportCategory =>
+  S3_TRANSPORT_CODE_CATEGORY[code as keyof typeof S3_TRANSPORT_CODE_CATEGORY] ??
+  S3_TRANSPORT_NAME_CATEGORY[name as keyof typeof S3_TRANSPORT_NAME_CATEGORY] ??
+  'unknown'
+
+const getS3TransportDiagnosticNonce = (): string => {
+  const nonce = process.env.MX_SPACE_S3_DIAGNOSTIC_NONCE
+  return typeof nonce === 'string' &&
+    S3_TRANSPORT_DIAGNOSTIC_NONCE_PATTERN.test(nonce)
+    ? nonce
+    : 'unbound'
+}
+
+const createS3TransportError = (error: unknown): Error => {
+  const cause = getS3TransportCause(error)
+  const name = toAllowedTransportValue<S3TransportName>(
+    readCauseField(cause, 'name'),
+    S3_TRANSPORT_NAME_ALLOWLIST,
+    'UnknownError',
+  )
+  const code = toAllowedTransportValue<S3TransportCode>(
+    readCauseField(cause, 'code'),
+    S3_TRANSPORT_CODE_ALLOWLIST,
+    'UNKNOWN',
+  )
+  const syscall = toAllowedTransportValue<S3TransportSyscall>(
+    readCauseField(cause, 'syscall'),
+    S3_TRANSPORT_SYSCALL_ALLOWLIST,
+    'unknown',
+  )
+  const category = classifyS3TransportError(name, code)
+  const nonce = getS3TransportDiagnosticNonce()
+
+  return new Error(
+    `S3 transport failed: ${S3_TRANSPORT_DIAGNOSTIC_BEGIN} nonce=${nonce} name=${name} code=${code} syscall=${syscall} category=${category} ${S3_TRANSPORT_DIAGNOSTIC_END}`,
+  )
+}
+
 /**
  * Resolved endpoint information used for signing and sending S3 requests.
  */
@@ -473,6 +726,13 @@ export class S3Uploader {
     return objectKey
   }
 
+  // Some providers answer 403 for a missing key without ListBucket rights, so
+  // only a 404 proves the key is free; anything else is treated as taken.
+  async objectExists(objectKey: string): Promise<boolean> {
+    const response = await this.signedRequest({ method: 'HEAD', objectKey })
+    return response.status !== 404
+  }
+
   async deleteObject(objectKey: string): Promise<void> {
     const service = 's3'
     const date = new Date()
@@ -601,12 +861,9 @@ export class S3Uploader {
     const resolved = this.resolveEndpoint(host, encodedObjectKey, url.protocol)
     const { requestHost, canonicalUri } = resolved
 
-    const contentLength = fileData.length.toString()
-
     const headers: Record<string, string> = {
       Host: requestHost,
       'Content-Type': contentType,
-      'Content-Length': contentLength,
       'x-amz-date': xAmzDate,
       'x-amz-content-sha256': hashedPayload,
     }
@@ -674,10 +931,20 @@ export class S3Uploader {
     }
 
     try {
-      const response = await fetch(requestUrl, fetchOptions as RequestInit)
+      let response: Response
+      try {
+        response = await fetch(requestUrl, fetchOptions as RequestInit)
+      } catch (error) {
+        throw createS3TransportError(error)
+      }
 
       if (!response.ok) {
-        const responseText = await response.text()
+        let responseText: string
+        try {
+          responseText = await response.text()
+        } catch (error) {
+          throw createS3TransportError(error)
+        }
         throw new Error(
           `Upload failed with status code: ${response.status} - ${responseText}`,
         )

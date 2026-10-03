@@ -9,6 +9,15 @@ export const MEMBERSHIP_WEBHOOK_EVENTS = [
 
 export interface MembershipConfigValue {
   apiKey?: string
+  appleAppAppleId?: string
+  appleBundleId?: string
+  appleIssuerId?: string
+  appleKeyId?: string
+  appleMonthlyProductId?: string
+  applePrivateKey?: string
+  appleYearlyProductId?: string
+  articleProductId?: string
+  articlePurchaseEnabled?: boolean
   enabled?: boolean
   environment?: string
   monthlyProductId?: string
@@ -19,8 +28,55 @@ export interface MembershipConfigValue {
 
 export interface MembershipCredentialStatus {
   apiKeyConfigured: boolean
+  applePrivateKeyConfigured?: boolean
   supportedProviders: string[]
   webhookSigningKeyConfigured: boolean
+}
+
+type SetupChecks = Record<string, boolean>
+
+export function getMembershipSetupProgress(
+  membershipChecks: SetupChecks,
+  appleChecks: SetupChecks,
+) {
+  const membershipValues = Object.values(membershipChecks)
+  const appleValues = Object.values(appleChecks)
+  const membershipCompletedCount = membershipValues.filter(Boolean).length
+  const appleCompletedCount = appleValues.filter(Boolean).length
+  const membershipComplete =
+    membershipCompletedCount === membershipValues.length
+  const appleComplete = appleCompletedCount === appleValues.length
+
+  if (!membershipComplete && appleComplete) {
+    return {
+      completedCount: appleCompletedCount,
+      setupComplete: true,
+      totalCount: appleValues.length,
+    }
+  }
+
+  return {
+    completedCount: membershipCompletedCount,
+    setupComplete: membershipComplete,
+    totalCount: membershipValues.length,
+  }
+}
+
+export function formatArticlePrice(price?: {
+  amount: number
+  currency: string
+}) {
+  if (!price) return null
+  try {
+    const formatter = new Intl.NumberFormat(undefined, {
+      currency: price.currency,
+      style: 'currency',
+    })
+    const digits = formatter.resolvedOptions().maximumFractionDigits ?? 2
+    return formatter.format(price.amount / 10 ** digits)
+  } catch {
+    return `${price.amount}`
+  }
 }
 
 export function buildMembershipWebhookUrl(apiUrl: string, provider = 'dodo') {
@@ -40,10 +96,32 @@ export function getMembershipSetupChecks(
 
   return {
     apiKey: hasApiKey,
+    articleProduct: config.articlePurchaseEnabled
+      ? Boolean(config.articleProductId?.trim())
+      : true,
     product: Boolean(
       config.monthlyProductId?.trim() || config.yearlyProductId?.trim(),
     ),
     provider: Boolean(status?.supportedProviders.includes(provider)),
     webhookSigningKey: hasWebhookSigningKey,
+  }
+}
+
+export function getAppleIapSetupChecks(
+  config: MembershipConfigValue,
+  status?: MembershipCredentialStatus,
+) {
+  const appAppleId = Number(config.appleAppAppleId?.trim())
+  const hasPrivateKey =
+    Boolean(config.applePrivateKey?.trim()) ||
+    Boolean(status?.applePrivateKeyConfigured)
+  return {
+    appAppleId: Number.isSafeInteger(appAppleId) && appAppleId > 0,
+    bundleId: Boolean(config.appleBundleId?.trim()),
+    issuerId: Boolean(config.appleIssuerId?.trim()),
+    keyId: Boolean(config.appleKeyId?.trim()),
+    monthlyProductId: Boolean(config.appleMonthlyProductId?.trim()),
+    privateKey: hasPrivateKey,
+    yearlyProductId: Boolean(config.appleYearlyProductId?.trim()),
   }
 }

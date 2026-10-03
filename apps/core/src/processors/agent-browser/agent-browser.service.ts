@@ -8,6 +8,7 @@ import {
   AGENT_BROWSER_DEFAULT_LAUNCH_ARGS,
   AGENT_BROWSER_DEFAULT_NETWORKIDLE_MS,
   AGENT_BROWSER_DEFAULT_UA,
+  describeAgentBrowserError,
 } from './agent-browser.constants'
 import {
   AgentBrowserSessionPool,
@@ -26,6 +27,7 @@ export interface CheckUrlOptions {
   /** Override the executable path; defaults to the pool executable. */
   executable?: string
   /** Override the wait-for-networkidle budget. */
+  signal?: AbortSignal
   networkidleMs?: number
 }
 
@@ -49,7 +51,7 @@ const PAGE_HREF_B64 = Buffer.from(PAGE_HREF_SCRIPT, 'utf8').toString('base64')
  * Process safety: every command path that acquires a slot owns the eventual
  * `release` — successful release schedules idle close, error release passes
  * `discard:true` so a wedged chromium is torn down promptly. The pool's
- * own onModuleDestroy guarantees no leftover processes on shutdown.
+ * shutdown awaits close attempts; unconfirmed exits remain quarantined.
  */
 @Injectable()
 export class AgentBrowserService {
@@ -88,12 +90,17 @@ export class AgentBrowserService {
     const networkidleMs =
       opts.networkidleMs ?? AGENT_BROWSER_DEFAULT_NETWORKIDLE_MS
 
-    const slot = await this.pool.acquire()
     const ac = new AbortController()
+    const abort = () => ac.abort()
+    opts.signal?.addEventListener('abort', abort, { once: true })
+    if (opts.signal?.aborted) ac.abort()
+    let slot: PoolSlot | undefined
     const timer = setTimeout(() => ac.abort(), timeoutMs)
 
     let releaseAsDiscard = false
     try {
+      slot = await this.pool.acquire({ signal: ac.signal })
+      this.pool.markLive(slot)
       const baseArgs = this.buildBaseArgs(slot)
       const finalUrl = await this.runNavigation(
         executable,
@@ -102,7 +109,6 @@ export class AgentBrowserService {
         networkidleMs,
         ac,
       )
-      this.pool.markLive(slot)
       const safeFinalUrl = finalUrl ? parseAndValidateUrl(finalUrl) : url
       await assertHostnameSafe(safeFinalUrl.hostname)
 
@@ -126,6 +132,7 @@ export class AgentBrowserService {
     } catch (error) {
       const err = error as NodeJS.ErrnoException & { stderr?: string }
       if (ac.signal.aborted) {
+        releaseAsDiscard = true
         return {
           ok: false,
           status: null,
@@ -156,11 +163,16 @@ export class AgentBrowserService {
       return {
         ok: false,
         status: null,
-        error: err.message || 'agent-browser navigation failed',
+        error: `agent-browser navigation failed (${describeAgentBrowserError(error)})`,
       }
     } finally {
       clearTimeout(timer)
-      this.pool.release(slot, releaseAsDiscard ? { discard: true } : undefined)
+      opts.signal?.removeEventListener('abort', abort)
+      if (slot)
+        this.pool.release(
+          slot,
+          releaseAsDiscard ? { discard: true } : undefined,
+        )
     }
   }
 
@@ -199,6 +211,7 @@ export class AgentBrowserService {
       ],
       {
         signal: ac.signal,
+        killSignal: 'SIGKILL',
         maxBuffer: 1_048_576,
         windowsHide: true,
         env: process.env,
@@ -230,6 +243,7 @@ export class AgentBrowserService {
         ],
         {
           signal: ac.signal,
+          killSignal: 'SIGKILL',
           maxBuffer: 1_048_576,
           windowsHide: true,
           env: process.env,
@@ -237,8 +251,9 @@ export class AgentBrowserService {
       )
       stdout = res.stdout
     } catch (error) {
+      if (ac.signal.aborted) throw error
       this.logger.debug(
-        `network requests inspection failed for ${url.toString()}: ${(error as Error).message}`,
+        `network requests inspection failed for ${url.toString()}: ${describeAgentBrowserError(error)}`,
       )
       return null
     }

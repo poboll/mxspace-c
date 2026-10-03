@@ -1,10 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common'
-import { Emitter } from '@socket.io/redis-emitter'
 import type { RedisOptions } from 'ioredis'
 import IORedis from 'ioredis'
 
 import { REDIS } from '~/app.config'
-import { RedisIoAdapterKey } from '~/common/adapters/socket.adapter'
 import { API_CACHE_PREFIX } from '~/constants/cache.constant'
 import { getRedisKey } from '~/utils/redis.util'
 
@@ -37,24 +35,27 @@ export class RedisService {
       : new IORedis({ host: REDIS.host, port: REDIS.port, ...sharedOptions })
 
     this.redisClient.on('error', (err) => {
-      this.logger.error(
-        this.formatStateLog('Redis connection error', {
-          error: err.message,
-        }),
-      )
+      this.logger.error('Redis connection error', {
+        error: err.message,
+        redisStatus: this.getStatus(),
+      })
     })
     this.redisClient.on('ready', () => {
-      this.logger.log(this.formatStateLog('Redis connection ready'))
+      this.logger.log('Redis connection ready', {
+        redisStatus: this.getStatus(),
+      })
     })
     this.redisClient.on('reconnecting', () => {
-      this.logger.warn(this.formatStateLog('Redis reconnecting'))
+      this.logger.warn('Redis reconnecting', {
+        redisStatus: this.getStatus(),
+      })
     })
     this.redisClient.on('close', () => {
-      this.logger.warn(this.formatStateLog('Redis connection closed'))
+      this.logger.warn('Redis connection closed', {
+        redisStatus: this.getStatus(),
+      })
     })
   }
-
-  private _emitter: Emitter
 
   public getClient() {
     return this.redisClient
@@ -111,29 +112,6 @@ export class RedisService {
         "Stream isn't writeable and enableOfflineQueue options is false",
       )
     )
-  }
-
-  public formatStateLog(
-    message: string,
-    extra?: Record<string, string | number | boolean | null | undefined>,
-  ) {
-    return JSON.stringify({
-      module: RedisService.name,
-      message,
-      redisStatus: this.getStatus(),
-      ...extra,
-    })
-  }
-
-  public get emitter(): Emitter {
-    if (this._emitter) {
-      return this._emitter
-    }
-    this._emitter = new Emitter(this.redisClient, {
-      key: RedisIoAdapterKey,
-    })
-
-    return this._emitter
   }
 
   /**

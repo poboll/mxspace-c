@@ -1,8 +1,7 @@
-import type { Image, PaginateResult } from '~/models/base'
+import type { PaginateResult } from '~/models/base'
 import type { NoteModel } from '~/models/note'
 
-import type { MarkdownToLexicalMigrationDescriptor } from './content-migrations'
-import { deleteJson, getJson, patchJson, postJson, putJson } from './http'
+import { deleteJson, getJson, patchJson } from './http'
 
 export type NoteSortKey =
   'createdAt' | 'modifiedAt' | 'mood' | 'title' | 'weather'
@@ -22,34 +21,11 @@ export interface SearchNotesParams {
   size: number
 }
 
-export interface CreateNoteData {
-  bookmark?: boolean
-  content?: string
-  contentFormat?: 'lexical' | 'markdown'
-  coordinates?: null | {
-    latitude: number
-    longitude: number
-  }
-  draftId?: string
-  images?: Image[]
-  isPublished?: boolean
-  location?: null | string
-  migration?: MarkdownToLexicalMigrationDescriptor
-  meta?: Record<string, unknown>
-  mood?: string
-  password?: null | string
-  publicAt?: Date | null | string
-  slug?: string
-  text: string
-  title: string
-  topicId?: null | string
-  weather?: string
-}
-
 export interface PatchNoteData {
-  [key: string]: unknown
-  slug?: null | string
+  bookmark?: boolean
+  mood?: null | string
   topicId?: null | string
+  weather?: null | string
 }
 
 export function getNotes(params: GetNotesParams = {}) {
@@ -76,14 +52,6 @@ export function getNoteById(id: string, params?: { single?: boolean }) {
   })
 }
 
-export function createNote(data: CreateNoteData) {
-  return postJson<NoteModel, CreateNoteData>('/notes', data)
-}
-
-export function updateNote(id: string, data: Partial<CreateNoteData>) {
-  return putJson<NoteModel, Partial<CreateNoteData>>(`/notes/${id}`, data)
-}
-
 export function patchNote(id: string, data: PatchNoteData) {
   return patchJson<NoteModel, PatchNoteData>(`/notes/${id}`, data)
 }
@@ -91,9 +59,7 @@ export function patchNote(id: string, data: PatchNoteData) {
 export function patchNotePublish(id: string, isPublished: boolean) {
   return patchJson<NoteModel, { isPublished: boolean }>(
     `/notes/${id}/publish`,
-    {
-      isPublished,
-    },
+    { isPublished },
   )
 }
 

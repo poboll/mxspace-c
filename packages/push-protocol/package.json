@@ -36,12 +36,12 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "zod": "4.4.3"
+    "zod": "4.5.4"
   },
   "devDependencies": {
-    "@types/node": "26.1.2",
-    "tsdown": "0.22.14",
+    "@types/node": "26.6.3",
+    "tsdown": "0.23.0",
     "typescript": "6.0.3",
-    "vitest": "4.1.10"
+    "vitest": "5.0.3"
   }
 }

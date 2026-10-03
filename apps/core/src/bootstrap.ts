@@ -11,14 +11,13 @@ import wcmatch from 'wildcard-match'
 import { CROSS_DOMAIN, DEBUG_MODE, PORT, TELEMETRY } from './app.config'
 import { AppModule } from './app.module'
 import { fastifyApp } from './common/adapters/fastify.adapter'
-import { RedisIoAdapter } from './common/adapters/socket.adapter'
 import { LoggingInterceptor } from './common/interceptors/logging.interceptor'
 import { requestCaseNormalizationPipeInstance } from './common/pipes/case-normalization.pipe'
-import { extendedZodValidationPipeInstance } from './common/zod'
+import { standardSchemaValidationPipeInstance } from './common/zod'
 import { AppMigrationsService } from './database/app-migrations/app-migrations.service'
 import { logger } from './global/consola.global'
 import { isDev, isMainProcess, isTest } from './global/env.global'
-import { RedisService } from './processors/redis/redis.service'
+import { createWsAdapter } from './processors/gateway/ws/ws-adapter.factory'
 import { checkInit } from './utils/check-init.util'
 import {
   sendTelemetry,
@@ -31,12 +30,15 @@ const Origin: false | string[] = Array.isArray(CROSS_DOMAIN.allowedOrigins)
   : false
 
 export async function bootstrap() {
+  const startedAt = performance.now()
   const isInit = await checkInit()
+  const checkedAt = performance.now()
 
   const app = await NestFactory.create<NestFastifyApplication>(
     AppModule.register(isInit),
     fastifyApp,
   )
+  const createdAt = performance.now()
 
   // Replace NestJS built-in logger with our custom Logger
   app.useLogger(app.get(Logger))
@@ -82,10 +84,9 @@ export async function bootstrap() {
 
   app.useGlobalPipes(
     requestCaseNormalizationPipeInstance,
-    extendedZodValidationPipeInstance,
+    standardSchemaValidationPipeInstance,
   )
-  !isTest &&
-    app.useWebSocketAdapter(new RedisIoAdapter(app, app.get(RedisService)))
+  app.useWebSocketAdapter(createWsAdapter(app))
 
   // Dev runs app-data migrations inline; prod boots them via the standalone
   // `app-migrate.ts` CLI invoked by docker `mx-migrate`. Both paths share the
@@ -94,6 +95,9 @@ export async function bootstrap() {
   if (isDev && !isTest) {
     await app.get(AppMigrationsService).run()
   }
+  const migratedAt = performance.now()
+  await app.init()
+  const initializedAt = performance.now()
 
   await app.listen(
     {
@@ -101,6 +105,13 @@ export async function bootstrap() {
       port: +PORT,
     },
     async () => {
+      logger.info(
+        `Startup phases: database=${Math.round(checkedAt - startedAt)}ms ` +
+          `container=${Math.round(createdAt - checkedAt)}ms ` +
+          `setup/migrations=${Math.round(migratedAt - createdAt)}ms ` +
+          `app.init=${Math.round(initializedAt - migratedAt)}ms ` +
+          `listen=${Math.round(performance.now() - initializedAt)}ms`,
+      )
       logger.info('ENV:', process.env.NODE_ENV)
       const url = await app.getUrl()
       const pid = process.pid

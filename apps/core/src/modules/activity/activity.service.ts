@@ -1,14 +1,15 @@
 import type { OnModuleDestroy, OnModuleInit } from '@nestjs/common'
 import { forwardRef, Inject, Injectable, Logger } from '@nestjs/common'
 import { omit, pick, uniqBy } from 'es-toolkit/compat'
-import type { Socket } from 'socket.io'
 
 import { RequestContext } from '~/common/contexts/request.context'
 import { AppErrorCode, createAppException } from '~/common/errors'
 import { ArticleTypeEnum } from '~/constants/article.constant'
 import { BusinessEvents, EventScope } from '~/constants/business-event.constant'
+import { CollectionRefTypes } from '~/constants/db.constant'
 import { POST_SERVICE_TOKEN } from '~/constants/injection.constant'
 import { DatabaseService } from '~/processors/database/database.service'
+import type { SocketLike } from '~/processors/gateway/gateway.service'
 import { GatewayService } from '~/processors/gateway/gateway.service'
 import { WebEventsGateway } from '~/processors/gateway/web/events.gateway'
 import { CountingService } from '~/processors/helper/helper.counting.service'
@@ -20,7 +21,6 @@ import {
 import { checkRefModelCollectionType } from '~/utils/biz.util'
 import { camelcaseKeys } from '~/utils/tool.util'
 
-import { CommentState } from '../comment/comment.enum'
 import { CommentService } from '../comment/comment.service'
 import { ConfigsService } from '../configs/configs.service'
 import { NoteService } from '../note/note.service'
@@ -28,7 +28,7 @@ import type { NoteModel } from '../note/note.types'
 import type { PostService } from '../post/post.service'
 import type { PostModel } from '../post/post.types'
 import { ReaderService } from '../reader/reader.service'
-import { ReaderModel } from '../reader/reader.types'
+import { type ReaderModel } from '../reader/reader.types'
 import { Activity } from './activity.constant'
 import type {
   ActivityLikePayload,
@@ -41,6 +41,8 @@ import {
   extractArticleIdFromRoomName,
   isValidRoomName,
   parseRoomName,
+  resolvePresenceReaderId,
+  toPublicPresenceReader,
 } from './activity.util'
 
 interface ActivityPayloadWithRef {
@@ -103,7 +105,12 @@ export class ActivityService implements OnModuleInit, OnModuleDestroy {
   }
 
   onModuleInit() {
-    const handlePresencePersistToDb = async (socket: Socket) => {
+    // handleDisconnect fires onDisconnected plus onLeaveRoom per room for the
+    // same connection; without this mark the same read-duration would be
+    // inserted once per hook invocation. The check-and-set is synchronous
+    // (no await in between) so concurrent hook runs cannot both pass it.
+    const persistedOperationTime = new Map<string, number>()
+    const handlePresencePersistToDb = async (socket: SocketLike) => {
       const meta = await this.gatewayService.getSocketMetadata(socket)
 
       const { presence, roomJoinedAtMap } = meta
@@ -125,6 +132,13 @@ export class ActivityService implements OnModuleInit, OnModuleDestroy {
         if (duration < 10_000 || (position === 0 && duration < 60_000)) {
           return
         }
+        if (persistedOperationTime.get(socket.id) === operationTime) return
+        persistedOperationTime.set(socket.id, operationTime)
+        setTimeout(() => {
+          if (persistedOperationTime.get(socket.id) === operationTime) {
+            persistedOperationTime.delete(socket.id)
+          }
+        }, 60_000).unref?.()
         this.activityRepository.create({
           type: Activity.ReadDuration,
           payload: {
@@ -314,30 +328,39 @@ export class ActivityService implements OnModuleInit, OnModuleDestroy {
     data.identity = data.identity.toLowerCase()
 
     const roomSockets = await this.webGateway.getSocketsOfRoom(roomName)
+    const roomSocketMetas = await this.gatewayService.getSocketMetadataMany(
+      roomSockets.map((socket) => socket.id),
+    )
 
-    const socket = roomSockets.find((socket) => socket.id === data.sid)
-    if (!socket) {
+    // Clients never learn their server-generated connection id, so `sid` is
+    // matched against the session id they supplied at handshake as well.
+    const index = roomSockets.findIndex(
+      (socket, i) =>
+        socket.id === data.sid || roomSocketMetas[i]?.sessionId === data.sid,
+    )
+    if (index === -1) {
       this.logger.debug(
         `socket not found, room_name: ${roomName} identity: ${data.identity}`,
       )
       return
     }
 
-    // Prefer the readerId resolved server-side from the HTTP session cookie
-    // (RolesGuard runs globally and fills request.readerId before this
-    // service runs). Fall back to the socket-handshake binding, and finally
-    // the client-provided value, both of which are less authoritative.
-    const socketMeta = await this.gatewayService.getSocketMetadata(socket)
-    const resolvedReaderId =
-      RequestContext.currentReaderId() || socketMeta?.readerId || data.readerId
+    const socket = roomSockets[index]
+    const socketMeta = roomSocketMetas[index]
+
+    const resolvedReaderId = resolvePresenceReaderId(
+      RequestContext.currentReaderId(),
+      socketMeta?.readerId,
+    )
 
     const presenceData: ActivityPresence = {
       ...data,
 
       operationTime: data.ts,
       updatedAt: Date.now(),
-      connectedAt: +new Date(socket.handshake.time),
+      connectedAt: socketMeta?.connectedAt ?? Date.now(),
       readerId: resolvedReaderId,
+      image: data.image,
       ip,
     }
 
@@ -348,12 +371,14 @@ export class ActivityService implements OnModuleInit, OnModuleDestroy {
         resolvedReaderId,
       ])
       if (reader.length) {
+        const publicReader = toPublicPresenceReader(reader[0])
         Object.assign(serializedPresenceData, {
-          reader: camelcaseKeys({
-            ...reader[0],
-            id: reader[0].id.toString(),
-          }),
+          reader: camelcaseKeys(publicReader),
         })
+        if (!serializedPresenceData.image && publicReader.image) {
+          serializedPresenceData.image = publicReader.image
+          presenceData.image = publicReader.image
+        }
       }
     }
 
@@ -474,13 +499,37 @@ export class ActivityService implements OnModuleInit, OnModuleDestroy {
     return this.getDateRangeOfReadings(startAt, endAt, limit)
   }
 
+  async getRecentLikes(size = 5) {
+    const like = await this.getLikeActivities(1, size)
+    return like.data.map((item) => {
+      const likeData = pick(item, 'createdAt', 'id') as any
+      if (!item.ref) {
+        likeData.title = 'Deleted content'
+        return likeData
+      }
+      if ('nid' in item.ref) {
+        likeData.type = CollectionRefTypes.Note
+        likeData.nid = item.ref.nid
+      } else {
+        likeData.type = CollectionRefTypes.Post
+        likeData.slug = item.ref.slug
+      }
+      likeData.title = item.ref.title
+      likeData.articleId = (item.payload as { id?: string } | null)?.id
+      return likeData
+    })
+  }
+
   async getRecentComment() {
     const configs = await this.configsService.get('commentOptions')
     const { commentShouldAudit } = configs
 
     const docs = await this.commentService.findRecent(3, {
-      state: commentShouldAudit ? CommentState.Read : undefined,
       rootOnly: false,
+      publicFilter: {
+        isAuthenticated: false,
+        commentShouldAudit,
+      },
     })
 
     // For post refs, look up their categories separately

@@ -3,30 +3,19 @@ import { Leaf } from 'lucide-react'
 import { useEffect, useMemo, useRef } from 'react'
 import { toast } from 'sonner'
 
-import { getRecentActivities } from '~/api/activity'
+import { getAggregateStat, getDashboard } from '~/api/aggregate'
 import {
-  countReadAndLike,
-  getAggregateStat,
-  getDesk,
-  getOnThisDay,
-  getPublishHeatmap,
-  getTopArticles,
-} from '~/api/aggregate'
-import { getAnalyzeAggregate } from '~/api/analyze'
-import { getDrafts } from '~/api/drafts'
-import { checkUpdateFromGitHub } from '~/api/github-update'
-import { getOwner } from '~/api/options'
+  checkUpdateFromGitHub,
+  type GitHubUpdateVersions,
+} from '~/api/github-update'
 import { getAppInfo } from '~/api/system'
 import { useI18n } from '~/i18n'
-import { AppPage } from '~/ui/layout/page-layout'
 import { EmptyState } from '~/ui/patterns/EmptyState'
-import { Scroll } from '~/ui/primitives/scroll'
 import { isNewerVersion } from '~/utils/version'
 
 import {
   aggregateStatRefetchInterval,
   dashboardQueryKeys,
-  deskWritingItemLimit,
   updateStaleTime,
 } from '../constants'
 import { readClosedUpdateTips, writeClosedUpdateTip } from '../utils/dashboard'
@@ -35,13 +24,17 @@ import { presentDashboardUpgrade } from './DashboardUpgradeModal'
 import { buildEchoRows, DeskEchoCard } from './DeskEchoCard'
 import { DeskFooter } from './DeskFooter'
 import { DeskGreeting } from './DeskGreeting'
+import { DeskLayout } from './DeskLayout'
 import { DeskLoadError } from './DeskLoadError'
 import { DeskOnThisDayCard } from './DeskOnThisDayCard'
+import { DeskResumeCard } from './DeskResumeCard'
 import { DeskRhythmCard } from './DeskRhythmCard'
+import { DeskPrimarySkeleton, DeskRailSkeleton } from './DeskSkeleton'
 import { DeskStatBand } from './DeskStatBand'
 import { DeskTasksCard } from './DeskTasksCard'
 import { DeskTopArticlesCard } from './DeskTopArticlesCard'
 import { DeskTrafficCard } from './DeskTrafficCard'
+import { DeskWeekCard } from './DeskWeekCard'
 import { DeskWritingCard } from './DeskWritingCard'
 import { presentUpdateRelease } from './UpdateReleaseModal'
 
@@ -49,58 +42,19 @@ export function DashboardRouteViewContent() {
   const { t } = useI18n()
   const notifiedUpdatesRef = useRef(new Set<string>())
 
+  const dashboardQuery = useQuery({
+    queryFn: getDashboard,
+    queryKey: dashboardQueryKeys.home,
+  })
   const statQuery = useQuery({
     queryFn: getAggregateStat,
     queryKey: dashboardQueryKeys.aggregateStat,
     refetchInterval: aggregateStatRefetchInterval,
   })
-  const ownerQuery = useQuery({
-    queryFn: getOwner,
-    queryKey: dashboardQueryKeys.owner,
-    retry: false,
-  })
   const appInfoQuery = useQuery({
     queryFn: getAppInfo,
     queryKey: dashboardQueryKeys.appInfo,
     retry: false,
-  })
-  const deskQuery = useQuery({
-    queryFn: getDesk,
-    queryKey: dashboardQueryKeys.desk,
-  })
-  const draftsQuery = useQuery({
-    queryFn: () =>
-      getDrafts({
-        page: 1,
-        size: deskWritingItemLimit,
-        sort_by: 'updatedAt',
-        sort_order: 'desc',
-      }),
-    queryKey: dashboardQueryKeys.deskDrafts,
-  })
-  const readLikeQuery = useQuery({
-    queryFn: countReadAndLike,
-    queryKey: dashboardQueryKeys.readLike,
-  })
-  const onThisDayQuery = useQuery({
-    queryFn: getOnThisDay,
-    queryKey: dashboardQueryKeys.onThisDay,
-  })
-  const heatmapQuery = useQuery({
-    queryFn: getPublishHeatmap,
-    queryKey: dashboardQueryKeys.publishHeatmap,
-  })
-  const recentActivitiesQuery = useQuery({
-    queryFn: getRecentActivities,
-    queryKey: dashboardQueryKeys.recentActivities,
-  })
-  const analyzeAggregateQuery = useQuery({
-    queryFn: getAnalyzeAggregate,
-    queryKey: dashboardQueryKeys.analyzeAggregate,
-  })
-  const topArticlesQuery = useQuery({
-    queryFn: getTopArticles,
-    queryKey: dashboardQueryKeys.topArticles,
   })
 
   const adminVersion = __DEV__ ? 'dev mode' : window.version || 'N/A'
@@ -116,31 +70,31 @@ export function DashboardRouteViewContent() {
     staleTime: updateStaleTime,
   })
 
-  const updates = updateQuery.data
-  const adminUpdate =
-    updates && isNewerVersion(adminVersion, updates.dashboard)
-      ? updates.dashboard
-      : null
-  const systemUpdate =
-    updates && isNewerVersion(systemVersion, updates.system)
-      ? updates.system
-      : null
+  const resolveUpdates = (versions: GitHubUpdateVersions | undefined) => ({
+    adminUpdate:
+      versions && isNewerVersion(adminVersion, versions.dashboard)
+        ? versions.dashboard
+        : null,
+    systemUpdate:
+      versions && isNewerVersion(systemVersion, versions.system)
+        ? versions.system
+        : null,
+  })
+  const { adminUpdate, systemUpdate } = resolveUpdates(updateQuery.data)
 
-  useEffect(() => {
-    if (__DEV__) return
-    if (appInfoQuery.data?.version?.startsWith('demo')) {
-      toast.info(t('dashboard.demoMode.tip'))
-    }
-  }, [appInfoQuery.data?.version])
-
-  useEffect(() => {
-    if (__DEV__) return
+  const notifyUpdates = (
+    versions: GitHubUpdateVersions | undefined,
+    force: boolean,
+  ) => {
+    if (!versions) return false
     const closedTips = readClosedUpdateTips()
+    const { adminUpdate, systemUpdate } = resolveUpdates(versions)
 
     if (
       adminUpdate &&
-      closedTips.dashboard !== adminUpdate &&
-      !notifiedUpdatesRef.current.has(`dashboard:${adminUpdate}`)
+      (force ||
+        (closedTips.dashboard !== adminUpdate &&
+          !notifiedUpdatesRef.current.has(`dashboard:${adminUpdate}`)))
     ) {
       notifiedUpdatesRef.current.add(`dashboard:${adminUpdate}`)
       toast.info(
@@ -163,8 +117,9 @@ export function DashboardRouteViewContent() {
 
     if (
       systemUpdate &&
-      closedTips.system !== systemUpdate &&
-      !notifiedUpdatesRef.current.has(`system:${systemUpdate}`)
+      (force ||
+        (closedTips.system !== systemUpdate &&
+          !notifiedUpdatesRef.current.has(`system:${systemUpdate}`)))
     ) {
       notifiedUpdatesRef.current.add(`system:${systemUpdate}`)
       toast.info(
@@ -188,101 +143,156 @@ export function DashboardRouteViewContent() {
         },
       )
     }
-  }, [adminUpdate, adminVersion, systemUpdate, systemVersion])
 
-  const desk = deskQuery.data
+    return Boolean(adminUpdate || systemUpdate)
+  }
+
+  useEffect(() => {
+    if (__DEV__) return
+    if (appInfoQuery.data?.version?.startsWith('demo')) {
+      toast.info(t('dashboard.demoMode.tip'))
+    }
+  }, [appInfoQuery.data?.version])
+
+  useEffect(() => {
+    if (__DEV__) return
+    notifyUpdates(updateQuery.data, false)
+  }, [updateQuery.data, adminVersion, systemVersion])
+
+  const handleCheckUpdates = async () => {
+    const [, result] = await Promise.all([
+      appInfoQuery.refetch(),
+      updateQuery.refetch(),
+    ])
+    if (result.error) {
+      toast.error(result.error.message)
+      return
+    }
+    if (!notifyUpdates(result.data, true)) {
+      toast.success(t('dashboard.update.upToDate'))
+    }
+  }
+
+  const home = dashboardQuery.data
+  const desk = home?.desk
+  const stat = statQuery.data ?? home?.stat
   const writingItems = useMemo(
-    () =>
-      buildWritingItems(
-        draftsQuery.data?.data ?? [],
-        desk?.scheduledNotes ?? [],
-      ),
-    [desk?.scheduledNotes, draftsQuery.data?.data],
+    () => buildWritingItems(home?.drafts ?? [], desk?.scheduledNotes ?? []),
+    [desk?.scheduledNotes, home?.drafts],
   )
+  const echoRows = useMemo(
+    () => buildEchoRows(home?.recent.comment ?? [], home?.recent.like ?? [], t),
+    [home?.recent, t],
+  )
+
+  if (!home) {
+    return (
+      <DeskLayout
+        primary={
+          dashboardQuery.isError ? (
+            <DeskLoadError
+              onRetry={() => void dashboardQuery.refetch()}
+              retrying={dashboardQuery.isFetching}
+            />
+          ) : (
+            <DeskPrimarySkeleton />
+          )
+        }
+        rail={dashboardQuery.isError ? null : <DeskRailSkeleton />}
+      />
+    )
+  }
+
   const hasTasks =
-    (desk?.unreadComments.count ?? 0) > 0 ||
-    (desk?.linkApplications.count ?? 0) > 0 ||
+    home.desk.unreadComments.count > 0 ||
+    home.desk.linkApplications.count > 0 ||
     adminUpdate !== null ||
     systemUpdate !== null
-  const hasCards = writingItems.length > 0 || hasTasks
-  const hasLoadError = deskQuery.isError || draftsQuery.isError
-  const showZen = deskQuery.isSuccess && draftsQuery.isSuccess && !hasCards
+  const resumeItem = writingItems.find((item) => item.draftId !== null)
+  const restItems = writingItems.filter((item) => item !== resumeItem)
+  const showZen = writingItems.length === 0 && !hasTasks
 
-  const onThisDayEntries = onThisDayQuery.data ?? []
-  const echoRows = useMemo(
-    () =>
-      buildEchoRows(
-        recentActivitiesQuery.data?.comment ?? [],
-        recentActivitiesQuery.data?.like ?? [],
-        t,
-      ),
-    [recentActivitiesQuery.data, t],
-  )
   return (
-    <AppPage>
-      <Scroll
-        className="min-h-0 flex-1 bg-background"
-        innerClassName="flex min-h-full flex-col p-4 pt-8 desktop:pt-14"
-      >
-        <div className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-6">
-          <DeskGreeting ownerName={ownerQuery.data?.name} />
-
-          <DeskStatBand
-            stat={statQuery.data}
-            totalReads={readLikeQuery.data?.totalReads}
+    <DeskLayout
+      primary={
+        <>
+          <DeskGreeting
+            className="phone:order-1"
+            desk={home.desk}
+            online={stat?.online}
+            ownerName={home.ownerName ?? undefined}
+            todayMaxOnline={stat?.todayMaxOnline}
           />
 
-          {hasLoadError ? (
-            <DeskLoadError
-              onRetry={() => {
-                if (deskQuery.isError) void deskQuery.refetch()
-                if (draftsQuery.isError) void draftsQuery.refetch()
-              }}
-              retrying={deskQuery.isFetching || draftsQuery.isFetching}
+          {resumeItem ? (
+            <DeskResumeCard className="phone:order-3" item={resumeItem} />
+          ) : null}
+          {showZen ? (
+            <div className="border-t border-border py-7 phone:order-3 phone:py-6">
+              <EmptyState icon={Leaf} title={t('dashboard.desk.zen.title')} />
+            </div>
+          ) : null}
+          {restItems.length > 0 ? (
+            <DeskWritingCard
+              className="phone:order-4"
+              items={restItems}
+              total={writingItems.length}
             />
           ) : null}
 
-          <div className="grid flex-1 gap-4 desktop:grid-cols-[8fr_4fr]">
-            <div className="flex min-w-0 flex-col gap-4 [&>:last-child]:flex-1">
-              {writingItems.length > 0 ? (
-                <DeskWritingCard items={writingItems} />
+          {home.onThisDay.length > 0 || home.topArticles.length > 0 ? (
+            <div className="grid gap-x-10 gap-y-6 border-t border-border py-7 @3xl/desk:grid-cols-2 phone:order-8 phone:py-6">
+              {home.onThisDay.length > 0 ? (
+                <DeskOnThisDayCard entries={home.onThisDay} />
               ) : null}
-              {showZen ? (
-                <EmptyState icon={Leaf} title={t('dashboard.desk.zen.title')} />
+              {home.topArticles.length > 0 ? (
+                <DeskTopArticlesCard articles={home.topArticles} />
               ) : null}
-              <DeskOnThisDayCard entries={onThisDayEntries} />
-              <DeskRhythmCard days={heatmapQuery.data ?? []} />
             </div>
-            <div className="flex min-w-0 flex-col gap-4 [&>:last-child]:flex-1">
-              {hasTasks ? (
-                <DeskTasksCard
-                  adminUpdate={adminUpdate}
-                  adminVersion={adminVersion}
-                  desk={desk}
-                  systemUpdate={systemUpdate}
-                  systemVersion={systemVersion}
-                />
-              ) : null}
-              {echoRows.length > 0 ? <DeskEchoCard rows={echoRows} /> : null}
-              <DeskTrafficCard today={analyzeAggregateQuery.data?.today} />
-              <DeskTopArticlesCard articles={topArticlesQuery.data ?? []} />
-            </div>
-          </div>
+          ) : null}
+          <DeskRhythmCard
+            className="phone:order-9"
+            days={home.publishHeatmap}
+          />
+          <DeskStatBand
+            className="phone:order-10"
+            pendingComments={home.desk.unreadComments.count}
+            stat={stat}
+            totalReads={home.reads.totalReads}
+          />
 
           <DeskFooter
             adminVersion={adminVersion}
-            onCheckUpdates={() => {
-              void appInfoQuery.refetch()
-              void updateQuery.refetch()
-            }}
-            online={statQuery.data?.online ?? 0}
+            className="phone:order-11"
+            onCheckUpdates={() => void handleCheckUpdates()}
             refreshing={appInfoQuery.isFetching || updateQuery.isFetching}
             systemVersion={systemVersion}
-            todayMaxOnline={statQuery.data?.todayMaxOnline ?? 0}
-            todayVisitors={statQuery.data?.todayOnlineTotal ?? 0}
           />
-        </div>
-      </Scroll>
-    </AppPage>
+        </>
+      }
+      rail={
+        <>
+          <DeskWeekCard
+            className="phone:order-5"
+            days={home.publishHeatmap}
+            scheduledNotes={home.desk.scheduledNotes}
+          />
+          {hasTasks ? (
+            <DeskTasksCard
+              adminUpdate={adminUpdate}
+              adminVersion={adminVersion}
+              className="phone:order-2"
+              desk={home.desk}
+              systemUpdate={systemUpdate}
+              systemVersion={systemVersion}
+            />
+          ) : null}
+          <DeskTrafficCard className="phone:order-6" />
+          {echoRows.length > 0 ? (
+            <DeskEchoCard className="phone:order-7" rows={echoRows} />
+          ) : null}
+        </>
+      }
+    />
   )
 }

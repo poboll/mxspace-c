@@ -12,23 +12,35 @@ import type { FastifyReply } from 'fastify'
 
 import { ApiController } from '~/common/decorators/api-controller.decorator'
 import { Auth } from '~/common/decorators/auth.decorator'
+import { CurrentReaderId } from '~/common/decorators/current-user.decorator'
 import { HTTPDecorators } from '~/common/decorators/http.decorator'
+import { HasAdminAccess } from '~/common/decorators/role.decorator'
+import { AppErrorCode, createAppException } from '~/common/errors'
 import { withMeta } from '~/common/response/envelope.types'
 import { MetaObjectBuilder } from '~/common/response/meta-builder'
-import { CreateSummaryTaskDto } from '~/modules/ai/ai-task/ai-task.dto'
+import {
+  type CreateSummaryTaskDto,
+  CreateSummaryTaskSchema,
+  type CreateSummaryTranslationTaskDto,
+  CreateSummaryTranslationTaskSchema,
+} from '~/modules/ai/ai-task/ai-task.dto'
 import { AiTaskService } from '~/modules/ai/ai-task/ai-task.service'
 import { PostMetaBuilder } from '~/modules/post/post-meta-builder'
-import { EntityIdDto } from '~/shared/dto/id.dto'
-import { BasicPagerDto } from '~/shared/dto/pager.dto'
+import { type EntityIdDto, EntityIdSchema } from '~/shared/dto/id.dto'
+import { type BasicPagerDto, BasicPagerSchema } from '~/shared/dto/pager.dto'
 import { endSse, initSse, sendSseEvent } from '~/utils/sse.util'
 
 import { DEFAULT_SUMMARY_LANG } from '../ai.constants'
 import { parseLanguageCode } from '../ai-language.util'
 import {
-  GetSummariesGroupedQueryDto,
-  GetSummaryQueryDto,
-  GetSummaryStreamQueryDto,
-  UpdateSummaryDto,
+  type GetSummariesGroupedQueryDto,
+  GetSummariesGroupedQuerySchema,
+  type GetSummaryQueryDto,
+  GetSummaryQuerySchema,
+  type GetSummaryStreamQueryDto,
+  GetSummaryStreamQuerySchema,
+  type UpdateSummaryDto,
+  UpdateSummarySchema,
 } from './ai-summary.schema'
 import { AiSummaryService } from './ai-summary.service'
 
@@ -41,19 +53,47 @@ export class AiSummaryController {
 
   @Post('/task')
   @Auth()
-  createSummaryTask(@Body() body: CreateSummaryTaskDto) {
+  createSummaryTask(
+    @Body({ schema: CreateSummaryTaskSchema }) body: CreateSummaryTaskDto,
+  ) {
     return this.taskService.createSummaryTask(body)
+  }
+
+  @Post('/task/translate')
+  @Auth()
+  async createSummaryTranslationTask(
+    @Body({ schema: CreateSummaryTranslationTaskSchema })
+    body: CreateSummaryTranslationTaskDto,
+  ) {
+    const source = await this.service.findBaseSummaryForArticle(body.refId)
+    if (!source) {
+      return { taskId: null, created: false, reason: 'source-missing' }
+    }
+    const sourceLang = source.sourceLang || source.lang
+    if (body.targetLang === sourceLang) {
+      throw createAppException(AppErrorCode.AI_INVALID_PARAMETER, {
+        message: 'targetLang must differ from source lang',
+      })
+    }
+    return this.taskService.createSummaryTranslationTask({
+      refId: body.refId,
+      sourceSummaryId: source.id!,
+      targetLang: body.targetLang,
+      force: body.force,
+    })
   }
 
   @Get('/ref/:id')
   @Auth()
-  getSummaryByRefId(@Param() params: EntityIdDto) {
+  getSummaryByRefId(@Param({ schema: EntityIdSchema }) params: EntityIdDto) {
     return this.service.getSummariesByRefId(params.id)
   }
 
   @Get('/')
   @Auth()
-  async getSummaries(@Query() query: BasicPagerDto) {
+  async getSummaries(
+    @Query({ schema: BasicPagerSchema }) query: BasicPagerDto,
+  ) {
     const result = await this.service.getAllSummaries(query)
     return withMeta(
       result.data,
@@ -66,7 +106,10 @@ export class AiSummaryController {
 
   @Get('/grouped')
   @Auth()
-  async getSummariesGrouped(@Query() query: GetSummariesGroupedQueryDto) {
+  async getSummariesGrouped(
+    @Query({ schema: GetSummariesGroupedQuerySchema })
+    query: GetSummariesGroupedQueryDto,
+  ) {
     const result = await this.service.getAllSummariesGrouped(query)
     return withMeta(
       result.data,
@@ -76,33 +119,43 @@ export class AiSummaryController {
 
   @Patch('/:id')
   @Auth()
-  updateSummary(@Param() params: EntityIdDto, @Body() body: UpdateSummaryDto) {
+  updateSummary(
+    @Param({ schema: EntityIdSchema }) params: EntityIdDto,
+    @Body({ schema: UpdateSummarySchema }) body: UpdateSummaryDto,
+  ) {
     return this.service.updateSummaryInDb(params.id, body.summary)
   }
 
   @Delete('/:id')
   @Auth()
-  deleteSummary(@Param() params: EntityIdDto) {
+  deleteSummary(@Param({ schema: EntityIdSchema }) params: EntityIdDto) {
     return this.service.deleteSummaryInDb(params.id)
   }
 
   @Get('/article/:id')
   getArticleSummary(
-    @Param() params: EntityIdDto,
-    @Query() query: GetSummaryQueryDto,
+    @Param({ schema: EntityIdSchema }) params: EntityIdDto,
+    @Query({ schema: GetSummaryQuerySchema }) query: GetSummaryQueryDto,
+    @HasAdminAccess() isOwner?: boolean,
+    @CurrentReaderId() readerId?: string,
   ) {
     return this.service.getOrGenerateSummaryForArticle(params.id, {
       lang: query.lang ? parseLanguageCode(query.lang) : DEFAULT_SUMMARY_LANG,
       onlyDb: query.onlyDb,
+      isOwner: Boolean(isOwner),
+      readerId,
     })
   }
 
   @Get('/article/:id/generate')
   @HTTPDecorators.RawResponse
   async generateArticleSummary(
-    @Param() params: EntityIdDto,
-    @Query() query: GetSummaryStreamQueryDto,
+    @Param({ schema: EntityIdSchema }) params: EntityIdDto,
+    @Query({ schema: GetSummaryStreamQuerySchema })
+    query: GetSummaryStreamQueryDto,
     @Res() reply: FastifyReply,
+    @HasAdminAccess() isOwner?: boolean,
+    @CurrentReaderId() readerId?: string,
   ) {
     initSse(reply)
 
@@ -114,6 +167,8 @@ export class AiSummaryController {
     try {
       const { events } = await this.service.streamSummaryForArticle(params.id, {
         lang: query.lang ? parseLanguageCode(query.lang) : DEFAULT_SUMMARY_LANG,
+        isOwner: Boolean(isOwner),
+        readerId,
       })
 
       let sentToken = false

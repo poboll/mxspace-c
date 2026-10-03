@@ -16,6 +16,7 @@ final class PushNotificationManager {
 
     private(set) var state: State = .idle
     private(set) var bindingID: String?
+    private(set) var authorizationStatus: UNAuthorizationStatus = .notDetermined
 
     private let configuration: PushConfiguration
     private let relay: PushRelayClient
@@ -24,6 +25,7 @@ final class PushNotificationManager {
 
     var isEnabled: Bool { state == .enabled }
     var isWorking: Bool { state == .enabling || state == .disabling }
+    var isDenied: Bool { authorizationStatus == .denied }
     var errorMessage: String? {
         guard case let .failed(message) = state else { return nil }
         return message
@@ -41,10 +43,27 @@ final class PushNotificationManager {
     }
 
     func refresh() async {
+        authorizationStatus = await UNUserNotificationCenter.current()
+            .notificationSettings().authorizationStatus
         do {
-            let status = try await activation.status()
-            bindingID = status.bindingID
-            state = status.enabled ? .enabled : .idle
+            guard
+                let credential = try credentials.read(),
+                let storedBindingID = credential.bindingID
+            else {
+                bindingID = nil
+                state = .idle
+                return
+            }
+            let binding = try await relay.binding(
+                bindingID: storedBindingID,
+                credential: credential
+            )
+            bindingID = binding.bindingID
+            state = .enabled
+        } catch PushRelayError.rejected(404) {
+            try? credentials.clear()
+            bindingID = nil
+            state = .idle
         } catch {
             state = .failed(error.localizedDescription)
         }
@@ -56,12 +75,15 @@ final class PushNotificationManager {
         do {
             let center = UNUserNotificationCenter.current()
             let settings = await center.notificationSettings()
+            authorizationStatus = settings.authorizationStatus
             switch settings.authorizationStatus {
             case .notDetermined:
                 guard try await center.requestAuthorization(options: [.alert, .sound]) else {
+                    authorizationStatus = .denied
                     state = .failed("Notifications were not allowed.")
                     return
                 }
+                authorizationStatus = await center.notificationSettings().authorizationStatus
             case .denied:
                 state = .failed("Notifications are disabled in iOS Settings.")
                 return
@@ -79,6 +101,7 @@ final class PushNotificationManager {
 
     func restoreRegistration() async {
         let settings = await UNUserNotificationCenter.current().notificationSettings()
+        authorizationStatus = settings.authorizationStatus
         guard
             settings.authorizationStatus == .authorized ||
             settings.authorizationStatus == .provisional ||
@@ -98,15 +121,28 @@ final class PushNotificationManager {
     }
 
     func disable() async {
-        guard let bindingID, !isWorking else { return }
+        guard
+            let bindingID,
+            let credential = try? credentials.read(),
+            !isWorking
+        else { return }
         state = .disabling
         do {
-            try await activation.deactivate(bindingID: bindingID)
+            try await relay.revokeBinding(
+                bindingID: bindingID,
+                credential: credential
+            )
+            try credentials.clear()
             self.bindingID = nil
             state = .idle
         } catch {
             state = .failed(error.localizedDescription)
         }
+    }
+
+    func openSystemSettings() {
+        guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
+        UIApplication.shared.open(url)
     }
 
     private func activate(deviceToken: String) async {
@@ -132,6 +168,12 @@ final class PushNotificationManager {
                 relayURL: configuration.relayURL,
                 ticket: ticket.ticket
             )
+            let activatedCredential = PushInstallationCredential(
+                installationID: credential.installationID,
+                installationSecret: credential.installationSecret,
+                bindingID: status.bindingID
+            )
+            try credentials.write(activatedCredential)
             bindingID = status.bindingID
             state = .enabled
         } catch {

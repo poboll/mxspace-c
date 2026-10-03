@@ -1,3 +1,6 @@
+import type { ContentDocument, DraftModel } from '~/models/draft'
+
+import type { RecentActivities } from './activity'
 import { getJson } from './http'
 
 export interface StatCount {
@@ -101,22 +104,39 @@ export interface OnThisDayEntry {
 export interface HeatmapDay {
   count: number
   date: string
+  notes: number
+  posts: number
+}
+
+export interface DeskDraft {
+  createdAt: string
+  document: Pick<ContentDocument, 'refId' | 'refType'>
+  documentId: string
+  headRevision: { chars: number; excerpt: string; title: string }
+  id: string
+  relationToPublished: DraftModel['relationToPublished']
+  status: DraftModel['status']
+  updatedAt: null | string
+}
+
+export interface DashboardPayload {
+  desk: DeskSummary
+  drafts: DeskDraft[]
+  onThisDay: OnThisDayEntry[]
+  ownerName: null | string
+  publishHeatmap: HeatmapDay[]
+  reads: { totalLikes: number; totalReads: number }
+  recent: RecentActivities
+  stat: StatCount
+  topArticles: TopArticle[]
+}
+
+export function getDashboard() {
+  return getJson<DashboardPayload>('/aggregate/dashboard')
 }
 
 export function getAggregateStat() {
   return getJson<StatCount>('/aggregate/stat')
-}
-
-export function getDesk() {
-  return getJson<DeskSummary>('/aggregate/desk')
-}
-
-export function getOnThisDay() {
-  return getJson<OnThisDayEntry[]>('/aggregate/on-this-day')
-}
-
-export function getPublishHeatmap() {
-  return getJson<HeatmapDay[]>('/aggregate/publish-heatmap')
 }
 
 export function getCategoryDistribution() {

@@ -1,9 +1,9 @@
 import type {
   AssistantImages,
   ImageContent,
+  ImageModel,
   ImagesContext,
   ImagesFunction,
-  ImagesModel,
   ImagesOptions,
   TextContent,
   Usage,
@@ -31,6 +31,7 @@ export interface OpenRouterImagesOptions extends ImagesOptions {
   quality?: ImageGenerateOptions['quality']
   outputFormat?: ImageGenerateOptions['format']
   providerParams?: Record<string, unknown>
+  sessionId?: string
 }
 
 interface OpenRouterImageResponseItem {
@@ -52,10 +53,9 @@ interface OpenRouterImagesResponse {
 const DEFAULT_IMAGE_MIME_TYPE = 'image/png'
 
 export const generateOpenRouterImages: ImagesFunction<
-  OpenRouterImagesApi,
   OpenRouterImagesOptions
 > = async (
-  model: ImagesModel<OpenRouterImagesApi>,
+  model: ImageModel<OpenRouterImagesApi>,
   context: ImagesContext,
   options?: OpenRouterImagesOptions,
 ): Promise<AssistantImages> => {
@@ -75,6 +75,9 @@ export const generateOpenRouterImages: ImagesFunction<
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${apiKey}`,
+        ...(options?.sessionId
+          ? { 'x-session-id': options.sessionId }
+          : undefined),
       },
       body: JSON.stringify(body),
       signal: options?.signal,
@@ -112,7 +115,7 @@ export const generateOpenRouterImages: ImagesFunction<
 }
 
 async function resolveSupportedParameters(
-  model: ImagesModel<OpenRouterImagesApi>,
+  model: ImageModel<OpenRouterImagesApi>,
   apiKey: string,
 ): Promise<SupportedImageParameters> {
   try {
@@ -136,7 +139,7 @@ async function resolveSupportedParameters(
 }
 
 function buildRequestBody(
-  model: ImagesModel<OpenRouterImagesApi>,
+  model: ImageModel<OpenRouterImagesApi>,
   context: ImagesContext,
   options: OpenRouterImagesOptions | undefined,
   supportedParameters: SupportedImageParameters,
@@ -186,7 +189,7 @@ function buildRequestBody(
 }
 
 function logDroppedParams(
-  model: ImagesModel<OpenRouterImagesApi>,
+  model: ImageModel<OpenRouterImagesApi>,
   options: OpenRouterImagesOptions | undefined,
   params: OpenRouterImageRequestParams,
   requestedReferenceImages: boolean,
@@ -250,6 +253,8 @@ async function readErrorMessage(response: Response): Promise<string> {
     if (typeof payload.error?.message === 'string') {
       return payload.error.message
     }
-  } catch {}
+  } catch {
+    // Fall back to the HTTP status when the provider body is not valid JSON.
+  }
   return `image generation request failed with status ${response.status}`
 }

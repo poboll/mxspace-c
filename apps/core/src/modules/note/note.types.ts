@@ -69,7 +69,6 @@ export type NoteModel = NoteRow & {
 
 export type NoteCreateDocument = Omit<Partial<NoteModel>, 'nid' | 'text'> &
   Pick<NoteModel, 'text'> & {
-    draftId?: string
     created?: Date | string | number
   }
 

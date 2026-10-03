@@ -7,15 +7,18 @@ import {
   gte,
   ilike,
   inArray,
+  isNotNull,
+  isNull,
   lte,
   ne,
+  notInArray,
   or,
   type SQL,
   sql,
 } from 'drizzle-orm'
 
 import { PG_DB_TOKEN } from '~/constants/system.constant'
-import { comments } from '~/database/schema'
+import { comments, readerBlocks } from '~/database/schema'
 import {
   BaseRepository,
   type PaginationResult,
@@ -55,6 +58,7 @@ const mapBase = (row: typeof comments.$inferSelect): CommentRow => ({
   url: row.url,
   text: row.text,
   state: row.state,
+  moderationStatus: row.moderationStatus,
   parentCommentId: row.parentCommentId
     ? (toEntityId(row.parentCommentId) as EntityId)
     : null,
@@ -98,6 +102,96 @@ export class CommentRepository extends BaseRepository {
       .where(eq(comments.id, idBig))
       .limit(1)
     return row ? mapBase(row) : null
+  }
+
+  async findByReceipt(
+    id: string,
+    receiptHash: string,
+  ): Promise<CommentRow | null> {
+    const [row] = await this.db
+      .select()
+      .from(comments)
+      .where(
+        and(
+          eq(comments.id, parseEntityId(id)),
+          eq(comments.moderationReceiptHash, receiptHash),
+          gte(comments.createdAt, new Date(Date.now() - 7 * 86400000)),
+        ),
+      )
+      .limit(1)
+    return row ? mapBase(row) : null
+  }
+
+  async pendingReviews(): Promise<CommentRow[]> {
+    const rows = await this.db
+      .select()
+      .from(comments)
+      .where(
+        and(
+          eq(comments.moderationStatus, 'pending'),
+          eq(comments.isDeleted, false),
+        ),
+      )
+      .orderBy(asc(comments.createdAt))
+      .limit(100)
+    return rows.map(mapBase)
+  }
+
+  private reviewVersion(comment: CommentRow) {
+    return and(
+      eq(comments.id, parseEntityId(comment.id)),
+      eq(comments.text, comment.text),
+      comment.editedAt
+        ? eq(comments.editedAt, comment.editedAt)
+        : isNull(comments.editedAt),
+      eq(comments.moderationStatus, 'pending'),
+      eq(comments.isDeleted, false),
+    )
+  }
+
+  async beginReview(comment: CommentRow): Promise<number | null> {
+    const [row] = await this.db
+      .update(comments)
+      .set({ moderationAttempts: sql`${comments.moderationAttempts} + 1` })
+      .where(this.reviewVersion(comment))
+      .returning({ attempts: comments.moderationAttempts })
+    return row?.attempts ?? null
+  }
+
+  async finishReview(
+    comment: CommentRow,
+    status: 'approved' | 'rejected' | 'manual',
+  ): Promise<CommentRow | null> {
+    const [row] = await this.db
+      .update(comments)
+      .set({
+        moderationStatus: status,
+        ...(status === 'rejected' ? { state: CommentState.Junk } : {}),
+      })
+      .where(this.reviewVersion(comment))
+      .returning()
+    return row ? mapBase(row) : null
+  }
+
+  async blockReader(blockerId: string, blockedReaderId: string): Promise<void> {
+    await this.db
+      .insert(readerBlocks)
+      .values({ blockerId, blockedReaderId })
+      .onConflictDoNothing()
+  }
+
+  async findBlockedReaderIds(blockerId: string): Promise<string[]> {
+    const rows = await this.db
+      .select({ id: readerBlocks.blockedReaderId })
+      .from(readerBlocks)
+      .where(eq(readerBlocks.blockerId, blockerId))
+    return rows.map((row) => row.id)
+  }
+
+  async clearBlockedReaders(blockerId: string): Promise<void> {
+    await this.db
+      .delete(readerBlocks)
+      .where(eq(readerBlocks.blockerId, blockerId))
   }
 
   async findByIdWithRelations(
@@ -305,6 +399,8 @@ export class CommentRepository extends BaseRepository {
         mail: input.mail ?? null,
         url: input.url ?? null,
         state: input.state ?? 0,
+        moderationStatus: input.moderationStatus,
+        moderationReceiptHash: input.moderationReceiptHash,
         parentCommentId: input.parentCommentId
           ? parseEntityId(input.parentCommentId)
           : null,
@@ -357,6 +453,8 @@ export class CommentRepository extends BaseRepository {
           mail: input.mail ?? null,
           url: input.url ?? null,
           state: input.state ?? 0,
+          moderationStatus: input.moderationStatus,
+          moderationReceiptHash: input.moderationReceiptHash,
           parentCommentId: parentBig,
           rootCommentId: rootBig,
           isWhispers: input.isWhispers ?? false,
@@ -399,8 +497,16 @@ export class CommentRepository extends BaseRepository {
   ): Promise<CommentRow | null> {
     const idBig = parseEntityId(id)
     const update: Partial<typeof comments.$inferInsert> = {}
-    if (patch.text !== undefined) update.text = patch.text
-    if (patch.state !== undefined) update.state = patch.state
+    if (patch.text !== undefined) {
+      update.text = patch.text
+      update.editedAt = new Date()
+      update.moderationAttempts = 0
+    }
+    if (patch.state !== undefined) {
+      update.state = patch.state
+      update.moderationStatus =
+        patch.state === CommentState.Junk ? 'rejected' : 'approved'
+    }
     if (patch.pin !== undefined) update.pin = patch.pin
     if (patch.isDeleted !== undefined) {
       update.isDeleted = patch.isDeleted
@@ -549,10 +655,16 @@ export class CommentRepository extends BaseRepository {
 
   async findRecent(
     size: number,
-    options: { state?: number; rootOnly?: boolean } = {},
+    options: {
+      state?: number
+      rootOnly?: boolean
+      publicFilter?: CommentPublicFilterOptions
+    } = {},
   ): Promise<CommentRow[]> {
-    const filters: SQL[] = [eq(comments.isDeleted, false)]
-    if (options.state !== undefined)
+    const filters: SQL[] = options.publicFilter
+      ? this.buildPublicThreadFilters(options.publicFilter)
+      : [eq(comments.isDeleted, false)]
+    if (!options.publicFilter && options.state !== undefined)
       filters.push(eq(comments.state, options.state))
     if (options.rootOnly) filters.push(sql`${comments.parentCommentId} is null`)
     const rows = await this.db
@@ -616,7 +728,10 @@ export class CommentRepository extends BaseRepository {
   ): Promise<number> {
     const result = await this.db
       .update(comments)
-      .set({ state })
+      .set({
+        state,
+        moderationStatus: state === CommentState.Junk ? 'rejected' : 'approved',
+      })
       .where(
         and(
           eq(comments.refType, normalizeCommentRefType(refType)),
@@ -635,7 +750,10 @@ export class CommentRepository extends BaseRepository {
     const bigInts = ids.map((id) => parseEntityId(id))
     const result = await this.db
       .update(comments)
-      .set({ state })
+      .set({
+        state,
+        moderationStatus: state === CommentState.Junk ? 'rejected' : 'approved',
+      })
       .where(inArray(comments.id, bigInts))
       .returning({ id: comments.id })
     return result.length
@@ -647,7 +765,10 @@ export class CommentRepository extends BaseRepository {
   ): Promise<number> {
     const result = await this.db
       .update(comments)
-      .set({ state })
+      .set({
+        state,
+        moderationStatus: state === CommentState.Junk ? 'rejected' : 'approved',
+      })
       .where(this.buildFindFilter(filter))
       .returning({ id: comments.id })
     return result.length
@@ -746,6 +867,15 @@ export class CommentRepository extends BaseRepository {
           or(eq(comments.mail, needle), eq(comments.ip, needle)) as SQL,
         )
       }
+    }
+    if (filter.readerId) {
+      filters.push(eq(comments.readerId, filter.readerId))
+    }
+    if (filter.isDeleted !== undefined) {
+      filters.push(eq(comments.isDeleted, filter.isDeleted))
+    }
+    if (filter.excludeJunk) {
+      filters.push(ne(comments.state, CommentState.Junk))
     }
     return filters.length > 0 ? and(...filters) : undefined
   }
@@ -961,13 +1091,28 @@ export class CommentRepository extends BaseRepository {
   }
 
   private buildPublicThreadFilters({
+    blockedReaderIds = [],
     isAuthenticated,
     commentShouldAudit,
     hasAnchor,
   }: CommentPublicFilterOptions): SQL[] {
-    const filters: SQL[] = [eq(comments.isDeleted, false)]
+    const filters: SQL[] = [
+      eq(comments.isDeleted, false),
+      or(
+        isNull(comments.moderationStatus),
+        eq(comments.moderationStatus, 'approved'),
+      )!,
+    ]
     if (commentShouldAudit) {
-      filters.push(eq(comments.state, CommentState.Read))
+      filters.push(
+        or(
+          eq(comments.state, CommentState.Read),
+          and(
+            eq(comments.state, CommentState.Unread),
+            isNotNull(comments.readerId),
+          ),
+        )!,
+      )
     } else {
       filters.push(
         inArray(comments.state, [CommentState.Unread, CommentState.Read]),
@@ -978,6 +1123,14 @@ export class CommentRepository extends BaseRepository {
     }
     if (hasAnchor) {
       filters.push(sql`${comments.anchor} is not null`)
+    }
+    if (blockedReaderIds.length > 0) {
+      filters.push(
+        or(
+          isNull(comments.readerId),
+          notInArray(comments.readerId, blockedReaderIds),
+        ) as SQL,
+      )
     }
     return filters
   }

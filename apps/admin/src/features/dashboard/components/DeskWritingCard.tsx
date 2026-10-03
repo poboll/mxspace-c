@@ -1,58 +1,85 @@
-import { Clock3 } from 'lucide-react'
+import { Link } from 'react-router'
 
 import { refTypeMeta } from '~/features/drafts/constants'
 import { useI18n } from '~/i18n'
 import type { TranslationKey } from '~/i18n/types'
-import { DraftRefType } from '~/models/draft'
+import type { BadgeTone } from '~/ui/primitives/badge'
 import { relativeTimeFromNow } from '~/utils/time'
 
-import type { DeskWritingItem } from '../utils/desk'
-import { DeskCard, DeskRow } from './DeskCard'
+import type { DeskWritingItem, DeskWritingStatus } from '../utils/desk'
+import { deskFocusClassName, DeskSection } from './DeskSection'
 
-const draftTypeKey: Record<DraftRefType, TranslationKey> = {
-  [DraftRefType.Note]: 'dashboard.desk.draftType.note',
-  [DraftRefType.Page]: 'dashboard.desk.draftType.page',
-  [DraftRefType.Post]: 'dashboard.desk.draftType.post',
+export const writingStatusMeta: Record<
+  DeskWritingStatus,
+  { labelKey: TranslationKey; tone: BadgeTone }
+> = {
+  modified: {
+    labelKey: 'dashboard.desk.writing.status.modified',
+    tone: 'warning',
+  },
+  scheduled: {
+    labelKey: 'dashboard.desk.writing.status.scheduled',
+    tone: 'neutral',
+  },
+  unpublished: {
+    labelKey: 'dashboard.desk.writing.status.unpublished',
+    tone: 'accent',
+  },
 }
 
-export function DeskWritingCard(props: { items: DeskWritingItem[] }) {
+export function DeskWritingCard(props: {
+  className?: string
+  items: DeskWritingItem[]
+  total: number
+}) {
   const { format, t } = useI18n()
 
   return (
-    <DeskCard title={t('dashboard.desk.continue.title')}>
-      {props.items.map((item) => {
-        const Icon =
-          item.kind === 'draft' ? refTypeMeta[item.refType].icon : Clock3
-        const meta =
-          item.kind === 'draft'
-            ? t('dashboard.desk.draftMeta', {
-                time: relativeTimeFromNow(item.updatedAt),
-                type: t(draftTypeKey[item.refType]),
-              })
-            : t('dashboard.desk.scheduledMeta', {
-                date: format.dateTime(item.publicAt, {
+    <DeskSection
+      aside={t('dashboard.desk.writing.count', { count: props.total })}
+      className={props.className}
+      title={t('dashboard.desk.writing.title')}
+    >
+      <ul>
+        {props.items.map((item) => {
+          const time =
+            item.status === 'scheduled'
+              ? format.dateTime(item.time, {
                   dateStyle: 'medium',
                   timeStyle: undefined,
-                }),
-              })
-
-        return (
-          <DeskRow key={`${item.kind}-${item.id}`} to={item.to}>
-            <Icon
-              aria-hidden="true"
-              className="size-4 shrink-0 text-fg-subtle"
-            />
-            <span className="min-w-0 flex-1">
-              <span className="block truncate text-sm text-fg">
-                {item.title || t('dashboard.desk.untitled')}
-              </span>
-              <span className="mt-0.5 block truncate text-xs text-fg-muted">
-                {meta}
-              </span>
-            </span>
-          </DeskRow>
-        )
-      })}
-    </DeskCard>
+                })
+              : relativeTimeFromNow(item.time)
+          return (
+            <li
+              className="border-b border-border last:border-b-0"
+              key={item.id}
+            >
+              <Link
+                className={`group grid grid-cols-[minmax(0,1fr)_auto_5rem] items-center gap-4 py-3 phone:grid-cols-[minmax(0,1fr)_auto] phone:gap-x-3 phone:gap-y-0.5 ${deskFocusClassName}`}
+                to={item.to}
+              >
+                <span className="truncate text-sm text-fg transition-colors group-hover:text-accent">
+                  {item.title || t('dashboard.desk.untitled')}
+                  {item.branchCount > 1 ? (
+                    <span className="ml-2 text-xs text-fg-subtle phone:hidden">
+                      {t('dashboard.desk.writing.branches', {
+                        count: item.branchCount,
+                      })}
+                    </span>
+                  ) : null}
+                </span>
+                <span className="whitespace-nowrap text-xs text-fg-subtle phone:col-start-1 phone:row-start-2">
+                  {t(refTypeMeta[item.refType].labelKey)} ·{' '}
+                  {t(writingStatusMeta[item.status].labelKey)}
+                </span>
+                <span className="text-right text-xs tabular-nums text-fg-subtle phone:col-start-2 phone:row-span-2 phone:row-start-1">
+                  {time}
+                </span>
+              </Link>
+            </li>
+          )
+        })}
+      </ul>
+    </DeskSection>
   )
 }

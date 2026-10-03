@@ -14,10 +14,12 @@
 import { describe, expect, test } from 'vitest'
 
 import { apiRoutePrefix } from '~/common/decorators/api-controller.decorator'
+import { ActivityService } from '~/modules/activity/activity.service'
 import { AggregateController } from '~/modules/aggregate/aggregate.controller'
 import { AggregateService } from '~/modules/aggregate/aggregate.service'
 import { AnalyzeService } from '~/modules/analyze/analyze.service'
 import { ConfigsService } from '~/modules/configs/configs.service'
+import { DraftService } from '~/modules/draft/draft.service'
 import { NoteService } from '~/modules/note/note.service'
 import { OwnerService } from '~/modules/owner/owner.service'
 import { SnippetService } from '~/modules/snippet/snippet.service'
@@ -66,13 +68,13 @@ const ownerSvcProvider = {
 const configsSvcProvider = {
   provide: ConfigsService,
   useValue: {
-    async get(key: string) {
-      if (key === 'url') return { webUrl: 'https://x.test', adminUrl: 'admin' }
-      if (key === 'seo') return { title: 'site', description: 'd' }
-      if (key === 'commentOptions')
-        return { disableComment: false, allowGuestComment: true }
-      if (key === 'ai') return { enableSummary: true }
-      return {}
+    async getConfig() {
+      return {
+        url: { webUrl: 'https://x.test', adminUrl: 'admin' },
+        seo: { title: 'site', description: 'd' },
+        commentOptions: { disableComment: false, allowGuestComment: true },
+        ai: { enableSummary: true },
+      }
     },
   },
 }
@@ -102,6 +104,8 @@ describe('Yohaku contract — aggregate root (e2e)', () => {
   const proxy = createE2EApp({
     controllers: [AggregateController],
     providers: [
+      { provide: ActivityService, useValue: {} },
+      { provide: DraftService, useValue: {} },
       aggregateServiceProvider,
       noteSvcProvider,
       ownerSvcProvider,

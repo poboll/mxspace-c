@@ -68,6 +68,13 @@ export interface EnrichmentRow {
   createdAt: Date
 }
 
+export class EnrichmentDeferredError extends Error {
+  constructor(public readonly retryAt?: Date) {
+    super('Enrichment is already being fetched or is waiting before retrying')
+    this.name = 'EnrichmentDeferredError'
+  }
+}
+
 export interface UrlMatchResult {
   id: string
   fullUrl: string

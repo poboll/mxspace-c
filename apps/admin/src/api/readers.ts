@@ -1,6 +1,6 @@
 import type { PaginateResult } from '~/models/base'
 
-import { deleteJson, getJson, patchJson, putJson } from './http'
+import { deleteJson, getJson, patchJson, postJson, putJson } from './http'
 
 export type ReaderRole = 'reader' | 'owner'
 export type ReaderRoleFilter = 'all' | 'owner' | 'reader'
@@ -102,4 +102,57 @@ export function grantMembership(
 
 export function revokeMembership(readerId: string) {
   return deleteJson<ReaderMembership>(`/membership/members/${readerId}`)
+}
+
+export interface SponsorReaderMatch {
+  id: string
+  name: string | null
+  handle: string | null
+  membership: ReaderMembership | null
+}
+
+export interface GithubSponsorModel {
+  githubId: string
+  login: string
+  avatarUrl: string
+  tierName: string | null
+  monthlyPrice: number | null
+  isActive: boolean
+  sponsoredAt: string
+  reader: SponsorReaderMatch | null
+}
+
+export interface SponsorCsvPreviewRow {
+  line: number
+  githubId: string | null
+  email: string | null
+  handle: string | null
+  months: number | null
+  note: string | null
+  reader: SponsorReaderMatch | null
+}
+
+export interface SponsorImportResult {
+  granted: number
+  skipped: { readerId: string; reason: string }[]
+}
+
+export function getGithubSponsors(refresh = false) {
+  return getJson<GithubSponsorModel[]>('/membership/sponsors/github', {
+    refresh: refresh ? 'true' : undefined,
+  })
+}
+
+export function previewSponsorsCsv(csv: string) {
+  return postJson<SponsorCsvPreviewRow[], { csv: string }>(
+    '/membership/sponsors/csv/preview',
+    { csv },
+  )
+}
+
+export function importSponsors(grants: { readerId: string; months: number }[]) {
+  return postJson<SponsorImportResult, { grants: typeof grants }>(
+    '/membership/sponsors/import',
+    { grants },
+  )
 }

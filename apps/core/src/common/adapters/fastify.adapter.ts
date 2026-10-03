@@ -1,6 +1,5 @@
 import { Readable } from 'node:stream'
 
-import fastifyCookie from '@fastify/cookie'
 import FastifyMultipart from '@fastify/multipart'
 import { Logger } from '@nestjs/common'
 import { FastifyAdapter } from '@nestjs/platform-fastify'
@@ -32,10 +31,14 @@ function logWarn(desc: string, req: FastifyRequest, _context: string) {
 // proxy) so Fastify's `request.ip` resolves to the proxy-attested client IP.
 // Override with TRUST_PROXY (an integer hop count, or a comma-separated list
 // of trusted proxy IPs/CIDRs) only if the deployment has more proxy layers.
-const resolveTrustProxy = (): number | string[] => {
+const resolveTrustProxy = ():
+  boolean | string[] | ((address: string, hop: number) => boolean) => {
   const raw = process.env.TRUST_PROXY?.trim()
-  if (!raw) return 1
-  if (/^\d+$/.test(raw)) return Number.parseInt(raw, 10)
+  if (!raw) return (_address, hop) => hop < 1
+  if (/^\d+$/.test(raw)) {
+    const hops = Number.parseInt(raw, 10)
+    return (_address, hop) => hop < hops
+  }
   return raw.split(',').map((s) => s.trim())
 }
 
@@ -155,8 +158,4 @@ app.getInstance().addHook('onRequest', (request, reply, done) => {
   }
 
   done()
-})
-
-app.register(fastifyCookie, {
-  secret: 'cookie-secret',
 })

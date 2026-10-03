@@ -1,7 +1,6 @@
 import { Logger } from '@nestjs/common'
 
 import { AI_PROMPTS } from '../../ai.prompts'
-import { seedConversation } from '../../message-engine/conversation/context-injector'
 import { runEngineLoop } from '../../message-engine/loop/agent-loop'
 import type { SubAgentSpec } from '../../message-engine/tools/sub-agent'
 import { VirtualFs } from '../../message-engine/vfs/virtual-fs'
@@ -14,7 +13,9 @@ import {
 import type { PipelineMetrics } from '../translation-strategy.interface'
 import type { TranslationUnit } from '../translation-unit.types'
 import { flatIdsOf, unitsToSourceMap } from '../translation-unit.types'
-import { translationContextInjectors } from './translation-context'
+import { shouldUseChunkedTranslation } from './translation-chunk-planner'
+import { createTranslationConversation } from './translation-context'
+import { runChunkedTranslationAgent } from './translation-coordinator'
 import { createTranslationTools, TRANSLATION_FILE } from './translation-tools'
 
 export const AGENT_MAX_STEPS = 12
@@ -52,6 +53,25 @@ export async function runTranslationAgent(opts: {
     throw new TypeError('runtime does not implement streamMessage')
   }
 
+  if (shouldUseChunkedTranslation(units)) {
+    logger.log(
+      `Long document detected: units=${units.length}; using translation coordinator`,
+    )
+    return runChunkedTranslationAgent({
+      targetLang,
+      units,
+      documentContext,
+      styleHints,
+      runtime,
+      reviewerRuntime,
+      signal,
+      onToken,
+      onCost,
+      onSegments,
+      metrics,
+    })
+  }
+
   const vfs = new VirtualFs()
   let reviewer: SubAgentSpec | undefined
   if (reviewerRuntime) {
@@ -76,15 +96,13 @@ export async function runTranslationAgent(opts: {
     onSegments,
     signal,
   })
-  const conversation = seedConversation(
-    translationContextInjectors({
-      targetLang,
-      documentContext,
-      units,
-      styleHints,
-      reviewEnabled: Boolean(reviewerRuntime),
-    }),
-  )
+  const conversation = createTranslationConversation({
+    targetLang,
+    documentContext,
+    units,
+    styleHints,
+    reviewEnabled: Boolean(reviewerRuntime),
+  })
 
   const loopStart = Date.now()
   const loop = await runEngineLoop({
