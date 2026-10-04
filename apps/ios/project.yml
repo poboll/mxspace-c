@@ -32,7 +32,7 @@ targets:
     info:
       path: Space/Info.plist
       properties:
-        CFBundleDisplayName: Space
+        CFBundleDisplayName: 喵内
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         UILaunchScreen: {}
@@ -50,7 +50,7 @@ targets:
         SpaceAPNsEnvironment: $(SPACE_APNS_ENVIRONMENT)
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: dev.innei.space
+        PRODUCT_BUNDLE_IDENTIFIER: com.caiths.space
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         CURRENT_PROJECT_VERSION: "1"
         MARKETING_VERSION: "1.0.0"
@@ -84,7 +84,7 @@ targets:
       - target: Space
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: dev.innei.space.uitests
+        PRODUCT_BUNDLE_IDENTIFIER: com.caiths.space.uitests
         TEST_TARGET_NAME: Space
         GENERATE_INFOPLIST_FILE: YES
         # Keychain access needs an `application-identifier` entitlement, which
