@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
+export PATH=/usr/local/node26/bin:$PATH
 
 INSTALL_DIR="${MX_SPACE_INSTALL_DIR:-/root/mx-space}"
 APP_DIR="${MX_SPACE_APP_DIR:-$INSTALL_DIR/core-v15}"
