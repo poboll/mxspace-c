@@ -1,18 +1,28 @@
-import { Inject, Injectable } from '@nestjs/common'
+import { ConflictException, Inject, Injectable } from '@nestjs/common'
 import { and, desc, eq, inArray, or, type SQL, sql } from 'drizzle-orm'
 
 import { PG_DB_TOKEN } from '~/constants/system.constant'
-import { aiTranslations, translationEntries } from '~/database/schema'
+import {
+  aiTranslations,
+  notes,
+  pages,
+  posts,
+  translationEntries,
+} from '~/database/schema'
+import { DraftRefType } from '~/modules/draft/draft.enum'
 import {
   BaseRepository,
   type PaginationResult,
   toEntityId,
 } from '~/processors/database/base.repository'
 import type { AppDatabase } from '~/processors/database/postgres.provider'
+import { acquireContentFormatTransitionLock } from '~/shared/content-format-transition-lock'
 import { type EntityId, parseEntityId } from '~/shared/id/entity-id'
 import { SnowflakeService } from '~/shared/id/snowflake.service'
+import { ContentFormat } from '~/shared/types/content-format.type'
 
 import type {
+  AiTranslationRevision,
   AiTranslationRow,
   TranslationEntryRow,
 } from './ai-translation.types'
@@ -40,6 +50,7 @@ const mapTranslation = (
   sourceBlockSnapshots: row.sourceBlockSnapshots,
   sourceMetaHashes: row.sourceMetaHashes,
   createdAt: row.createdAt,
+  updatedAt: row.updatedAt ?? null,
 })
 
 const mapEntry = (
@@ -100,6 +111,26 @@ export class AiTranslationRepository extends BaseRepository {
     return row ? mapTranslation(row) : null
   }
 
+  async findRevisionByRefAndLang(
+    refId: EntityId | string,
+    lang: string,
+  ): Promise<AiTranslationRevision | null> {
+    const [row] = await this.db
+      .select({
+        createdAt: aiTranslations.createdAt,
+        updatedAt: aiTranslations.updatedAt,
+      })
+      .from(aiTranslations)
+      .where(
+        and(
+          eq(aiTranslations.refId, parseEntityId(refId)),
+          eq(aiTranslations.lang, lang),
+        )!,
+      )
+      .limit(1)
+    return row ?? null
+  }
+
   async findById(id: EntityId | string): Promise<AiTranslationRow | null> {
     const [row] = await this.db
       .select()
@@ -154,6 +185,22 @@ export class AiTranslationRepository extends BaseRepository {
       )
       .orderBy(desc(aiTranslations.createdAt))
     return rows.map(mapTranslation)
+  }
+
+  async findDistinctRefIds(
+    refIds?: Array<EntityId | string>,
+  ): Promise<EntityId[]> {
+    const where = refIds?.length
+      ? inArray(
+          aiTranslations.refId,
+          refIds.map((id) => parseEntityId(id)),
+        )
+      : undefined
+    const rows = await this.db
+      .selectDistinct({ refId: aiTranslations.refId })
+      .from(aiTranslations)
+      .where(where)
+    return rows.map((r) => toEntityId(r.refId) as EntityId)
   }
 
   async groupByRefIdPaginated(
@@ -230,7 +277,10 @@ export class AiTranslationRepository extends BaseRepository {
   }
 
   async upsert(
-    input: Omit<AiTranslationRow, 'id' | 'refId' | 'createdAt'> & {
+    input: Omit<
+      AiTranslationRow,
+      'id' | 'refId' | 'createdAt' | 'updatedAt'
+    > & {
       id?: EntityId | string
       refId: EntityId | string
     },
@@ -251,26 +301,67 @@ export class AiTranslationRepository extends BaseRepository {
       content: input.content,
       sourceBlockSnapshots: input.sourceBlockSnapshots,
       sourceMetaHashes: input.sourceMetaHashes,
+      updatedAt: new Date(),
     }
-    const [row] = await this.db
-      .insert(aiTranslations)
-      .values({
-        id: this.snowflake.nextId(),
-        refId: refBig,
+    return this.db.transaction(async (tx) => {
+      await acquireContentFormatTransitionLock(tx, {
+        refId: String(input.refId),
         refType: input.refType,
-        lang: input.lang,
-        ...updatableColumns,
       })
-      .onConflictDoUpdate({
-        target: [
-          aiTranslations.refId,
-          aiTranslations.refType,
-          aiTranslations.lang,
-        ],
-        set: updatableColumns,
-      })
-      .returning()
-    return mapTranslation(row)
+
+      let sourceFormat: string | undefined
+      if (input.refType === DraftRefType.Post) {
+        const [source] = await tx
+          .select({ contentFormat: posts.contentFormat })
+          .from(posts)
+          .where(eq(posts.id, refBig))
+          .limit(1)
+        sourceFormat = source?.contentFormat
+      } else if (input.refType === DraftRefType.Note) {
+        const [source] = await tx
+          .select({ contentFormat: notes.contentFormat })
+          .from(notes)
+          .where(eq(notes.id, refBig))
+          .limit(1)
+        sourceFormat = source?.contentFormat
+      } else if (input.refType === DraftRefType.Page) {
+        const [source] = await tx
+          .select({ contentFormat: pages.contentFormat })
+          .from(pages)
+          .where(eq(pages.id, refBig))
+          .limit(1)
+        sourceFormat = source?.contentFormat
+      }
+
+      if (
+        sourceFormat === ContentFormat.Lexical &&
+        input.contentFormat !== ContentFormat.Lexical
+      ) {
+        throw new ConflictException(
+          'A Markdown translation cannot be persisted for a Lexical source',
+        )
+      }
+
+      const [row] = await tx
+        .insert(aiTranslations)
+        .values({
+          id: this.snowflake.nextId(),
+          refId: refBig,
+          refType: input.refType,
+          lang: input.lang,
+          ...updatableColumns,
+        })
+        .onConflictDoUpdate({
+          target: [
+            aiTranslations.refId,
+            aiTranslations.refType,
+            aiTranslations.lang,
+          ],
+          set: updatableColumns,
+        })
+        .returning()
+      return mapTranslation(row)
+    })
   }
 
   async updateById(
@@ -299,6 +390,7 @@ export class AiTranslationRepository extends BaseRepository {
       update.sourceBlockSnapshots = patch.sourceBlockSnapshots
     if (patch.sourceMetaHashes !== undefined)
       update.sourceMetaHashes = patch.sourceMetaHashes
+    update.updatedAt = patch.updatedAt ?? new Date()
     const [row] = await this.db
       .update(aiTranslations)
       .set(update)
@@ -331,6 +423,13 @@ export class TranslationEntryRepository extends BaseRepository {
     private readonly snowflake: SnowflakeService,
   ) {
     super(db)
+  }
+
+  async listDistinctPostTags(): Promise<string[]> {
+    const rows = await this.db
+      .selectDistinct({ tag: sql<string>`unnest(${posts.tags})` })
+      .from(posts)
+    return rows.map((row) => row.tag).filter(Boolean)
   }
 
   async listByBatch(
@@ -484,6 +583,7 @@ export class TranslationEntryRepository extends BaseRepository {
   }
 
   async listByKeyPathLookupKeys(
+    lang: string,
     keyPathLookupKeys: Array<{ keyPath: string; lookupKey: string }>,
   ): Promise<TranslationEntryRow[]> {
     if (!keyPathLookupKeys.length) return []
@@ -491,15 +591,17 @@ export class TranslationEntryRepository extends BaseRepository {
       .select()
       .from(translationEntries)
       .where(
-        or(
-          ...keyPathLookupKeys.map(
-            ({ keyPath, lookupKey }) =>
+        and(
+          eq(translationEntries.lang, lang),
+          or(
+            ...keyPathLookupKeys.map(({ keyPath, lookupKey }) =>
               and(
                 eq(translationEntries.keyPath, keyPath),
                 eq(translationEntries.lookupKey, lookupKey),
               )!,
-          ),
-        )!,
+            ),
+          )!,
+        ),
       )
     return rows.map(mapEntry)
   }

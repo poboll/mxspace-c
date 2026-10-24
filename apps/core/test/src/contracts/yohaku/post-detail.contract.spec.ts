@@ -22,6 +22,7 @@ import { describe, expect, test } from 'vitest'
 import { apiRoutePrefix } from '~/common/decorators/api-controller.decorator'
 import { AiInsightsService } from '~/modules/ai/ai-insights/ai-insights.service'
 import { AiSummaryService } from '~/modules/ai/ai-summary/ai-summary.service'
+import { AiTtsQueryService } from '~/modules/ai/ai-tts/ai-tts-query.service'
 import { PostController } from '~/modules/post/post.controller'
 import { PostService } from '~/modules/post/post.service'
 
@@ -33,6 +34,7 @@ import {
 } from '../../../helper/api-shape'
 import { createE2EApp } from '../../../helper/create-e2e-app'
 import { enrichmentProvider } from '../../../mock/modules/enrichment.mock'
+import { entitlementProvider } from '../../../mock/modules/entitlement.mock'
 import { snippetProvider } from '../../../mock/modules/snippet.mock'
 import { countingServiceProvider } from '../../../mock/processors/counting.mock'
 import {
@@ -122,6 +124,15 @@ const aiSummaryProvider = {
   },
 }
 
+const aiTtsQueryProvider = {
+  provide: AiTtsQueryService,
+  useValue: {
+    async getMetaForArticle() {
+      return { available: false }
+    },
+  },
+}
+
 describe('Yohaku contract — post detail (e2e)', () => {
   const proxy = createE2EApp({
     controllers: [PostController],
@@ -133,7 +144,9 @@ describe('Yohaku contract — post detail (e2e)', () => {
       enrichmentProvider,
       aiInsightsProvider,
       aiSummaryProvider,
+      aiTtsQueryProvider,
       snippetProvider,
+      entitlementProvider,
     ],
   })
 

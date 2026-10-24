@@ -17,3 +17,40 @@ export interface RSSProps {
     content?: string
   }[]
 }
+
+export interface DeskSummary {
+  unreadComments: {
+    count: number
+    latest: {
+      id: string
+      author: string
+      text: string
+      refTitle: string | null
+    } | null
+  }
+  linkApplications: {
+    count: number
+    latest: { id: string; name: string; url: string } | null
+  }
+  scheduledNotes: Array<{
+    id: string
+    nid: number
+    title: string | null
+    publicAt: string
+  }>
+}
+
+export interface OnThisDayEntry {
+  id: string
+  type: 'post' | 'note'
+  title: string | null
+  created: string
+  excerpt: string
+}
+
+export interface HeatmapDay {
+  date: string
+  count: number
+  posts: number
+  notes: number
+}

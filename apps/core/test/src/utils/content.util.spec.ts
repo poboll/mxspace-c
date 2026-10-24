@@ -1,8 +1,9 @@
+import { extractDocumentContext } from '@mx-space/ai/translation'
 import { describe, expect, it } from 'vitest'
 
 import {
-  extractDocumentContext,
-  extractImagesFromContent,
+  contentIdentityChanged,
+  extractFileUrlsFromContent,
   extractTextFromContent,
 } from '~/utils/content.util'
 
@@ -106,7 +107,7 @@ describe('content.util', () => {
   })
 
   it('should include cover image from markdown meta and dedupe repeated urls', () => {
-    const extracted = extractImagesFromContent({
+    const extracted = extractFileUrlsFromContent({
       text: '![cover](https://img.example/cover.png)',
       contentFormat: 'markdown',
       meta: {
@@ -118,7 +119,7 @@ describe('content.util', () => {
   })
 
   it('should collect lexical image sources and append cover from serialized meta', () => {
-    const extracted = extractImagesFromContent({
+    const extracted = extractFileUrlsFromContent({
       text: '',
       contentFormat: 'lexical',
       meta: JSON.stringify({
@@ -161,8 +162,44 @@ describe('content.util', () => {
     ])
   })
 
+  it('should collect file attachment sources from lexical content', () => {
+    const extracted = extractFileUrlsFromContent({
+      text: '',
+      contentFormat: 'lexical',
+      content: JSON.stringify({
+        root: {
+          type: 'root',
+          version: 1,
+          children: [
+            {
+              type: 'file',
+              version: 1,
+              src: 'https://cdn.example/file/report.pdf',
+              name: 'report.pdf',
+              ext: 'pdf',
+              mimeType: 'application/pdf',
+              size: 1024,
+            },
+            paragraph({
+              type: 'file',
+              version: 1,
+              src: 'https://cdn.example/file/notes.md',
+              name: 'notes.md',
+              display: 'inline',
+            }),
+          ],
+        },
+      }),
+    })
+
+    expect(extracted).toEqual([
+      'https://cdn.example/file/report.pdf',
+      'https://cdn.example/file/notes.md',
+    ])
+  })
+
   it('should fall back to cover image when lexical content is invalid', () => {
-    const extracted = extractImagesFromContent({
+    const extracted = extractFileUrlsFromContent({
       text: '',
       contentFormat: 'lexical',
       content: '{invalid json',
@@ -172,5 +209,159 @@ describe('content.util', () => {
     })
 
     expect(extracted).toEqual(['https://img.example/cover.png'])
+  })
+
+  it('should collect Markdown attachments and HTML media files', () => {
+    const extracted = extractFileUrlsFromContent({
+      text: [
+        '[Download guide](https://cdn.example/guide.pdf)',
+        '<video src="https://cdn.example/demo.mp4" poster="https://cdn.example/poster.webp"></video>',
+      ].join('\n'),
+      contentFormat: 'markdown',
+    })
+
+    expect(extracted).toEqual([
+      'https://cdn.example/guide.pdf',
+      'https://cdn.example/demo.mp4',
+      'https://cdn.example/poster.webp',
+    ])
+  })
+
+  it('should collect file URLs from rich media and nested lexical states', () => {
+    const extracted = extractFileUrlsFromContent({
+      text: '',
+      contentFormat: 'lexical',
+      images: [{ src: 'https://cdn.example/legacy-image.png' }],
+      meta: {
+        cover: 'https://cdn.example/cover.png',
+        customAsset: 'https://cdn.example/custom.zip',
+      },
+      content: JSON.stringify({
+        root: {
+          type: 'root',
+          version: 1,
+          children: [
+            {
+              type: 'video',
+              version: 1,
+              src: 'https://cdn.example/demo.mp4',
+              poster: 'https://cdn.example/video-cover.webp',
+            },
+            {
+              type: 'map',
+              version: 1,
+              track: { url: 'https://cdn.example/route.gpx.json' },
+            },
+            {
+              type: 'excalidraw',
+              version: 1,
+              snapshot:
+                'https://cdn.example/base.excalidraw.json\n{"delta":true}',
+            },
+            {
+              type: 'banner',
+              version: 1,
+              content: {
+                root: {
+                  type: 'root',
+                  version: 1,
+                  children: [
+                    {
+                      type: 'image',
+                      version: 1,
+                      src: 'https://cdn.example/nested.png',
+                    },
+                  ],
+                },
+              },
+            },
+          ],
+        },
+      }),
+    })
+
+    expect(extracted).toEqual([
+      'https://cdn.example/demo.mp4',
+      'https://cdn.example/video-cover.webp',
+      'https://cdn.example/route.gpx.json',
+      'https://cdn.example/base.excalidraw.json',
+      'https://cdn.example/nested.png',
+      'https://cdn.example/legacy-image.png',
+      'https://cdn.example/cover.png',
+      'https://cdn.example/custom.zip',
+    ])
+  })
+})
+
+describe('contentIdentityChanged', () => {
+  const lexicalDoc = (text: string, blockId: string) => ({
+    title: 'Post',
+    text: '# Post',
+    summary: 'summary',
+    tags: ['css'],
+    contentFormat: 'lexical',
+    content: JSON.stringify({
+      root: {
+        type: 'root',
+        children: [
+          {
+            type: 'paragraph',
+            version: 1,
+            $: { blockId },
+            children: [textNode(text)],
+          },
+        ],
+      },
+    }),
+  })
+
+  it('ignores fields outside the translatable identity', () => {
+    const current = lexicalDoc('hello', 'a')
+    expect(
+      contentIdentityChanged(current, {
+        isPremium: true,
+        pinAt: new Date(),
+        meta: { paywall: { previewBlocks: 3 } },
+      } as any),
+    ).toBe(false)
+  })
+
+  it('ignores lexical block id churn on republish', () => {
+    expect(
+      contentIdentityChanged(
+        lexicalDoc('hello', 'a'),
+        lexicalDoc('hello', 'b'),
+      ),
+    ).toBe(false)
+  })
+
+  it('detects a body change', () => {
+    expect(
+      contentIdentityChanged(
+        lexicalDoc('hello', 'a'),
+        lexicalDoc('world', 'a'),
+      ),
+    ).toBe(true)
+  })
+
+  it('detects title, summary and tag changes', () => {
+    const current = lexicalDoc('hello', 'a')
+    expect(contentIdentityChanged(current, { title: 'Renamed' })).toBe(true)
+    expect(contentIdentityChanged(current, { summary: null })).toBe(true)
+    expect(contentIdentityChanged(current, { tags: ['css', 'lexical'] })).toBe(
+      true,
+    )
+  })
+
+  it('treats a markdown to lexical switch as a change', () => {
+    const markdown = {
+      title: 'Post',
+      text: '# Post',
+      contentFormat: 'markdown',
+      content: null,
+    }
+    expect(contentIdentityChanged(markdown, lexicalDoc('hello', 'a'))).toBe(
+      true,
+    )
   })
 })

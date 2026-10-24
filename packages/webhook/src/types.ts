@@ -7,8 +7,9 @@ import type {
   NormalizedNote,
   NormalizedPost,
   PageModel,
+  PublicLiveDeskStateV2,
   ReaderModel,
-  RecentlyModel,
+  RecentlyWithEnrichment,
   SayModel,
 } from './models.generated'
 
@@ -33,10 +34,14 @@ export interface AggregateUpdatePayload {
 export interface EventPayloadMapping {
   [BusinessEvents.POST_CREATE]: NormalizedPost
   [BusinessEvents.POST_UPDATE]: NormalizedPost
+  [BusinessEvents.POST_REPUBLISH]: NormalizedPost
+  [BusinessEvents.POST_UNPUBLISH]: PayloadOnlyId
   [BusinessEvents.POST_DELETE]: PayloadOnlyId
 
   [BusinessEvents.NOTE_CREATE]: NormalizedNote
   [BusinessEvents.NOTE_UPDATE]: NormalizedNote
+  [BusinessEvents.NOTE_REPUBLISH]: NormalizedNote
+  [BusinessEvents.NOTE_UNPUBLISH]: PayloadOnlyId
   [BusinessEvents.NOTE_DELETE]: PayloadOnlyId
 
   [BusinessEvents.PAGE_CREATE]: PageModel
@@ -47,8 +52,8 @@ export interface EventPayloadMapping {
   [BusinessEvents.SAY_UPDATE]: SayModel
   [BusinessEvents.SAY_DELETE]: PayloadOnlyId
 
-  [BusinessEvents.RECENTLY_CREATE]: RecentlyModel
-  [BusinessEvents.RECENTLY_UPDATE]: RecentlyModel
+  [BusinessEvents.RECENTLY_CREATE]: RecentlyWithEnrichment
+  [BusinessEvents.RECENTLY_UPDATE]: RecentlyWithEnrichment
 
   [BusinessEvents.AGGREGATE_UPDATE]: AggregateUpdatePayload
 
@@ -68,6 +73,9 @@ export interface EventPayloadMapping {
     type: 'post' | 'note'
     id: string
   }
+
+  [BusinessEvents.COMPANION_PRESENCE_CHANGED]: PublicLiveDeskStateV2
+
   health_check: {}
 }
 
@@ -87,9 +95,13 @@ export interface IActivityLike {
 export type GenericEvent =
   | { type: BusinessEvents.POST_CREATE; payload: NormalizedPost }
   | { type: BusinessEvents.POST_UPDATE; payload: NormalizedPost }
+  | { type: BusinessEvents.POST_REPUBLISH; payload: NormalizedPost }
+  | { type: BusinessEvents.POST_UNPUBLISH; payload: PayloadOnlyId }
   | { type: BusinessEvents.POST_DELETE; payload: PayloadOnlyId }
   | { type: BusinessEvents.NOTE_CREATE; payload: NormalizedNote }
   | { type: BusinessEvents.NOTE_UPDATE; payload: NormalizedNote }
+  | { type: BusinessEvents.NOTE_REPUBLISH; payload: NormalizedNote }
+  | { type: BusinessEvents.NOTE_UNPUBLISH; payload: PayloadOnlyId }
   | { type: BusinessEvents.NOTE_DELETE; payload: PayloadOnlyId }
   | { type: BusinessEvents.PAGE_CREATE; payload: PageModel }
   | { type: BusinessEvents.PAGE_UPDATE; payload: PageModel }
@@ -97,15 +109,12 @@ export type GenericEvent =
   | { type: BusinessEvents.SAY_CREATE; payload: SayModel }
   | { type: BusinessEvents.SAY_UPDATE; payload: SayModel }
   | { type: BusinessEvents.SAY_DELETE; payload: PayloadOnlyId }
-  | { type: BusinessEvents.RECENTLY_CREATE; payload: RecentlyModel }
-  | { type: BusinessEvents.RECENTLY_UPDATE; payload: RecentlyModel }
+  | { type: BusinessEvents.RECENTLY_CREATE; payload: RecentlyWithEnrichment }
+  | { type: BusinessEvents.RECENTLY_UPDATE; payload: RecentlyWithEnrichment }
   | { type: BusinessEvents.AGGREGATE_UPDATE; payload: AggregateUpdatePayload }
   | { type: BusinessEvents.ACTIVITY_LIKE; payload: IActivityLike }
   | { type: BusinessEvents.LINK_APPLY; payload: LinkModel }
-  | {
-      type: BusinessEvents.COMMENT_CREATE
-      payload: CommentModel
-    }
+  | { type: BusinessEvents.COMMENT_CREATE; payload: CommentModel }
   | {
       type: BusinessEvents.COMMENT_UPDATE
       payload: {
@@ -120,5 +129,9 @@ export type GenericEvent =
         type: 'post' | 'note'
         id: string
       }
+    }
+  | {
+      type: BusinessEvents.COMPANION_PRESENCE_CHANGED
+      payload: PublicLiveDeskStateV2
     }
   | { type: 'health_check'; payload: {} }

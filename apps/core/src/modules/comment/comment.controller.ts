@@ -3,6 +3,7 @@ import {
   Delete,
   forwardRef,
   Get,
+  HttpCode,
   Inject,
   Param,
   Patch,
@@ -13,41 +14,56 @@ import {
 } from '@nestjs/common'
 import { isUndefined, keyBy } from 'es-toolkit/compat'
 import type { FastifyReply } from 'fastify'
+import { z } from 'zod'
 
 import { RequestContext } from '~/common/contexts/request.context'
 import { ApiController } from '~/common/decorators/api-controller.decorator'
 import { Auth } from '~/common/decorators/auth.decorator'
 import { CurrentReaderId } from '~/common/decorators/current-user.decorator'
 import { HTTPDecorators } from '~/common/decorators/http.decorator'
-import type { IpRecord } from '~/common/decorators/ip.decorator'
-import { IpLocation } from '~/common/decorators/ip.decorator'
+import { IpLocation, type IpRecord } from '~/common/decorators/ip.decorator'
+import { ReaderAuth } from '~/common/decorators/reader-auth.decorator'
 import { HasAdminAccess } from '~/common/decorators/role.decorator'
 import { AppErrorCode, createAppException } from '~/common/errors'
 import { withMeta } from '~/common/response/envelope.types'
 import { MetaObjectBuilder } from '~/common/response/meta-builder'
 import { BusinessEvents, EventScope } from '~/constants/business-event.constant'
 import { EventManagerService } from '~/processors/helper/helper.event.service'
-import { EntityIdDto } from '~/shared/dto/id.dto'
-import { BasicPagerDto } from '~/shared/dto/pager.dto'
+import { type EntityIdDto, EntityIdSchema } from '~/shared/dto/id.dto'
+import { type BasicPagerDto, BasicPagerSchema } from '~/shared/dto/pager.dto'
 
 import { ConfigsService } from '../configs/configs.service'
+import { EntitlementService } from '../membership/entitlement.service'
 import { ReaderService } from '../reader/reader.service'
 import { CommentFilterEmailInterceptor } from './comment.interceptor'
 import { CommentLifecycleService } from './comment.lifecycle.service'
 import {
-  BatchCommentDeleteDto,
-  BatchCommentStateDto,
-  CommentAdminPagerDto,
-  CommentAuthorActivityQueryDto,
-  CommentDto,
-  CommentRefTypesDto,
-  CommentSourceCandidatesQueryDto,
-  CommentStatePatchDto,
-  CommentTabCountsQueryDto,
-  EditCommentDto,
-  ReaderCommentDto,
-  ReaderReplyCommentDto,
-  ReplyCommentDto,
+  AnonymousCommentSchema,
+  AnonymousReplyCommentSchema,
+  type BatchCommentDeleteDto,
+  BatchCommentDeleteSchema,
+  type BatchCommentStateDto,
+  BatchCommentStateSchema,
+  type CommentAdminPagerDto,
+  CommentAdminPagerSchema,
+  type CommentAuthorActivityQueryDto,
+  CommentAuthorActivityQuerySchema,
+  type CommentDto,
+  type CommentRefTypesDto,
+  CommentRefTypesSchema,
+  type CommentSourceCandidatesQueryDto,
+  CommentSourceCandidatesQuerySchema,
+  type CommentStatePatchDto,
+  CommentStatePatchSchema,
+  type CommentTabCountsQueryDto,
+  CommentTabCountsQuerySchema,
+  type EditCommentDto,
+  EditCommentSchema,
+  type ReaderCommentDto,
+  ReaderCommentSchema,
+  type ReaderReplyCommentDto,
+  ReaderReplyCommentSchema,
+  type ReplyCommentDto,
 } from './comment.schema'
 import { CommentService } from './comment.service'
 import type {
@@ -55,6 +71,7 @@ import type {
   CommentModel,
   CommentTab,
 } from './comment.types'
+import { CommentViews } from './comment.views'
 
 const idempotenceMessage = 'Whoops, you already said this'
 
@@ -68,7 +85,20 @@ export class CommentController {
     private readonly configsService: ConfigsService,
     @Inject(forwardRef(() => ReaderService))
     private readonly readerService: ReaderService,
+    private readonly entitlementService: EntitlementService,
   ) {}
+
+  private async withMembership<T extends { id: unknown }>(
+    readers: T[],
+  ): Promise<(T & { isMember: boolean })[]> {
+    const memberIds = await this.entitlementService.getActiveMemberIds(
+      readers.map((reader) => String(reader.id)),
+    )
+    return readers.map((reader) => ({
+      ...reader,
+      isMember: memberIds.has(String(reader.id)),
+    }))
+  }
 
   private buildAdminCommentFilter(input: {
     currentState?: number
@@ -111,10 +141,9 @@ export class CommentController {
     const model: Partial<CommentModel> = { ...body, ...ipLocation }
     const comment = await this.commentService.createComment(id, model, ref)
 
-    this.lifecycleService.afterCreateComment(
-      String((comment as any).id),
-      ipLocation,
-    )
+    void this.lifecycleService
+      .afterCreateComment(String((comment as any).id), ipLocation)
+      .catch(() => undefined)
 
     const [doc] = await this.commentService.fillAndReplaceAvatarUrl([comment])
     return doc
@@ -139,15 +168,32 @@ export class CommentController {
     }
 
     const comment = await this.commentService.replyComment(params.id, model)
-    this.lifecycleService.afterReplyComment(comment, ipLocation)
+    void this.lifecycleService
+      .afterReplyComment(comment, ipLocation)
+      .catch(() => undefined)
     const [doc] = await this.commentService.fillAndReplaceAvatarUrl([comment])
     return doc
+  }
+
+  @Post('/:id/moderation')
+  @HttpCode(200)
+  @HTTPDecorators.SkipLogging
+  async getModerationStatus(
+    @Param({ schema: EntityIdSchema }) params: EntityIdDto,
+    @Body({ schema: z.object({ receipt: z.string().regex(/^[\da-f]{64}$/) }) })
+    body: { receipt: string },
+    @Res({ passthrough: true }) reply: FastifyReply,
+  ) {
+    reply.header('Cache-Control', 'no-store')
+    return CommentViews.moderation.parse(
+      await this.commentService.getModerationStatus(params.id, body.receipt),
+    )
   }
 
   @Get('/')
   @Auth()
   async getRecentlyComments(
-    @Query() query: CommentAdminPagerDto,
+    @Query({ schema: CommentAdminPagerSchema }) query: CommentAdminPagerDto,
     @Res({ passthrough: true }) reply: FastifyReply,
   ) {
     const { size = 10, page = 1 } = query
@@ -166,7 +212,7 @@ export class CommentController {
       comments.data.map((doc) => doc.readerId).filter(Boolean) as string[],
     )
 
-    const readerMap = keyBy(readers, 'id')
+    const readerMap = keyBy(await this.withMembership(readers), 'id')
     const data = comments.data.map((doc) => ({
       ...doc,
       reader: readerMap[(doc as any).readerId] ?? null,
@@ -179,7 +225,10 @@ export class CommentController {
 
   @Get('/tab-counts')
   @Auth()
-  async getTabCounts(@Query() query: CommentTabCountsQueryDto) {
+  async getTabCounts(
+    @Query({ schema: CommentTabCountsQuerySchema })
+    query: CommentTabCountsQueryDto,
+  ) {
     return this.commentService.getTabCounts({
       refType: query.refType,
       refId: query.refId,
@@ -188,7 +237,10 @@ export class CommentController {
 
   @Get('/author-activity')
   @Auth()
-  async getAuthorActivity(@Query() query: CommentAuthorActivityQueryDto) {
+  async getAuthorActivity(
+    @Query({ schema: CommentAuthorActivityQuerySchema })
+    query: CommentAuthorActivityQueryDto,
+  ) {
     return this.commentService.getAuthorActivity({
       mail: query.mail,
       ip: query.ip,
@@ -198,7 +250,10 @@ export class CommentController {
 
   @Get('/source-candidates')
   @Auth()
-  async getSourceCandidates(@Query() query: CommentSourceCandidatesQueryDto) {
+  async getSourceCandidates(
+    @Query({ schema: CommentSourceCandidatesQuerySchema })
+    query: CommentSourceCandidatesQueryDto,
+  ) {
     const candidates = await this.commentService.getSourceCandidates({
       refType: query.refType,
       search: query.search,
@@ -207,14 +262,33 @@ export class CommentController {
     return withMeta(candidates, new MetaObjectBuilder().build())
   }
 
+  @Get('/reader/me')
+  @ReaderAuth()
+  async getMyComments(
+    @Query({ schema: BasicPagerSchema }) query: BasicPagerDto,
+    @CurrentReaderId() readerId: string,
+  ) {
+    const { page = 1, size = 20 } = query
+    const comments = await this.commentService.getReaderComments(
+      readerId,
+      page,
+      size,
+    )
+    return withMeta(
+      comments.data.map((doc) => this.commentService.projectReaderComment(doc)),
+      new MetaObjectBuilder().pagination(comments.pagination).build(),
+    )
+  }
+
   @Get('/ref/:id')
   async getCommentsByRefId(
-    @Param() params: EntityIdDto,
-    @Query() query: BasicPagerDto,
+    @Param({ schema: EntityIdSchema }) params: EntityIdDto,
+    @Query({ schema: BasicPagerSchema }) query: BasicPagerDto,
     @Query('hasAnchor') hasAnchor: string,
     @Query('sort') sort: string | undefined,
     @Query('around') around: string | undefined,
     @HasAdminAccess() hasAdminAccess: boolean,
+    @CurrentReaderId() readerId: string | undefined,
   ) {
     const { id } = params
     const { page = 1, size = 10 } = query
@@ -235,12 +309,13 @@ export class CommentController {
       hasAnchor: hasAnchor === 'true',
       sort: resolvedSort,
       around,
+      readerId,
     })
 
     const readerIds = this.commentService.collectThreadReaderIds(comments.data)
     const readers = await this.readerService.findReaderInIds(readerIds)
 
-    const readerMap2 = keyBy(readers, 'id')
+    const readerMap2 = keyBy(await this.withMembership(readers), 'id')
     const refData = comments.data.map((doc) => ({
       ...doc,
       reader: readerMap2[(doc as any).readerId] ?? null,
@@ -254,9 +329,10 @@ export class CommentController {
   @Get('/thread/:rootCommentId')
   async getThreadReplies(
     @Param('rootCommentId') rootCommentId: string,
-    @Query() query: BasicPagerDto,
+    @Query({ schema: BasicPagerSchema }) query: BasicPagerDto,
     @Query('cursor') cursor: string,
     @HasAdminAccess() hasAdminAccess: boolean,
+    @CurrentReaderId() readerId: string | undefined,
   ) {
     const { size = 10 } = query
     const configs = await this.configsService.get('commentOptions')
@@ -266,6 +342,7 @@ export class CommentController {
       size,
       isAuthenticated: hasAdminAccess,
       commentShouldAudit: configs.commentShouldAudit,
+      readerId,
     })
     return {
       replies: result.replies,
@@ -277,7 +354,7 @@ export class CommentController {
 
   @Get('/:id/thread')
   @Auth()
-  async getAdminThread(@Param() params: EntityIdDto) {
+  async getAdminThread(@Param({ schema: EntityIdSchema }) params: EntityIdDto) {
     const thread = await this.commentService.getAdminThreadForComment(params.id)
     if (!thread) {
       throw createAppException(AppErrorCode.COMMENT_NOT_FOUND, {
@@ -289,12 +366,12 @@ export class CommentController {
 
   @Get('/:id')
   async getComments(
-    @Param() params: EntityIdDto,
+    @Param({ schema: EntityIdSchema }) params: EntityIdDto,
     @HasAdminAccess() hasAdminAccess: boolean,
   ) {
     const { id } = params
     const data: CommentModel | null =
-      await this.commentService.findByIdWithRelations(id)
+      await this.commentService.findByIdWithRelations(id, !hasAdminAccess)
 
     if (!data) {
       throw createAppException(AppErrorCode.COMMENT_NOT_FOUND, { id })
@@ -305,20 +382,55 @@ export class CommentController {
 
     await this.commentService.fillAndReplaceAvatarUrl([data])
     if (data.readerId) {
-      const reader = await this.readerService.findReaderInIds([data.readerId])
+      const reader = await this.withMembership(
+        await this.readerService.findReaderInIds([data.readerId]),
+      )
       Object.assign(data, { reader: reader[0] })
     }
 
     return data
   }
 
+  @Post('/:id/report')
+  async reportComment(
+    @Param({ schema: EntityIdSchema }) params: EntityIdDto,
+    @CurrentReaderId() readerId: string,
+    @IpLocation() ipLocation: IpRecord,
+  ) {
+    const result = await this.commentService.reportComment(params.id, {
+      ip: ipLocation.ip,
+      readerId: readerId || null,
+    })
+    if (result.notified) {
+      this.lifecycleService.afterReportComment(params.id)
+    }
+    return { ok: true }
+  }
+
+  @Post('/:id/report-and-block')
+  @ReaderAuth()
+  async reportAndBlockComment(
+    @Param({ schema: EntityIdSchema }) params: EntityIdDto,
+    @CurrentReaderId() readerId: string,
+    @IpLocation() ipLocation: IpRecord,
+  ) {
+    const result = await this.commentService.reportAndBlockComment(params.id, {
+      ip: ipLocation.ip,
+      readerId,
+    })
+    if (result.notified) {
+      this.lifecycleService.afterReportComment(params.id)
+    }
+    return { blockedReaderId: result.blockedReaderId, ok: true }
+  }
+
   @Post('/guest/:id')
   @HTTPDecorators.Idempotence({ expired: 20, errorMessage: idempotenceMessage })
   async guestComment(
-    @Param() params: EntityIdDto,
-    @Body() body: CommentDto,
+    @Param({ schema: EntityIdSchema }) params: EntityIdDto,
+    @Body({ schema: AnonymousCommentSchema }) body: CommentDto,
     @IpLocation() ipLocation: IpRecord,
-    @Query() query: CommentRefTypesDto,
+    @Query({ schema: CommentRefTypesSchema }) query: CommentRefTypesDto,
   ) {
     const { allowGuestComment, disableComment } =
       await this.configsService.get('commentOptions')
@@ -336,11 +448,11 @@ export class CommentController {
   @Post('/reader/:id')
   @HTTPDecorators.Idempotence({ expired: 20, errorMessage: idempotenceMessage })
   async readerComment(
-    @Param() params: EntityIdDto,
-    @Body() body: ReaderCommentDto,
+    @Param({ schema: EntityIdSchema }) params: EntityIdDto,
+    @Body({ schema: ReaderCommentSchema }) body: ReaderCommentDto,
     @CurrentReaderId() readerId: string,
     @IpLocation() ipLocation: IpRecord,
-    @Query() query: CommentRefTypesDto,
+    @Query({ schema: CommentRefTypesSchema }) query: CommentRefTypesDto,
   ) {
     const { disableComment } = await this.configsService.get('commentOptions')
     if (disableComment && !RequestContext.hasAdminAccess()) {
@@ -355,8 +467,8 @@ export class CommentController {
   @Post('/guest/reply/:id')
   @HTTPDecorators.Idempotence({ expired: 20, errorMessage: idempotenceMessage })
   async guestReplyByCid(
-    @Param() params: EntityIdDto,
-    @Body() body: ReplyCommentDto,
+    @Param({ schema: EntityIdSchema }) params: EntityIdDto,
+    @Body({ schema: AnonymousReplyCommentSchema }) body: ReplyCommentDto,
     @IpLocation() ipLocation: IpRecord,
   ) {
     const { allowGuestComment, disableComment } =
@@ -375,8 +487,8 @@ export class CommentController {
   @Auth()
   @HTTPDecorators.Idempotence({ expired: 20, errorMessage: idempotenceMessage })
   async replyByCid(
-    @Param() params: EntityIdDto,
-    @Body() body: ReaderReplyCommentDto,
+    @Param({ schema: EntityIdSchema }) params: EntityIdDto,
+    @Body({ schema: ReaderReplyCommentSchema }) body: ReaderReplyCommentDto,
     @IpLocation() ipLocation: IpRecord,
   ) {
     return this.replyCommentWithBody(params, body, ipLocation)
@@ -385,8 +497,8 @@ export class CommentController {
   @Post('/reader/reply/:id')
   @HTTPDecorators.Idempotence({ expired: 20, errorMessage: idempotenceMessage })
   async readerReplyByCid(
-    @Param() params: EntityIdDto,
-    @Body() body: ReaderReplyCommentDto,
+    @Param({ schema: EntityIdSchema }) params: EntityIdDto,
+    @Body({ schema: ReaderReplyCommentSchema }) body: ReaderReplyCommentDto,
     @CurrentReaderId() readerId: string,
     @IpLocation() ipLocation: IpRecord,
   ) {
@@ -403,8 +515,8 @@ export class CommentController {
   @Patch('/:id')
   @Auth()
   async modifyCommentState(
-    @Param() params: EntityIdDto,
-    @Body() body: CommentStatePatchDto,
+    @Param({ schema: EntityIdSchema }) params: EntityIdDto,
+    @Body({ schema: CommentStatePatchSchema }) body: CommentStatePatchDto,
   ) {
     const { id } = params
     const { state, pin } = body
@@ -430,7 +542,7 @@ export class CommentController {
 
   @Delete('/:id')
   @Auth()
-  async deleteComment(@Param() params: EntityIdDto) {
+  async deleteComment(@Param({ schema: EntityIdSchema }) params: EntityIdDto) {
     const { id } = params
     await this.commentService.softDeleteComment(id)
     await this.eventManager.emit(
@@ -442,7 +554,9 @@ export class CommentController {
 
   @Patch('/batch/state')
   @Auth()
-  async batchUpdateState(@Body() body: BatchCommentStateDto) {
+  async batchUpdateState(
+    @Body({ schema: BatchCommentStateSchema }) body: BatchCommentStateDto,
+  ) {
     const { ids, all, state } = body
 
     let affected: string[] = []
@@ -463,7 +577,9 @@ export class CommentController {
 
   @Delete('/batch')
   @Auth()
-  async batchDelete(@Body() body: BatchCommentDeleteDto) {
+  async batchDelete(
+    @Body({ schema: BatchCommentDeleteSchema }) body: BatchCommentDeleteDto,
+  ) {
     const { ids, all } = body
 
     if (all) {
@@ -483,8 +599,8 @@ export class CommentController {
 
   @Patch('/edit/:id')
   async editComment(
-    @Param() params: EntityIdDto,
-    @Body() body: EditCommentDto,
+    @Param({ schema: EntityIdSchema }) params: EntityIdDto,
+    @Body({ schema: EditCommentSchema }) body: EditCommentDto,
     @HasAdminAccess() hasAdminAccess: boolean,
     @CurrentReaderId() readerId: string,
   ) {

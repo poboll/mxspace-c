@@ -1,21 +1,36 @@
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { KeyRound, Loader2 } from 'lucide-react'
-import { FormEvent, useEffect, useMemo, useRef, useState } from 'react'
+import type { FormEvent } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router'
 import { toast } from 'sonner'
-import type { UserModel } from '~/models/user'
-import type { AllowLoginResponse } from '../types/login'
 
 import { getJson } from '~/api/http'
-import { bgUrl } from '~/constants/env'
 import { SESSION_WITH_LOGIN } from '~/constants/keys'
 import { useI18n } from '~/i18n'
+import {
+  authBackdropClassName,
+  authBackdropStyle,
+  authCardClassName,
+  authIconTileClassName,
+  authTitleClassName,
+} from '~/lib/auth-backdrop'
+import type { UserModel } from '~/models/user'
+import { Button } from '~/ui/primitives/button'
 import { TextInput } from '~/ui/primitives/text-field'
 import { authClient } from '~/utils/authjs/auth'
+import { cn } from '~/utils/cn'
 
-import { allowLoginQueryKey, initQueryKey, ownerQueryKey } from '../constants'
+import {
+  allowLoginQueryKey,
+  initQueryKey,
+  loggedStatusQueryKey,
+  ownerQueryKey,
+} from '../constants'
+import type { AllowLoginResponse } from '../types/login'
 import { checkIsInit } from '../utils/check-init'
 import { readErrorMessage, readInitial } from '../utils/login'
+import { AppleIcon } from './AppleIcon'
 import { GithubIcon } from './GithubIcon'
 import { GoogleIcon } from './GoogleIcon'
 import { LoginIconButton } from './LoginIconButton'
@@ -24,6 +39,7 @@ export function LoginRouteViewContent() {
   const { t } = useI18n()
   const inputRef = useRef<HTMLInputElement>(null)
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const [searchParams] = useSearchParams()
   const [password, setPassword] = useState('')
   const [isLoggingIn, setIsLoggingIn] = useState(false)
@@ -54,7 +70,8 @@ export function LoginRouteViewContent() {
   const hasAlternativeAuth =
     Boolean(settings?.passkey) ||
     Boolean(settings?.github) ||
-    Boolean(settings?.google)
+    Boolean(settings?.google) ||
+    Boolean(settings?.apple)
 
   const callbackURL = useMemo(() => {
     const callbackPath = searchParams.get('to') || fromPath
@@ -85,6 +102,7 @@ export function LoginRouteViewContent() {
 
   const postSuccessfulLogin = () => {
     sessionStorage.setItem(SESSION_WITH_LOGIN, '1')
+    queryClient.removeQueries({ queryKey: loggedStatusQueryKey })
     toast.success(t('auth.login.welcomeBack'))
     navigate(fromPath, { replace: true })
   }
@@ -136,7 +154,7 @@ export function LoginRouteViewContent() {
     }
   }
 
-  const handleSocialLogin = (provider: 'github' | 'google') => {
+  const handleSocialLogin = (provider: 'apple' | 'github' | 'google') => {
     void authClient.signIn.social({
       callbackURL,
       provider,
@@ -145,15 +163,13 @@ export function LoginRouteViewContent() {
 
   return (
     <main
-      className="relative flex min-h-screen items-center justify-center overflow-hidden bg-neutral-950 p-4 text-white"
-      style={{
-        backgroundImage: `linear-gradient(rgba(10,10,10,.42), rgba(10,10,10,.58)), url(${bgUrl})`,
-        backgroundPosition: 'center',
-        backgroundSize: 'cover',
-      }}
+      className={cn(authBackdropClassName, 'flex items-center justify-center')}
+      style={authBackdropStyle}
     >
-      <section className="flex w-full max-w-sm flex-col items-center">
-        <div className="mb-4 size-[120px] overflow-hidden rounded-full bg-white/15 shadow-2xl ring-4 ring-white/30">
+      <section
+        className={cn(authCardClassName, 'flex max-w-sm flex-col items-center')}
+      >
+        <div className={authIconTileClassName}>
           {owner?.avatar ? (
             <img
               alt=""
@@ -162,48 +178,52 @@ export function LoginRouteViewContent() {
               src={owner.avatar}
             />
           ) : (
-            <div className="flex size-full items-center justify-center text-3xl font-medium">
-              {readInitial(owner)}
-            </div>
+            <span className="text-2xl font-semibold">{readInitial(owner)}</span>
           )}
         </div>
 
-        <h1 className="mb-6 text-xl font-medium tracking-wide drop-shadow-lg">
+        <h1 className={cn(authTitleClassName, 'mt-4 text-center')}>
           {owner?.name || owner?.username || 'Admin'}
         </h1>
 
         {showPasswordInput ? (
-          <form className="w-full max-w-[280px]" onSubmit={handlePasswordLogin}>
-            <label className="sr-only" htmlFor="password-input">
-              {t('auth.login.passwordLabel')}
-            </label>
-            <div className="relative">
-              <TextInput
-                autoComplete="current-password"
-                controlClassName="h-[38px] rounded-full border-0 bg-white/20 px-4 text-center text-sm text-white backdrop-blur-md placeholder:text-white/60 focus:bg-white/25 focus:ring-2 focus:ring-white/50 dark:border-0 dark:bg-white/20 dark:text-white"
-                disabled={isLoggingIn}
-                id="password-input"
-                onChange={setPassword}
-                placeholder={t('auth.login.passwordPlaceholder')}
-                ref={inputRef}
-                type="password"
-                value={password}
-              />
-              <button className="sr-only" type="submit">
-                {t('auth.login.submit')}
-              </button>
-            </div>
+          <form
+            className="mt-6 flex w-full flex-col gap-3"
+            onSubmit={handlePasswordLogin}
+          >
+            <TextInput
+              aria-label={t('auth.login.passwordLabel')}
+              autoComplete="current-password"
+              disabled={isLoggingIn}
+              id="password-input"
+              onChange={setPassword}
+              placeholder={t('auth.login.passwordPlaceholder')}
+              ref={inputRef}
+              type="password"
+              value={password}
+            />
+            <Button className="w-full" disabled={isLoggingIn} type="submit">
+              {isLoggingIn ? (
+                <Loader2 aria-hidden="true" className="size-4 animate-spin" />
+              ) : null}
+              {t('auth.login.submit')}
+            </Button>
           </form>
         ) : null}
 
         {hasAlternativeAuth ? (
-          <div className="mt-6 flex justify-center gap-4">
+          <div
+            className={cn(
+              'flex w-full justify-center gap-2',
+              showPasswordInput ? 'mt-6 border-t border-border pt-6' : 'mt-6',
+            )}
+          >
             {settings?.passkey ? (
               <LoginIconButton
                 label={t('auth.login.passkey')}
                 onClick={handlePasskeyLogin}
               >
-                <KeyRound aria-hidden="true" className="!size-5" />
+                <KeyRound aria-hidden="true" className="size-4" />
               </LoginIconButton>
             ) : null}
 
@@ -224,11 +244,20 @@ export function LoginRouteViewContent() {
                 <GoogleIcon />
               </LoginIconButton>
             ) : null}
+
+            {settings?.apple ? (
+              <LoginIconButton
+                label={t('auth.login.apple')}
+                onClick={() => handleSocialLogin('apple')}
+              >
+                <AppleIcon />
+              </LoginIconButton>
+            ) : null}
           </div>
         ) : null}
 
         {ownerQuery.isLoading || allowLoginQuery.isLoading ? (
-          <div className="mt-6 flex items-center gap-2 text-xs text-white/70">
+          <div className="mt-6 flex items-center gap-2 text-sm text-fg-muted">
             <Loader2 aria-hidden="true" className="size-3.5 animate-spin" />
             {t('auth.login.loadingProfile')}
           </div>

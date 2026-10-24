@@ -101,12 +101,12 @@ export class OpenGraphProvider implements EnrichmentProvider {
     // so the same parse result is reused below (avoids parsing twice).
     let safe: SafeFetchResult
     let screenshotBytes: Buffer | undefined
-    let parsedCache: ReturnType<typeof parseOpenGraph> | undefined
+    let parsedCache: Awaited<ReturnType<typeof parseOpenGraph>> | undefined
     if (fetchMode === 'browser') {
       const screenshotEnabled = og.screenshot?.enabled === true
       const captureScreenshot = screenshotEnabled
-        ? (html: SafeFetchResult): boolean => {
-            parsedCache = parseOpenGraph(html.body, html.finalUrl, url)
+        ? async (html: SafeFetchResult): Promise<boolean> => {
+            parsedCache = await parseOpenGraph(html.body, html.finalUrl, url)
             return !parsedCache.result.thumbnailImage?.url
           }
         : false
@@ -114,6 +114,7 @@ export class OpenGraphProvider implements EnrichmentProvider {
         timeoutMs,
         maxBodyBytes,
         captureScreenshot,
+        ...(ctx?.signal ? { signal: ctx.signal } : {}),
       })
       safe = fetched.html
       screenshotBytes = fetched.screenshotBytes
@@ -122,7 +123,7 @@ export class OpenGraphProvider implements EnrichmentProvider {
     }
 
     const { result, oembedUrl } =
-      parsedCache ?? parseOpenGraph(safe.body, safe.finalUrl, url)
+      parsedCache ?? (await parseOpenGraph(safe.body, safe.finalUrl, url))
 
     // oEmbed alternates are always plain JSON — keep them on the HTTP path
     // even in browser mode (cheap, no Chromium spin-up).

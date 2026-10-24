@@ -1,3 +1,5 @@
+import { normalizeTargetLang } from '@mx-space/ai'
+
 import type { AIInsights, AISummary, AITranslation } from '~/api/ai'
 import { updateInsights, updateSummary, updateTranslation } from '~/api/ai'
 import type { TranslationKey, TranslationValues } from '~/i18n/types'
@@ -5,6 +7,21 @@ import type { TranslationKey, TranslationValues } from '~/i18n/types'
 export { getErrorMessage } from '~/features/tasks/utils/tasks'
 
 type Translator = (key: TranslationKey, values?: TranslationValues) => string
+
+export function parseLangInput(raw: string): string[] {
+  const seen = new Set<string>()
+  const result: string[] = []
+  for (const segment of raw.split(/[,，]/)) {
+    // Fold with the server's own canonicalizer: the chips shown here must name
+    // the languages the backend will actually generate, or a typed `jp` reads
+    // back as a `ja` row the board can never match to its column.
+    const lang = normalizeTargetLang(segment)
+    if (!lang || seen.has(lang)) continue
+    seen.add(lang)
+    result.push(lang)
+  }
+  return result
+}
 
 export function editSummaryItem(item: AISummary, t: Translator) {
   const summary = window.prompt(t('ai.edit.summaryPrompt'), item.summary)
@@ -66,36 +83,25 @@ export function editInsightsItem(item: AIInsights, t: Translator) {
   return updateInsights(item.id, { content })
 }
 
-export function getGroupedActionSuccessMessage(result: unknown, t: Translator) {
-  if (isCancelledActionResult(result)) return null
-  return getTaskMutationMessage(result, t) ?? t('ai.toast.saved')
+// Every row the TTS management page can act on already has narration, so
+// without `force` planTts reuses each unchanged chunk and the enqueue is a
+// no-op.
+export function buildTtsRegeneratePayload(row: {
+  lang: string
+  refId: string
+}) {
+  return { force: true, langs: [row.lang], refId: row.refId }
 }
 
-export function getTaskMutationMessage(result: unknown, t: Translator) {
-  if (isCancelledActionResult(result)) return null
-  if (
-    result &&
-    typeof result === 'object' &&
-    'taskId' in result &&
-    'created' in result
-  ) {
-    return (result as { created?: boolean }).created
-      ? t('ai.toast.taskCreated')
-      : t('ai.toast.taskExists')
-  }
-
-  return null
+// An empty blockOrder is the pipeline's "not published yet" sentinel: the run
+// was interrupted after committing some chunks but before finalize. Re-running
+// without `force` reuses every committed chunk and generates only the rest.
+export function isTtsNarrationIncomplete(row: { blockOrder: string[] }) {
+  return row.blockOrder.length === 0
 }
 
-export function isCancelledActionResult(result: unknown): result is {
-  cancelled: true
-} {
-  return (
-    !!result &&
-    typeof result === 'object' &&
-    'cancelled' in result &&
-    (result as { cancelled?: unknown }).cancelled === true
-  )
+export function buildTtsResumePayload(row: { lang: string; refId: string }) {
+  return { force: false, langs: [row.lang], refId: row.refId }
 }
 
 export function formatDateString(value?: string) {

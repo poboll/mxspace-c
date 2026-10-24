@@ -1,3 +1,6 @@
+import { createAbortError, throwIfAborted } from '@mx-space/ai'
+import type { IModelRuntime } from '@mx-space/ai/runtime'
+import { buildSourceMetaHashes } from '@mx-space/ai/translation'
 import { Inject, Injectable, Logger, type OnModuleInit } from '@nestjs/common'
 import pLimit from 'p-limit'
 
@@ -5,7 +8,6 @@ import { AppErrorCode, createAppException } from '~/common/errors'
 import { AppException } from '~/common/errors/exception.types'
 import { BusinessEvents, EventScope } from '~/constants/business-event.constant'
 import { CollectionRefTypes } from '~/constants/db.constant'
-import { paginationOf } from '~/processors/database/base.repository'
 import {
   buildRefArticleMap,
   DatabaseService,
@@ -21,7 +23,6 @@ import {
   TaskStatus,
 } from '~/processors/task-queue'
 import { ContentFormat } from '~/shared/types/content-format.type'
-import { createAbortError, throwIfAborted } from '~/utils/abort.util'
 import { md5 } from '~/utils/tool.util'
 
 import { ConfigsService } from '../../configs/configs.service'
@@ -33,9 +34,18 @@ import {
   AI_STREAM_RESULT_TTL,
 } from '../ai.constants'
 import { AiService } from '../ai.service'
+import { AiGenerationMetricsService } from '../ai-generation-metrics/ai-generation-metrics.service'
+import {
+  emptyUsage,
+  type GenerationUsage,
+  mergeUsage,
+} from '../ai-generation-metrics/ai-generation-metrics.types'
 import { AiInFlightService } from '../ai-inflight/ai-inflight.service'
 import type { AiStreamEvent } from '../ai-inflight/ai-inflight.types'
-import { resolveTargetLanguages } from '../ai-language.util'
+import {
+  normalizeTargetLangs,
+  resolveTargetLanguages,
+} from '../ai-language.util'
 import { AiTaskService } from '../ai-task/ai-task.service'
 import {
   AITaskType,
@@ -44,21 +54,20 @@ import {
   type TranslationBatchTaskPayload,
   type TranslationTaskPayload,
 } from '../ai-task/ai-task.types'
-import type { IModelRuntime } from '../runtime'
+import { buildGroupedWithOrphans } from '../grouped-with-orphans.util'
 import { AiTranslationRepository } from './ai-translation.repository'
-import type { GetTranslationsGroupedQueryInput } from './ai-translation.schema'
+import type { GetTranslationsGroupedQueryDto } from './ai-translation.schema'
 import type {
   ArticleContent,
   ArticleDocument,
   ArticleEventDocument,
   ArticleEventPayload,
 } from './ai-translation.types'
-import { AITranslationModel } from './ai-translation.types-model'
+import { type AITranslationModel } from './ai-translation.types-model'
 import { BaseTranslationService } from './base-translation.service'
 import { LexicalPartialTranslationBuilder } from './lexical-partial-translation.builder'
 import { TranslationConsistencyService } from './translation-consistency.service'
 import type { TranslationSourceSnapshot } from './translation-consistency.types'
-import { buildSourceMetaHashes } from './translation-meta'
 import type { ITranslationStrategy } from './translation-strategy.interface'
 import {
   LEXICAL_TRANSLATION_STRATEGY,
@@ -74,6 +83,14 @@ function isIdEvent(event: ArticleEventPayload): event is { id: string } {
 }
 
 const TRANSLATION_LANGUAGE_CONCURRENCY = 3
+
+const ARTICLE_TYPE_STYLE_HINTS: Partial<Record<CollectionRefTypes, string>> = {
+  [CollectionRefTypes.Post]: 'ARTICLE_TYPE: blog post',
+  [CollectionRefTypes.Note]:
+    'ARTICLE_TYPE: personal note (casual, diary-style)',
+  [CollectionRefTypes.Page]:
+    'ARTICLE_TYPE: standalone site page (informational)',
+}
 
 @Injectable()
 export class AiTranslationService
@@ -95,6 +112,7 @@ export class AiTranslationService
     private readonly taskQueueService: TaskQueueService,
     private readonly lexicalService: LexicalService,
     private readonly aiTaskService: AiTaskService,
+    private readonly generationMetrics: AiGenerationMetricsService,
     @Inject(LEXICAL_TRANSLATION_STRATEGY)
     private readonly lexicalStrategy: ITranslationStrategy,
     @Inject(MARKDOWN_TRANSLATION_STRATEGY)
@@ -107,21 +125,6 @@ export class AiTranslationService
     return contentFormat === ContentFormat.Lexical
       ? this.lexicalStrategy
       : this.markdownStrategy
-  }
-
-  private scheduleStaleTranslationRegenerationBestEffort(
-    articleId: string,
-    targetLang: string,
-  ) {
-    this.scheduleRegenerationForStaleTranslations(
-      [articleId],
-      targetLang,
-    ).catch((err) =>
-      this.logger.error(
-        'Failed to schedule stale translation regeneration',
-        err,
-      ),
-    )
   }
 
   onModuleInit() {
@@ -172,7 +175,11 @@ export class AiTranslationService
       const result = task.result as {
         translations?: Array<{ lang: string }>
       }
-      const targetLangs = payload.targetLanguages || []
+      // result.translations[].lang is already normalized (executeTranslationTask
+      // generates against the normalized language list) — normalize
+      // payload.targetLanguages the same way before diffing, or a target like
+      // zh-CN never matches a successful zh and gets retried for no reason.
+      const targetLangs = normalizeTargetLangs(payload.targetLanguages)
       const successLangs = new Set(
         result?.translations?.map((t) => t.lang) || [],
       )
@@ -182,6 +189,7 @@ export class AiTranslationService
         const retryPayload: TranslationTaskPayload = {
           refId: payload.refId,
           targetLanguages: failedLangs,
+          force: payload.force,
           title: payload.title,
           refType: payload.refType,
         }
@@ -220,9 +228,11 @@ export class AiTranslationService
     this.checkAborted(context)
 
     const aiConfig = await this.configService.get('ai')
-    const languages = resolveTargetLanguages(
-      payload.targetLanguages,
-      aiConfig.translationTargetLanguages,
+    const languages = normalizeTargetLangs(
+      resolveTargetLanguages(
+        payload.targetLanguages,
+        aiConfig.translationTargetLanguages,
+      ),
     )
 
     if (!languages.length) {
@@ -290,6 +300,8 @@ export class AiTranslationService
                   context.signal,
                   langPush,
                   context.incrementCost,
+                  context.taskId,
+                  payload.force,
                 ),
                 abortPromise,
               ])
@@ -675,6 +687,17 @@ export class AiTranslationService
     return buildSourceMetaHashes(content)
   }
 
+  private composeStyleHints(
+    aiConfig: { translationStyleHints?: string },
+    refType?: CollectionRefTypes,
+  ): string | undefined {
+    const parts = [
+      aiConfig.translationStyleHints?.trim(),
+      refType ? ARTICLE_TYPE_STYLE_HINTS[refType] : undefined,
+    ].filter(Boolean)
+    return parts.length ? parts.join('\n') : undefined
+  }
+
   private async translateContentStream(
     content: ArticleContent,
     targetLang: string,
@@ -683,17 +706,16 @@ export class AiTranslationService
     signal?: AbortSignal,
     existing?: AITranslationModel | null,
     onCost?: (usd: number) => Promise<void>,
+    refType?: CollectionRefTypes,
   ) {
     const { runtime, info } = await this.aiService.getTranslationModelWithInfo()
     const strategy = this.getStrategy(content.contentFormat)
     const aiConfig = await this.configService.get('ai')
 
     let reviewerRuntime: IModelRuntime | undefined
-    let reviewScoreThreshold: number | undefined
     if (aiConfig.enableTranslationReview) {
       try {
         reviewerRuntime = await this.aiService.getTranslationReviewModel()
-        reviewScoreThreshold = aiConfig.translationReviewScoreThreshold
       } catch (error) {
         this.logger.warn(
           `Translation reviewer runtime resolution failed; review disabled for this run: ${error instanceof Error ? error.message : String(error)}`,
@@ -708,7 +730,7 @@ export class AiTranslationService
       signal,
       existing,
       reviewerRuntime,
-      reviewScoreThreshold,
+      styleHints: this.composeStyleHints(aiConfig, refType),
     })
   }
 
@@ -719,6 +741,8 @@ export class AiTranslationService
     signal?: AbortSignal,
     push?: (event: AiStreamEvent) => Promise<void>,
     onCost?: (usd: number) => Promise<void>,
+    taskId?: string,
+    force?: boolean,
   ): Promise<AITranslationModel> {
     const startedAt = Date.now()
     const aiConfig = await this.configService.get('ai')
@@ -743,6 +767,8 @@ export class AiTranslationService
         signal,
         push,
         onCost,
+        taskId,
+        force,
       )
       const translated = await result
       this.logger.log(
@@ -774,6 +800,8 @@ export class AiTranslationService
     signal?: AbortSignal,
     taskPush?: (event: AiStreamEvent) => Promise<void>,
     onCost?: (usd: number) => Promise<void>,
+    taskId?: string,
+    force?: boolean,
   ) {
     const content = this.toArticleContent(document)
     const sourceModified = document.modifiedAt ?? undefined
@@ -786,8 +814,11 @@ export class AiTranslationService
       streamMaxLen: AI_STREAM_MAXLEN,
       readBlockMs: AI_STREAM_READ_BLOCK_MS,
       idleTimeoutMs: AI_STREAM_IDLE_TIMEOUT_MS,
+      bypassResultCache: force,
       onLeader: async ({ push }) => {
-        // Fetch existing translation for incremental path
+        // Still read `existing` unconditionally on force: it backs the
+        // sourceModifiedAt fallback and the create/update event choice below,
+        // even though force skips it as the incremental-reuse input.
         const existing = await this.aiTranslationRepository.findByRef(
           articleId,
           refType,
@@ -801,14 +832,21 @@ export class AiTranslationService
             }
           : push
 
+        let usage: GenerationUsage = emptyUsage()
+        const trackCost = async (usd: number) => {
+          usage = mergeUsage(usage, { cost: { total: usd } })
+          if (onCost) await onCost(usd)
+        }
+
         const translated = await this.translateContentStream(
           content,
           targetLang,
           fanoutPush,
           onToken,
           signal,
-          existing,
-          onCost,
+          force ? undefined : existing,
+          trackCost,
+          refType,
         )
         const { sourceLang } = translated
         const hash = this.computeContentHash(content, sourceLang)
@@ -836,6 +874,17 @@ export class AiTranslationService
           content: translated.content ?? null,
           sourceBlockSnapshots: sourceSnapshots,
           sourceMetaHashes,
+        })
+
+        await this.generationMetrics.record({
+          resourceType: 'translation',
+          resourceId: persisted.id,
+          refId: articleId,
+          lang: targetLang,
+          taskId: taskId ?? null,
+          providerId: translated.aiProvider,
+          model: translated.aiModel,
+          usage,
         })
 
         if (existing) {
@@ -882,8 +931,10 @@ export class AiTranslationService
 
     // Gate the public stream path on visibility, matching the read path
     // (`getTranslationForArticle`) so drafts / protected articles never leak.
-    const { article, document } =
-      await this.loadVisibleArticleOrThrow(articleId)
+    const { article, document } = await this.loadVisibleArticleOrThrow(
+      articleId,
+      { blockPremium: true },
+    )
     const { type } = article
 
     // Check whether a valid translation (matching hash) already exists in the database.
@@ -995,7 +1046,13 @@ export class AiTranslationService
       throw createAppException(AppErrorCode.CONTENT_NOT_FOUND, { id: refId })
     }
 
-    return { translations, article }
+    return {
+      translations: await this.generationMetrics.attachLatest(
+        'translation',
+        translations,
+      ),
+      article,
+    }
   }
 
   async getTranslationById(id: string) {
@@ -1006,64 +1063,36 @@ export class AiTranslationService
     return doc
   }
 
-  async getAllTranslationsGrouped(query: GetTranslationsGroupedQueryInput) {
-    const { page, size } = query
-    const search = query.search?.trim()
-    const searchableRefIds = search
-      ? await this.databaseService.findArticleIdsByTitle(search)
-      : undefined
-
-    if (search && searchableRefIds?.length === 0) {
-      return {
-        data: [],
-        pagination: paginationOf(0, page, size),
-      }
-    }
-
-    const grouped = await this.aiTranslationRepository.groupByRefIdPaginated(
-      page,
-      size,
-      searchableRefIds,
-    )
-
-    if (grouped.data.length === 0) {
-      return {
-        data: [],
-        pagination: paginationOf(grouped.pagination.total, page, size),
-      }
-    }
-
-    const refIds = grouped.data.map((g) => g.refId as string)
-    const [translations, articleMap] = await Promise.all([
-      this.aiTranslationRepository.listByRefIds(refIds),
-      this.databaseService.getRefArticleMap(refIds),
-    ])
-
-    const translationsByRefId = translations.reduce(
-      (acc, trans) => {
-        if (!acc[trans.refId]) {
-          acc[trans.refId] = []
-        }
-        acc[trans.refId].push(trans)
-        return acc
-      },
-      {} as Record<string, AITranslationModel[]>,
-    )
-
-    const groupedData = refIds
-      .map((refId) => {
-        const info = articleMap[refId]
-        if (!info) return null
-        return {
-          article: info,
-          translations: translationsByRefId[refId] || [],
-        }
+  async getAllTranslationsGrouped(query: GetTranslationsGroupedQueryDto) {
+    const { data, pagination } =
+      await buildGroupedWithOrphans<AITranslationModel>({
+        page: query.page,
+        size: query.size,
+        search: query.search,
+        databaseService: this.databaseService,
+        fetchCandidateArticles: () =>
+          this.databaseService.findAllArticlesForTranslation(),
+        fetchRecordsPage: (page, size, refIds) =>
+          this.aiTranslationRepository.groupByRefIdPaginated(
+            page,
+            size,
+            refIds,
+          ),
+        fetchRecordsDistinctRefIds: (refIds) =>
+          this.aiTranslationRepository.findDistinctRefIds(refIds),
+        fetchItemsByRefIds: async (refIds) =>
+          this.generationMetrics.attachLatest(
+            'translation',
+            await this.aiTranslationRepository.listByRefIds(refIds),
+          ),
+        getItemRefId: (item) => item.refId,
       })
-      .filter(Boolean)
-
     return {
-      data: groupedData,
-      pagination: grouped.pagination,
+      data: data.map((row) => ({
+        article: row.article,
+        translations: row.items,
+      })),
+      pagination,
     }
   }
 
@@ -1115,6 +1144,7 @@ export class AiTranslationService
     if (deletedCount === 0) {
       throw createAppException(AppErrorCode.AI_TRANSLATION_NOT_FOUND)
     }
+    await this.generationMetrics.deleteByResource('translation', id)
     if (existing) {
       this.eventManager.emit(
         BusinessEvents.TRANSLATION_DELETE,
@@ -1134,6 +1164,10 @@ export class AiTranslationService
     const existing = await this.aiTranslationRepository.listByRefId(refId)
     await this.aiTranslationRepository.deleteForRefId(refId)
     for (const row of existing) {
+      await this.generationMetrics.deleteByResource(
+        'translation',
+        String(row.id),
+      )
       this.eventManager.emit(
         BusinessEvents.TRANSLATION_DELETE,
         { refId: row.refId, refType: row.refType, lang: row.lang },
@@ -1144,7 +1178,7 @@ export class AiTranslationService
 
   private async loadVisibleArticleOrThrow(
     articleId: string,
-    options?: { ignoreVisibility?: boolean },
+    options?: { ignoreVisibility?: boolean; blockPremium?: boolean },
   ) {
     const article = await this.databaseService.findGlobalById(articleId)
     if (!article || !article.document) {
@@ -1160,6 +1194,15 @@ export class AiTranslationService
       throw createAppException(AppErrorCode.NOTE_FORBIDDEN)
     }
 
+    if (
+      options?.blockPremium &&
+      article.type === CollectionRefTypes.Post &&
+      (article.document as ArticleDocument as { isPremium?: boolean | null })
+        .isPremium
+    ) {
+      throw createAppException(AppErrorCode.POST_HIDDEN_OR_ENCRYPTED)
+    }
+
     return { article, document: article.document as ArticleDocument }
   }
 
@@ -1169,7 +1212,10 @@ export class AiTranslationService
     options?: { ignoreVisibility?: boolean },
   ): Promise<AITranslationModel | null> {
     const [{ document }, translation] = await Promise.all([
-      this.loadVisibleArticleOrThrow(articleId, options),
+      this.loadVisibleArticleOrThrow(articleId, {
+        ...options,
+        blockPremium: true,
+      }),
       this.aiTranslationRepository.findByRefAndLang(articleId, targetLang),
     ])
 
@@ -1191,8 +1237,6 @@ export class AiTranslationService
     if (status !== 'stale') {
       return null
     }
-
-    this.scheduleStaleTranslationRegenerationBestEffort(articleId, targetLang)
 
     const partial = this.lexicalPartialTranslationBuilder.build(
       this.toArticleContent(document),
@@ -1246,18 +1290,6 @@ export class AiTranslationService
 
         result.validTranslations.set(refId, translation)
       }
-    }
-
-    if (result.staleRefIds.length) {
-      this.scheduleRegenerationForStaleTranslations(
-        result.staleRefIds,
-        targetLang,
-      ).catch((err) =>
-        this.logger.error(
-          'Failed to schedule stale translation regeneration',
-          err,
-        ),
-      )
     }
 
     return result
@@ -1355,53 +1387,10 @@ export class AiTranslationService
       }
     }
 
-    if (staleLangs.length && targetLang) {
-      this.scheduleStaleTranslationRegenerationBestEffort(articleId, targetLang)
-    }
-
     return {
       availableTranslations: validLangs,
       sourceLang,
       translation: matchedTranslation,
-    }
-  }
-
-  async scheduleRegenerationForStaleTranslations(
-    articleIds: string[],
-    targetLang: string,
-  ) {
-    if (!articleIds.length) return
-
-    const aiConfig = await this.configService.get('ai')
-    if (
-      !aiConfig.enableAutoGenerateTranslation ||
-      !aiConfig.enableTranslation
-    ) {
-      return
-    }
-
-    const existingTranslations =
-      await this.aiTranslationRepository.listByRefIdsAndLang(
-        articleIds,
-        targetLang,
-      )
-
-    if (!existingTranslations.length) return
-
-    const staleRefIds =
-      await this.translationConsistencyService.filterTrulyStaleTranslations(
-        existingTranslations,
-      )
-    if (!staleRefIds.length) return
-
-    for (const refId of staleRefIds) {
-      this.logger.log(
-        `Scheduling stale translation regeneration: article=${refId} lang=${targetLang}`,
-      )
-      await this.aiTaskService.createTranslationTask({
-        refId,
-        targetLanguages: [targetLang],
-      })
     }
   }
 }

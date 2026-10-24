@@ -5,7 +5,6 @@ import type {
 } from '@nestjs/common'
 import {
   ConflictException,
-  Inject,
   Injectable,
   Logger,
   SetMetadata,
@@ -18,8 +17,8 @@ import {
   HTTP_IDEMPOTENCE_KEY,
   HTTP_IDEMPOTENCE_OPTIONS,
 } from '~/constants/meta.constant'
-import { REFLECTOR } from '~/constants/system.constant'
 import { RedisService } from '~/processors/redis/redis.service'
+import { isHttpExecutionContext } from '~/transformers/get-req.transformer'
 import { getIp } from '~/utils/ip.util'
 import { getRedisKey } from '~/utils/redis.util'
 import { hashString } from '~/utils/tool.util'
@@ -60,10 +59,14 @@ export class IdempotenceInterceptor implements NestInterceptor {
 
   constructor(
     private readonly redisService: RedisService,
-    @Inject(REFLECTOR) private readonly reflector: Reflector,
+    private readonly reflector: Reflector,
   ) {}
 
   async intercept(context: ExecutionContext, next: CallHandler) {
+    if (!isHttpExecutionContext(context)) {
+      return next.handle()
+    }
+
     const request = context.switchToHttp().getRequest<FastifyRequest>()
 
     if (request.method.toUpperCase() === 'GET') {

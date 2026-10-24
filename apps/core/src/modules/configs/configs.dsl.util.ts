@@ -32,12 +32,7 @@ export interface UIConfig {
   actionId?: string
   actionLabel?: string
   actionVariant?:
-    | 'default'
-    | 'primary'
-    | 'info'
-    | 'success'
-    | 'warning'
-    | 'error'
+    'default' | 'primary' | 'info' | 'success' | 'warning' | 'error'
 }
 
 export interface FormField {
@@ -126,7 +121,7 @@ const groupConfigs: GroupConfig[] = [
   {
     key: 'ai',
     title: 'AI',
-    description: 'AI summary, writing assistant',
+    description: 'AI summary, writing assistant, image generation',
     icon: 'sparkles',
     sectionKeys: ['ai'],
   },
@@ -144,24 +139,30 @@ const groupConfigs: GroupConfig[] = [
     icon: 'settings',
     sectionKeys: ['adminExtra', 'featureList'],
   },
+  {
+    key: 'membership',
+    title: 'Membership',
+    description: 'Paid membership, payment provider',
+    icon: 'credit-card',
+    sectionKeys: ['membership'],
+  },
 ]
 
 // ==================== Type Inference Utilities ====================
 
-function unwrapZodType(schema: z.ZodTypeAny): z.ZodTypeAny {
+function unwrapZodType(schema: z.ZodType): z.ZodType {
   if (schema instanceof z.ZodOptional) {
-    return unwrapZodType(schema.unwrap() as unknown as z.ZodTypeAny)
+    return unwrapZodType(schema.unwrap() as unknown as z.ZodType)
   }
   if (schema instanceof z.ZodNullable) {
-    return unwrapZodType(schema.unwrap() as unknown as z.ZodTypeAny)
+    return unwrapZodType(schema.unwrap() as unknown as z.ZodType)
   }
   if (schema instanceof z.ZodDefault) {
-    // Zod v4 public API
-    return unwrapZodType(schema.removeDefault() as unknown as z.ZodTypeAny)
+    return unwrapZodType(schema.unwrap() as unknown as z.ZodType)
   }
   if (schema instanceof z.ZodPipe) {
     // `z.preprocess`, `transform`, etc.
-    return unwrapZodType(schema.out as unknown as z.ZodTypeAny)
+    return unwrapZodType(schema.out as unknown as z.ZodType)
   }
   return schema
 }
@@ -171,11 +172,11 @@ interface ZodEnumLike {
   options?: unknown[]
 }
 
-function asEnumLike(schema: z.ZodTypeAny): ZodEnumLike {
+function asEnumLike(schema: z.ZodType): ZodEnumLike {
   return schema as unknown as ZodEnumLike
 }
 
-function isEnumLikeSchema(schema: z.ZodTypeAny): boolean {
+function isEnumLikeSchema(schema: z.ZodType): boolean {
   if (schema instanceof z.ZodEnum) return true
   const candidate = asEnumLike(schema)
   if (
@@ -192,7 +193,7 @@ function isEnumLikeSchema(schema: z.ZodTypeAny): boolean {
 }
 
 function inferUIComponent(
-  schema: z.ZodTypeAny,
+  schema: z.ZodType,
   meta: SchemaMetadata | undefined,
 ): UIComponent {
   const uiOptions = meta?.['ui:options']
@@ -213,7 +214,7 @@ function inferUIComponent(
 }
 
 function getSelectOptions(
-  schema: z.ZodTypeAny,
+  schema: z.ZodType,
   meta: SchemaMetadata | undefined,
 ): Array<{ label: string; value: string | number }> | undefined {
   const uiOptions = meta?.['ui:options']
@@ -249,19 +250,22 @@ function getSelectOptions(
   return undefined
 }
 
-function isRequired(schema: z.ZodTypeAny): boolean {
+function isRequired(schema: z.ZodType): boolean {
   if (schema instanceof z.ZodOptional) return false
   if (schema instanceof z.ZodDefault) return false
+  if (schema instanceof z.ZodPipe) {
+    return !schema.safeParse(undefined).success
+  }
   return true
 }
 
 // ==================== Field Extraction ====================
 
-function extractField(key: string, schema: z.ZodTypeAny): FormField {
+function extractField(key: string, schema: z.ZodType): FormField {
   const meta = getMeta(schema)
   const innerMeta =
     schema instanceof z.ZodOptional
-      ? getMeta(schema.unwrap() as unknown as z.ZodTypeAny)
+      ? getMeta(schema.unwrap() as unknown as z.ZodType)
       : undefined
   const effectiveMeta = meta || innerMeta
 
@@ -338,7 +342,8 @@ function extractFields(schema: z.ZodObject<any>): FormField[] {
   const fields: FormField[] = []
 
   for (const [key, propSchema] of Object.entries(shape)) {
-    const field = extractField(key, propSchema as z.ZodTypeAny)
+    const field = extractField(key, propSchema as z.ZodType)
+    if (field.ui.hidden) continue
     fields.push(field)
   }
 
@@ -348,7 +353,7 @@ function extractFields(schema: z.ZodObject<any>): FormField[] {
 // ==================== Section Conversion ====================
 
 export function zodToFormSection(
-  schema: z.ZodTypeAny,
+  schema: z.ZodType,
   sectionKey: string,
 ): FormSection {
   const meta = getMeta(schema)

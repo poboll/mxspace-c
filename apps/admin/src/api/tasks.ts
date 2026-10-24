@@ -1,6 +1,6 @@
 import { deleteJson, getJson, requestJson } from './http'
 
-export type TaskScope = 'ai' | 'cron' | 'enrichment'
+export type TaskScope = 'ai' | 'content' | 'cron' | 'enrichment'
 
 export enum AITaskType {
   Summary = 'ai:summary',
@@ -10,6 +10,8 @@ export enum AITaskType {
   SlugBackfill = 'ai:slug:backfill',
   Insights = 'ai:insights',
   InsightsTranslation = 'ai:insights:translation',
+  ImageGeneration = 'ai:image:generation',
+  Tts = 'ai:tts',
 }
 
 export enum AITaskStatus {

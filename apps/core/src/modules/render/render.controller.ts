@@ -4,6 +4,7 @@ import {
   Controller,
   Get,
   Header,
+  HttpCode,
   Param,
   Post,
   Query,
@@ -19,11 +20,14 @@ import { HttpCache } from '~/common/decorators/cache.decorator'
 import { HTTPDecorators } from '~/common/decorators/http.decorator'
 import { AppErrorCode, createAppException } from '~/common/errors'
 import { CollectionRefTypes } from '~/constants/db.constant'
-import { EntityIdDto } from '~/shared/dto/id.dto'
+import { type EntityIdDto, EntityIdSchema } from '~/shared/dto/id.dto'
 import { getShortDateTime } from '~/utils/time.util'
 
 import { ConfigsService } from '../configs/configs.service'
-import { MarkdownPreviewDto } from '../markdown/markdown.schema'
+import {
+  type MarkdownPreviewDto,
+  MarkdownPreviewSchema,
+} from '../markdown/markdown.schema'
 import { MarkdownService } from '../markdown/markdown.service'
 import type { NoteModel } from '../note/note.types'
 import { OwnerService } from '../owner/owner.service'
@@ -43,7 +47,7 @@ export class RenderEjsController {
   @Header('content-type', 'text/html')
   @CacheTTL(60 * 60)
   async renderArticle(
-    @Param() params: EntityIdDto,
+    @Param({ schema: EntityIdSchema }) params: EntityIdDto,
     @Query('theme') theme: string,
   ) {
     const { id } = params
@@ -56,7 +60,7 @@ export class RenderEjsController {
       },
       { name: username },
     ] = await Promise.all([
-      this.service.renderArticle(id),
+      this.service.renderArticle(id, { asOwner: hasAdminAccess }),
       this.configs.waitForConfigReady(),
       this.ownerService.getOwner(),
     ])
@@ -114,12 +118,13 @@ export class RenderEjsController {
   }
 
   @Post('/markdown')
+  @HttpCode(200)
   @HTTPDecorators.RawResponse
   @HttpCache.disable
   @Auth()
   @Header('content-type', 'text/html')
   async markdownPreview(
-    @Body() body: MarkdownPreviewDto,
+    @Body({ schema: MarkdownPreviewSchema }) body: MarkdownPreviewDto,
     @Query('theme') theme: string,
   ) {
     const { md, title } = body

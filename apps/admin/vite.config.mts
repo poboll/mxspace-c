@@ -24,7 +24,6 @@ export default ({ mode }) => {
 
   return defineConfig({
     plugins: [
-      // mkcert(),
       esToolkitCompatShim(),
       codeInspectorPlugin({ bundler: 'vite' }),
       adminRoutes({ viewsDir: resolve(__dirname, 'src/views') }),
@@ -103,7 +102,6 @@ export default ({ mode }) => {
             if (haklexChunk) return haklexChunk
 
             if (normalized.includes('/monaco-editor/')) return 'editor-monaco'
-            if (normalized.includes('/@antv/')) return 'vendor-charts'
           },
         },
       },
@@ -192,6 +190,7 @@ export default ({ mode }) => {
         '@lexical/react/LexicalComposerContext',
         '@lexical/rich-text',
         '@lezer/highlight',
+        '@lobehub/streamdown',
         'lexical',
         'maplibre-gl',
         '@monaco-editor/react',
@@ -205,7 +204,6 @@ export default ({ mode }) => {
         'monaco-editor',
         'react-resizable-panels',
         'shiki',
-        'streamdown',
         'zod',
         'zustand',
       ],
@@ -257,7 +255,7 @@ const htmlPlugin: (env: any) => PluginOption = (env) => {
     transformIndexHtml(html) {
       return html
         .replace(
-          '<!-- MX SPACE ADMIN DASHBOARD VERSION INJECT -->',
+          '<!-- Mix Space ADMIN DASHBOARD VERSION INJECT -->',
           `<script>window.version = '${PKG.version}';</script>`,
         )
         .replaceAll('@gh-pages', `@page_v${PKG.version}`)

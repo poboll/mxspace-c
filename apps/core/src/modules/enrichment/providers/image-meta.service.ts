@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common'
-import sharp from 'sharp'
+import type { Sharp } from 'sharp'
 import { rgbaToThumbHash } from 'thumbhash'
 
 const FETCH_TIMEOUT_MS = 5000
@@ -65,6 +65,7 @@ export class ImageMetaService {
   }
 
   private async extract(buffer: Buffer): Promise<ImageMeta> {
+    const sharp = (await import('sharp')).default
     const sharped = sharp(buffer)
     const metadata = await sharped.metadata()
     const { dominant } = await sharped.stats()
@@ -87,7 +88,7 @@ function rgbToHex(r: number, g: number, b: number): string {
   return `#${h(r)}${h(g)}${h(b)}`
 }
 
-async function encodeThumbhash(source: sharp.Sharp): Promise<string> {
+async function encodeThumbhash(source: Sharp): Promise<string> {
   const { data, info } = await source
     .clone()
     .raw()

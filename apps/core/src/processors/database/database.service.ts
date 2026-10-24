@@ -20,7 +20,7 @@ export type RefArticleInfo = {
 export const buildRefArticleMap = (articles: {
   posts: Array<{ id: string; title: string }>
   notes: Array<{ id: string; title: string }>
-  pages: Array<{ id: string; title: string }>
+  pages?: Array<{ id: string; title: string }>
 }): Record<string, RefArticleInfo> => {
   const map: Record<string, RefArticleInfo> = {}
   for (const a of articles.posts) {
@@ -29,13 +29,13 @@ export const buildRefArticleMap = (articles: {
   for (const a of articles.notes) {
     map[a.id] = { id: a.id, title: a.title, type: CollectionRefTypes.Note }
   }
-  for (const a of articles.pages) {
+  for (const a of articles.pages ?? []) {
     map[a.id] = { id: a.id, title: a.title, type: CollectionRefTypes.Page }
   }
   return map
 }
 
-type GlobalDocumentResult =
+export type GlobalDocumentResult =
   | { document: PostRow; type: CollectionRefTypes.Post }
   | { document: NoteRow; type: CollectionRefTypes.Note }
   | { document: PageRow; type: CollectionRefTypes.Page }
@@ -89,6 +89,73 @@ export class DatabaseService {
     }
   }
 
+  public async findRefCandidates(
+    search: string,
+    size: number,
+  ): Promise<GlobalDocumentResult[]> {
+    const normalized = search.trim()
+    let candidates: GlobalDocumentResult[]
+
+    if (normalized) {
+      const [articleIds, recentlies] = await Promise.all([
+        this.findArticleIdsByTitle(normalized),
+        this.recentlyRepository.findByContent(normalized, size),
+      ])
+      const collection = await this.findGlobalByIds(articleIds.slice(0, size))
+      candidates = [
+        ...collection.posts.map((document) => ({
+          document,
+          type: CollectionRefTypes.Post as const,
+        })),
+        ...collection.notes.map((document) => ({
+          document,
+          type: CollectionRefTypes.Note as const,
+        })),
+        ...collection.pages.map((document) => ({
+          document,
+          type: CollectionRefTypes.Page as const,
+        })),
+        ...recentlies.map((document) => ({
+          document,
+          type: CollectionRefTypes.Recently as const,
+        })),
+      ]
+    } else {
+      const [postPage, notes, pagePage, recentlies] = await Promise.all([
+        this.postRepository.list({ page: 1, size }),
+        this.noteRepository.findRecent(size, { metaOnly: true }),
+        this.pageRepository.list(1, size),
+        this.recentlyRepository.findRecent(size),
+      ])
+      candidates = [
+        ...postPage.data.map((document) => ({
+          document,
+          type: CollectionRefTypes.Post as const,
+        })),
+        ...notes.map((document) => ({
+          document,
+          type: CollectionRefTypes.Note as const,
+        })),
+        ...pagePage.data.map((document) => ({
+          document,
+          type: CollectionRefTypes.Page as const,
+        })),
+        ...recentlies.map((document) => ({
+          document,
+          type: CollectionRefTypes.Recently as const,
+        })),
+      ]
+    }
+
+    return candidates
+      .sort(
+        (a, b) =>
+          (b.document.createdAt?.getTime() ?? 0) -
+          (a.document.createdAt?.getTime() ?? 0),
+      )
+      .slice(0, size)
+  }
+
   public async getRefArticleMap(
     refIds: string[],
   ): Promise<Record<string, RefArticleInfo>> {
@@ -139,6 +206,23 @@ export class DatabaseService {
     const pick = (rows: Array<{ id: string; title: string }>) =>
       rows.map(({ id, title }) => ({ id, title }))
     return { posts: pick(posts), notes: pick(notes), pages: pick(pages) }
+  }
+
+  /**
+   * Visible posts + notes for AI features (summary / insights) that do not
+   * apply to pages.
+   */
+  public async findAllArticlesForAIText(): Promise<{
+    posts: Array<{ id: string; title: string }>
+    notes: Array<{ id: string; title: string }>
+  }> {
+    const [posts, notes] = await Promise.all([
+      this.postRepository.findPublishedForSitemap(),
+      this.noteRepository.findVisibleForSitemap(),
+    ])
+    const pick = (rows: Array<{ id: string; title: string }>) =>
+      rows.map(({ id, title }) => ({ id, title }))
+    return { posts: pick(posts), notes: pick(notes) }
   }
 
   flatCollectionToMap(combinedCollection: IdsCollection) {

@@ -1,15 +1,16 @@
-import { Args, Command } from '@effect/cli'
 import { Effect } from 'effect'
+import { Argument, Command } from 'effect/cli'
 
-import { openAdminEdit } from '../../domain/admin-link'
+import { openAdminDraftEdit } from '../../domain/admin-link'
 import { ResourceNotFound } from '../../domain/errors'
 import { buildPagePayload } from '../../domain/payload'
 import { Api, type ApiService } from '../../services/Api'
 import { Renderer } from '../../services/Renderer'
 import { isSnowflakeId } from '../../services/Resolver'
+import { publishSavedDraft, saveDraftPayload } from '../draft/_shared'
 import { pageWriteOptions, toPageFlagInputs } from './create'
 
-const slugOrId = Args.text({ name: 'slugOrId' })
+const slugOrId = Argument.String('slugOrId')
 
 const resolvePageId = (
   api: ApiService,
@@ -22,7 +23,7 @@ const resolvePageId = (
         id?: string
         data?: { id?: string }
       }>(`/pages/slug/${encodeURIComponent(ref)}`)
-      .pipe(Effect.catchAll(() => Effect.succeed(null)))
+      .pipe(Effect.catch(() => Effect.succeed(null)))
     const id =
       (res && (res as { id?: string }).id) ??
       (res && (res as { data?: { id?: string } }).data?.id)
@@ -55,11 +56,15 @@ export const update = Command.make(
       const api = yield* Api
       const renderer = yield* Renderer
       const id = yield* resolvePageId(api, slugOrId)
-      const res = yield* api.request(`/pages/${id}`, {
-        method: 'PATCH',
-        body,
-      })
-      yield* renderer.emitSuccess(rest.silent ? { ok: true } : res)
-      if (rest.open) yield* openAdminEdit('pages', id)
+      const saved = yield* saveDraftPayload(api, 'page', body, id)
+      const response = yield* publishSavedDraft(api, saved.draft)
+      yield* renderer.emitSuccess(rest.silent ? { ok: true } : response)
+      if (rest.open && saved.draft.id) {
+        yield* openAdminDraftEdit('pages', saved.draft.id, id)
+      }
     }),
+).pipe(
+  Command.withDescription(
+    'save changes through the page draft and create an online update job',
+  ),
 )

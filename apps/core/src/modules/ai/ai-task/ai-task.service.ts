@@ -8,13 +8,16 @@ import {
   type AITaskPayload,
   AITaskType,
   computeAITaskDedupKey,
+  type ImageGenerationTaskPayload,
   type InsightsTaskPayload,
   type InsightsTranslationTaskPayload,
   type SlugBackfillTaskPayload,
   type SummaryTaskPayload,
+  type SummaryTranslationTaskPayload,
   type TranslationAllTaskPayload,
   type TranslationBatchTaskPayload,
   type TranslationTaskPayload,
+  type TtsTaskPayload,
 } from './ai-task.types'
 
 @Injectable()
@@ -29,6 +32,13 @@ export class AiTaskService {
   ): Promise<{ taskId: string; created: boolean }> {
     await this.fillArticleInfo(payload)
     return this.createTask(AITaskType.Summary, payload)
+  }
+
+  async createSummaryTranslationTask(
+    payload: SummaryTranslationTaskPayload,
+  ): Promise<{ taskId: string; created: boolean }> {
+    await this.fillArticleInfo(payload)
+    return this.createTask(AITaskType.SummaryTranslation, payload)
   }
 
   async createTranslationTask(
@@ -68,6 +78,19 @@ export class AiTaskService {
   ): Promise<{ taskId: string; created: boolean }> {
     await this.fillArticleInfo(payload)
     return this.createTask(AITaskType.InsightsTranslation, payload)
+  }
+
+  async createImageGenerationTask(
+    payload: ImageGenerationTaskPayload,
+  ): Promise<{ taskId: string; created: boolean }> {
+    return this.createTask(AITaskType.ImageGeneration, payload)
+  }
+
+  async createTtsTask(
+    payload: TtsTaskPayload,
+  ): Promise<{ taskId: string; created: boolean }> {
+    await this.fillArticleInfo(payload)
+    return this.createTask(AITaskType.Tts, payload)
   }
 
   private async createTask(

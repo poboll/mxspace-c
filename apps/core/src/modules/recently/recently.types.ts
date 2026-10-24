@@ -29,6 +29,15 @@ export interface RecentlyCreateInput {
   allowComment?: boolean
 }
 
+export interface RecentlyCreateModel {
+  content?: string
+  metadata?: Record<string, unknown> | null
+  refType?: RecentlyRefType
+  refId?: EntityId | string | null
+  ref?: EntityId | string | null
+  clearRef?: boolean
+}
+
 export type RecentlyPatchInput = Partial<RecentlyCreateInput> & {
   modifiedAt?: Date | null
   up?: number

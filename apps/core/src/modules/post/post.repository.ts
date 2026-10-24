@@ -53,6 +53,7 @@ const mapBase = (row: PostRowSource): PostRow => ({
   categoryId: toEntityId(row.categoryId) as EntityId,
   copyright: row.copyright,
   isPublished: row.isPublished,
+  isPremium: row.isPremium,
   readCount: row.readCount,
   likeCount: row.likeCount,
   pinAt: row.pinAt,
@@ -134,6 +135,13 @@ export class PostRepository extends BaseRepository {
       const { start, end } = yearRange(params.year)
       filters.push(gte(posts.createdAt, start), lt(posts.createdAt, end))
     }
+    if (params.excludeAiWritten) {
+      // aiGen preset 2 = "fully AI-written" (see web ai-gen.ts); jsonb @> matches
+      // both the scalar form and membership in the disclosure array
+      filters.push(
+        sql`(${posts.meta} -> 'aiGen' is null or not (${posts.meta} -> 'aiGen' @> '2'::jsonb))`,
+      )
+    }
     const whereClause = filters.length > 0 ? and(...filters) : undefined
     const orderBy =
       params.sortBy === 'createdAt'
@@ -152,7 +160,7 @@ export class PostRepository extends BaseRepository {
 
     const selection = params.truncateText
       ? {
-          ...postMetaColumns,
+          ...postColumns,
           text: sql<string | null>`left(${posts.text}, ${params.truncateText})`,
         }
       : postColumns
@@ -197,6 +205,7 @@ export class PostRepository extends BaseRepository {
         categoryId: parseEntityId(input.categoryId),
         copyright: input.copyright ?? true,
         isPublished: input.isPublished ?? true,
+        isPremium: input.isPremium ?? false,
         pinAt: input.pinAt ?? null,
         pinOrder: input.pinOrder ?? null,
       })
@@ -225,6 +234,7 @@ export class PostRepository extends BaseRepository {
       update.categoryId = parseEntityId(patch.categoryId)
     if (patch.copyright !== undefined) update.copyright = patch.copyright
     if (patch.isPublished !== undefined) update.isPublished = patch.isPublished
+    if (patch.isPremium !== undefined) update.isPremium = patch.isPremium
     if (patch.pinAt !== undefined) update.pinAt = patch.pinAt
     if (patch.pinOrder !== undefined) update.pinOrder = patch.pinOrder
     update.modifiedAt = patch.modifiedAt ?? new Date()
@@ -261,11 +271,16 @@ export class PostRepository extends BaseRepository {
       .where(eq(posts.id, idBig))
   }
 
-  async countByCategoryId(categoryId: EntityId | string): Promise<number> {
+  async countByCategoryId(
+    categoryId: EntityId | string,
+    options: { publishedOnly?: boolean } = {},
+  ): Promise<number> {
+    const filters: SQL[] = [eq(posts.categoryId, parseEntityId(categoryId))]
+    if (options.publishedOnly) filters.push(eq(posts.isPublished, true))
     const [row] = await this.db
       .select({ count: sql<number>`count(*)::int` })
       .from(posts)
-      .where(eq(posts.categoryId, parseEntityId(categoryId)))
+      .where(and(...filters))
     return Number(row?.count ?? 0)
   }
 
@@ -293,6 +308,19 @@ export class PostRepository extends BaseRepository {
     return options.metaOnly ? withCategory : this.attachRelated(withCategory)
   }
 
+  async listPremium(
+    options: { publishedOnly?: boolean } = {},
+  ): Promise<PostRow[]> {
+    const filters: SQL[] = [eq(posts.isPremium, true)]
+    if (options.publishedOnly) filters.push(eq(posts.isPublished, true))
+    const rows = await this.db
+      .select(postMetaColumns)
+      .from(posts)
+      .where(and(...filters))
+      .orderBy(desc(posts.createdAt))
+    return this.attachCategories(rows.map(mapBase))
+  }
+
   async findManyByIds(ids: Array<EntityId | string>): Promise<PostRow[]> {
     if (ids.length === 0) return []
     const bigInts = ids.map((id) => parseEntityId(id))
@@ -311,14 +339,20 @@ export class PostRepository extends BaseRepository {
     return rows.map((row) => toEntityId(row.id) as EntityId)
   }
 
-  async aggregateAllTagCounts(): Promise<PostTagCount[]> {
-    const result = await this.db.execute<PostTagCount>(sql`
-      select unnest(tags) as name, count(*)::int
-      from posts
-      group by name
-      order by count desc, name asc
-    `)
-    return result.rows.map((row) => ({
+  async aggregateAllTagCounts(
+    options: { publishedOnly?: boolean } = {},
+  ): Promise<PostTagCount[]> {
+    const tagAlias = sql<string>`tag`
+    const rows = await this.db
+      .select({
+        name: sql<string>`unnest(${posts.tags})`.as('tag'),
+        count: sql<number>`count(*)::int`,
+      })
+      .from(posts)
+      .where(options.publishedOnly ? eq(posts.isPublished, true) : undefined)
+      .groupBy(tagAlias)
+      .orderBy(sql`count(*) desc`, sql`tag asc`)
+    return rows.map((row) => ({
       name: row.name,
       count: Number(row.count ?? 0),
     }))
@@ -326,15 +360,21 @@ export class PostRepository extends BaseRepository {
 
   async aggregateTagCountsByCategory(
     categoryId: EntityId | string,
+    options: { publishedOnly?: boolean } = {},
   ): Promise<PostTagCount[]> {
-    const result = await this.db.execute<PostTagCount>(sql`
-      select unnest(tags) as name, count(*)::int
-      from posts
-      where category_id = ${parseEntityId(categoryId)}
-      group by name
-      order by count desc, name asc
-    `)
-    return result.rows.map((row) => ({
+    const filters: SQL[] = [eq(posts.categoryId, parseEntityId(categoryId))]
+    if (options.publishedOnly) filters.push(eq(posts.isPublished, true))
+    const tagAlias = sql<string>`tag`
+    const rows = await this.db
+      .select({
+        name: sql<string>`unnest(${posts.tags})`.as('tag'),
+        count: sql<number>`count(*)::int`,
+      })
+      .from(posts)
+      .where(and(...filters))
+      .groupBy(tagAlias)
+      .orderBy(sql`count(*) desc`, sql`tag asc`)
+    return rows.map((row) => ({
       name: row.name,
       count: Number(row.count ?? 0),
     }))
@@ -342,12 +382,18 @@ export class PostRepository extends BaseRepository {
 
   async findByTag(
     tag: string,
-    options: { includeCategory?: boolean; metaOnly?: boolean } = {},
+    options: {
+      includeCategory?: boolean
+      metaOnly?: boolean
+      publishedOnly?: boolean
+    } = {},
   ): Promise<PostRow[]> {
+    const filters: SQL[] = [sql`${posts.tags} @> array[${tag}]::text[]`]
+    if (options.publishedOnly) filters.push(eq(posts.isPublished, true))
     const rows = await this.db
       .select(options.metaOnly ? postMetaColumns : postColumns)
       .from(posts)
-      .where(sql`${posts.tags} @> array[${tag}]::text[]`)
+      .where(and(...filters))
       .orderBy(pinAtDescNullsLast, desc(posts.createdAt))
 
     const mapped = rows.map(mapBase)
@@ -554,6 +600,60 @@ export class PostRepository extends BaseRepository {
       .orderBy(asc(posts.createdAt))
       .limit(1)
     return row?.createdAt ?? null
+  }
+
+  async findOnThisDay(
+    month: number,
+    day: number,
+    beforeYear: number,
+    limit: number,
+  ): Promise<
+    Array<{
+      id: EntityId
+      title: string | null
+      text: string | null
+      createdAt: Date
+    }>
+  > {
+    const rows = await this.db
+      .select({
+        id: posts.id,
+        title: posts.title,
+        text: posts.text,
+        createdAt: posts.createdAt,
+      })
+      .from(posts)
+      .where(
+        and(
+          eq(posts.isPublished, true),
+          sql`extract(month from ${posts.createdAt})::int = ${month}`,
+          sql`extract(day from ${posts.createdAt})::int = ${day}`,
+          sql`extract(year from ${posts.createdAt})::int < ${beforeYear}`,
+        ),
+      )
+      .orderBy(desc(posts.createdAt))
+      .limit(limit)
+    return rows.map((row) => ({
+      id: toEntityId(row.id) as EntityId,
+      title: row.title,
+      text: row.text,
+      createdAt: row.createdAt,
+    }))
+  }
+
+  async countPublishedByDay(
+    since: Date,
+  ): Promise<Array<{ date: string; count: number }>> {
+    const day = sql<string>`to_char(${posts.createdAt}, 'YYYY-MM-DD')`
+    const rows = await this.db
+      .select({ date: day, count: sql<number>`count(*)::int` })
+      .from(posts)
+      .where(and(eq(posts.isPublished, true), gte(posts.createdAt, since)))
+      .groupBy(day)
+    return rows.map((row) => ({
+      date: row.date,
+      count: Number(row.count ?? 0),
+    }))
   }
 
   async findTopByReadCount(limit: number): Promise<PostRow[]> {

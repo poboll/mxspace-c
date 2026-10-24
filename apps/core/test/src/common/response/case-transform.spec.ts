@@ -60,6 +60,15 @@ describe('transformResponseCase', () => {
     })
   })
 
+  it('emits the response root verbatim when explicitly bypassed', () => {
+    const input = {
+      minimumClientVersion: '1.7.3',
+      limits: { presencePayloadBytes: 32_768 },
+    }
+
+    expect(transformResponseCase(input, ['$'])).toBe(input)
+  })
+
   it('matches bypass paths through array segments', () => {
     expect(
       transformResponseCase(
@@ -85,6 +94,19 @@ describe('transformResponseCase', () => {
       io_error: 'c',
       user_id_list: 'd',
     })
+  })
+
+  it('preserves mixed-case id record keys under bypass (activity presence)', () => {
+    const readerId = 'wKpLmN3qRsTuVwXyZ0'
+    const input = {
+      presence: { owner_123: { readerId } },
+      readers: { [readerId]: { emailVerified: true } },
+    }
+    expect(transformResponseCase(input, ['presence', 'readers'])).toEqual(input)
+    expect(transformResponseCase(input)).not.toHaveProperty([
+      'readers',
+      readerId,
+    ])
   })
 
   it('only bypasses an exact path, not its prefixes', () => {

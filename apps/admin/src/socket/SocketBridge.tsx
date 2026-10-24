@@ -1,13 +1,14 @@
+import type { WsClient, WsClientState } from '@mx-space/ws-client'
+import { createWsClient } from '@mx-space/ws-client'
 import type { QueryClient } from '@tanstack/react-query'
 import { useQueryClient } from '@tanstack/react-query'
 import { useEffect } from 'react'
 import type { NavigateFunction } from 'react-router'
 import { useNavigate } from 'react-router'
-import type { Socket } from 'socket.io-client'
-import { io } from 'socket.io-client'
 import { toast } from 'sonner'
 
 import type { AITask } from '~/api/tasks'
+import { AITaskStatus } from '~/api/tasks'
 import {
   applyTaskPatch,
   prependTaskToList,
@@ -18,38 +19,24 @@ import {
 import { GATEWAY_URL } from '../constants/env'
 import { translate } from '../i18n/translate'
 import { adminQueryKeys } from '../query/keys'
+import { emitDraftUpdate } from './draft-update-signal'
 import type {
+  DraftUpdatePayload,
   NotificationTypes,
   TaskUpdatePayload,
   TaskUpdateStreamFrame,
 } from './types'
 import { EventTypes } from './types'
 
-interface GatewayMessage {
-  code?: number
-  data?: unknown
-  type: EventTypes
-}
+let currentAdminSocket: WsClient | null = null
+const socketChangeListeners = new Set<(socket: WsClient | null) => void>()
 
-// Module-level singleton for hooks (step-22) — allows
-// useTaskSubscription to emit ai-task:subscribe/unsubscribe without
-// passing the socket through React context. Set by SocketBridge on mount
-// and cleared on unmount.
-let currentAdminSocket: Socket | null = null
-const socketChangeListeners = new Set<(socket: Socket | null) => void>()
-
-export function getAdminSocket(): Socket | null {
+export function getAdminSocket(): WsClient | null {
   return currentAdminSocket
 }
 
-/**
- * Subscribe to changes in the underlying socket instance (created /
- * destroyed when SocketBridge mounts / unmounts). Callback fires once
- * synchronously with the current value, then on every change. Returns
- * an unsubscribe function.
- */
 export function subscribeAdminSocket(
-  listener: (socket: Socket | null) => void,
+  listener: (socket: WsClient | null) => void,
 ): () => void {
   socketChangeListeners.add(listener)
   listener(currentAdminSocket)
@@ -58,9 +45,15 @@ export function subscribeAdminSocket(
   }
 }
 
-function setAdminSocket(socket: Socket | null) {
+function setAdminSocket(socket: WsClient | null) {
   currentAdminSocket = socket
   for (const listener of socketChangeListeners) listener(socket)
+}
+
+function toWsOrigin(url: string): string {
+  if (url.startsWith('https://')) return `wss://${url.slice('https://'.length)}`
+  if (url.startsWith('http://')) return `ws://${url.slice('http://'.length)}`
+  return url
 }
 
 export function SocketBridge() {
@@ -70,26 +63,19 @@ export function SocketBridge() {
   useEffect(() => {
     if (!GATEWAY_URL) return
 
-    let disposed = false
-    let reconnectTimer: null | number = null
-    const socket = io(`${GATEWAY_URL}/admin`, {
-      forceNew: true,
-      timeout: 10000,
-      transports: ['websocket'],
-      withCredentials: true,
+    const client = createWsClient({
+      url: `${toWsOrigin(GATEWAY_URL)}/ws/admin`,
     })
-    setAdminSocket(socket)
+    setAdminSocket(client)
 
-    const handleEvent = (type: EventTypes, payload: unknown, code?: number) => {
+    const handleEvent = (type: EventTypes, payload: unknown) => {
       window.dispatchEvent(
-        new CustomEvent('mx-admin:socket-event', {
-          detail: { code, payload, type },
-        }),
+        new CustomEvent('mx-admin:socket-event', { detail: { payload, type } }),
       )
 
       switch (type) {
         case EventTypes.AUTH_FAILED: {
-          socket.close()
+          client.close()
           break
         }
         case EventTypes.GATEWAY_DISCONNECT: {
@@ -148,15 +134,6 @@ export function SocketBridge() {
           })
           break
         }
-        case EventTypes.PAGE_UPDATED: {
-          void queryClient.invalidateQueries({
-            queryKey: adminQueryKeys.pages.root,
-          })
-          void queryClient.invalidateQueries({
-            queryKey: adminQueryKeys.aggregate.root,
-          })
-          break
-        }
         case EventTypes.SAY_CREATE:
         case EventTypes.SAY_UPDATE:
         case EventTypes.SAY_DELETE: {
@@ -179,76 +156,51 @@ export function SocketBridge() {
           handleTaskUpdate(queryClient, payload)
           break
         }
+        case EventTypes.DRAFT_UPDATE: {
+          if (isDraftUpdatePayload(payload)) emitDraftUpdate(payload)
+          break
+        }
         default: {
           if (import.meta.env.DEV) {
             // eslint-disable-next-line no-console -- dev-only fallthrough trace
-            console.debug('[socket]', type, payload, code)
+            console.debug('[socket]', type, payload)
           }
         }
       }
     }
 
-    socket.on('message', (message: string | GatewayMessage) => {
-      const parsed = parseGatewayMessage(message)
-      if (!parsed) return
+    const unsubscribeEvents = Object.values(EventTypes).map((type) =>
+      client.on(type, (payload) => handleEvent(type, payload)),
+    )
 
-      handleEvent(parsed.type, parsed.data, parsed.code)
-    })
+    let hasOpenedOnce = false
+    const unsubscribeState = client.on('$state', (state: WsClientState) => {
+      if (!import.meta.env.DEV) {
+        if (state === 'open') hasOpenedOnce = true
+        return
+      }
 
-    socket.on('connect_error', () => {
-      if (import.meta.env.DEV) toast.error(translate('socket.connectionError'))
-    })
-    socket.io.on('error', () => {
-      if (import.meta.env.DEV) toast.error(translate('socket.connectionError'))
-    })
-    socket.io.on('reconnect', () => {
-      if (import.meta.env.DEV) toast.info(translate('socket.reconnectSuccess'))
-    })
-    socket.io.on('reconnect_attempt', () => {
-      if (import.meta.env.DEV) toast.info(translate('socket.reconnecting'))
-    })
-    socket.io.on('reconnect_failed', () => {
-      if (import.meta.env.DEV) toast.info(translate('socket.reconnectFailed'))
-    })
-    socket.on('disconnect', () => {
-      if (disposed || reconnectTimer) return
-      reconnectTimer = reconnectUntilConnected(socket, () => disposed)
+      if (state === 'reconnecting') {
+        toast.info(
+          translate(
+            hasOpenedOnce ? 'socket.reconnecting' : 'socket.connectionError',
+          ),
+        )
+      } else if (state === 'open') {
+        if (hasOpenedOnce) toast.info(translate('socket.reconnectSuccess'))
+        hasOpenedOnce = true
+      }
     })
 
     return () => {
-      disposed = true
-      if (reconnectTimer) window.clearInterval(reconnectTimer)
       setAdminSocket(null)
-      socket.disconnect()
-      socket.off('message')
-      socket.offAny()
+      for (const off of unsubscribeEvents) off()
+      unsubscribeState()
+      client.close()
     }
   }, [navigate, queryClient])
 
   return null
-}
-
-function parseGatewayMessage(message: string | GatewayMessage) {
-  if (typeof message !== 'string') return message
-
-  try {
-    return JSON.parse(message) as GatewayMessage
-  } catch {
-    return null
-  }
-}
-
-function reconnectUntilConnected(socket: Socket, isDisposed: () => boolean) {
-  const timer = window.setInterval(() => {
-    if (isDisposed() || socket.connected) {
-      window.clearInterval(timer)
-      return
-    }
-
-    socket.io.connect()
-  }, 2000)
-
-  return timer
 }
 
 function notifyNewComment(payload: unknown, navigate: NavigateFunction) {
@@ -401,6 +353,8 @@ export function handleTaskUpdate(queryClient: QueryClient, payload: unknown) {
   if (!isTaskUpdatePayload(payload)) return
 
   const { id, groupId, phase, patch, log, stream, scope } = payload
+  const taskPatch =
+    phase === 'result' ? { ...patch, result: payload.result } : patch
 
   if (phase === 'stream') {
     window.dispatchEvent(
@@ -451,28 +405,41 @@ export function handleTaskUpdate(queryClient: QueryClient, payload: unknown) {
   } else {
     queryClient.setQueryData<AITask | undefined>(
       adminQueryKeys.tasks.taskDetail(id),
-      (prev) => (prev ? applyTaskPatch(prev, patch, log) : prev),
+      (prev) => (prev ? applyTaskPatch(prev, taskPatch, log) : prev),
     )
     if (
       (phase === 'started' || phase === 'status' || phase === 'result') &&
-      patch
+      taskPatch
     ) {
       for (const [key, data] of queryClient.getQueriesData({
         queryKey: adminQueryKeys.tasks.tasksRoot,
       })) {
         if (!data) continue
-        const next = upsertTaskInList(data, id, patch)
+        const next = upsertTaskInList(data, id, taskPatch)
         if (next !== data) queryClient.setQueryData(key, next)
       }
     }
   }
 
-  if (groupId && patch?.subTaskStats) {
-    const { subTaskStats } = patch
+  if (groupId && taskPatch?.subTaskStats) {
+    const { subTaskStats } = taskPatch
     queryClient.setQueryData<AITask | undefined>(
       adminQueryKeys.tasks.taskDetail(groupId),
       (prev) => (prev ? { ...prev, subTaskStats } : prev),
     )
+  }
+
+  // A finished AI task changes an article's coverage and cost, so the overview
+  // board would otherwise show stale figures until a manual refresh. Only
+  // active queries refetch, which is the open article plus its list page.
+  if (
+    scope === 'ai' &&
+    taskPatch?.status &&
+    isTerminalTaskStatus(taskPatch.status)
+  ) {
+    void queryClient.invalidateQueries({
+      queryKey: adminQueryKeys.ai.overviewRoot,
+    })
   }
 
   // Per spec 2 step-25 — keep the parent's child-task list cache live so
@@ -493,7 +460,7 @@ export function handleTaskUpdate(queryClient: QueryClient, payload: unknown) {
           return next
         }
         if (idx < 0) return prev
-        const merged = applyTaskPatch(prev[idx], patch, log)
+        const merged = applyTaskPatch(prev[idx], taskPatch, log)
         if (merged === prev[idx]) return prev
         const next = prev.slice()
         next[idx] = merged
@@ -501,6 +468,14 @@ export function handleTaskUpdate(queryClient: QueryClient, payload: unknown) {
       },
     )
   }
+}
+
+function isTerminalTaskStatus(status: AITask['status']): boolean {
+  return (
+    status === AITaskStatus.Completed ||
+    status === AITaskStatus.PartialFailed ||
+    status === AITaskStatus.Failed
+  )
 }
 
 // 'created' prepends would otherwise leak cross-scope rows into filter-keyed
@@ -533,4 +508,18 @@ function isTaskUpdatePayload(value: unknown): value is TaskUpdatePayload {
   if (!value || typeof value !== 'object') return false
   const v = value as Record<string, unknown>
   return typeof v.id === 'string' && typeof v.phase === 'string'
+}
+
+function isDraftUpdatePayload(value: unknown): value is DraftUpdatePayload {
+  if (!value || typeof value !== 'object') return false
+  const v = value as Record<string, unknown>
+  // Structural check only, matching `isTaskUpdatePayload`: the two fields the
+  // consumer actually reads are enough to reject a malformed frame, and
+  // enumerating `refType` would silently drop the event if the server ever
+  // adds a fourth ref type.
+  return (
+    typeof v.branchId === 'string' &&
+    typeof v.documentId === 'string' &&
+    typeof v.headRevisionId === 'string'
+  )
 }

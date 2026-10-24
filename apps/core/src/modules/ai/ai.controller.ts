@@ -1,21 +1,32 @@
 import type { Api, Model } from '@earendil-works/pi-ai'
-import { getModels } from '@earendil-works/pi-ai'
-import { Body, Get, Logger, Param, Post, Query } from '@nestjs/common'
+import { getBuiltinModels } from '@earendil-works/pi-ai/providers/all'
+import { listDecisionModels, requestDecision } from '@mx-space/ai/decision'
+import { AI_PROMPTS } from '@mx-space/ai/prompts'
+import {
+  createModelRuntime,
+  createRuntimeForModelList,
+  type IModelRuntime,
+  type ModelInfo,
+} from '@mx-space/ai/runtime'
+import { Body, Get, HttpCode, Logger, Param, Post, Query } from '@nestjs/common'
 
 import { ApiController } from '~/common/decorators/api-controller.decorator'
 import { Auth } from '~/common/decorators/auth.decorator'
 import { AppErrorCode, createAppException } from '~/common/errors'
 import { OK_DATA } from '~/common/response/envelope.types'
 
+import {
+  commentDecisionQuestions,
+  resolveCommentDecision,
+} from '../comment/comment-decision'
 import { ConfigsService } from '../configs/configs.service'
-import { AI_PROMPTS } from './ai.prompts'
-import { RegistryModelsQueryDto } from './ai.schema'
+import {
+  type RegistryModelsQueryDto,
+  RegistryModelsQuerySchema,
+} from './ai.schema'
 import { AiService } from './ai.service'
-import { AIProviderType } from './ai.types'
-import type { RegistryModelView } from './ai.views'
-import { AiViews } from './ai.views'
-import type { IModelRuntime, ModelInfo } from './runtime'
-import { createModelRuntime, createRuntimeForModelList } from './runtime'
+import { type AIProviderCapability, AIProviderType } from './ai.types'
+import { AiViews, type RegistryModelView } from './ai.views'
 
 const REGISTRY_CACHE_TTL_MS = 5 * 60 * 1000
 
@@ -30,6 +41,7 @@ interface FetchModelsDto {
   type?: AIProviderType
   apiKey?: string
   endpoint?: string
+  modelListUrl?: string
 }
 
 interface ProviderModelsResponse {
@@ -46,6 +58,7 @@ interface TestConnectionDto {
   apiKey?: string
   endpoint?: string
   model?: string
+  appendV1?: boolean
 }
 
 interface TestCommentReviewDto {
@@ -65,8 +78,16 @@ export class AiController {
 
   @Get('/models')
   @Auth()
-  async getAvailableModels(): Promise<ProviderModelsResponse[]> {
+  async getAvailableModels(
+    @Query('capability') capability?: AIProviderCapability,
+  ): Promise<ProviderModelsResponse[]> {
     const aiConfig = await this.configsService.get('ai')
+    const requestedCapability: AIProviderCapability =
+      capability === 'image' ||
+      capability === 'speech' ||
+      capability === 'decision'
+        ? capability
+        : 'text'
 
     if (!aiConfig.providers?.length) {
       return []
@@ -75,13 +96,31 @@ export class AiController {
     const results: ProviderModelsResponse[] = []
 
     for (const provider of aiConfig.providers) {
-      if (!provider.enabled || !provider.apiKey) {
+      if (
+        !provider.enabled ||
+        !provider.apiKey ||
+        !(requestedCapability === 'text'
+          ? (provider.capabilities?.text ?? true)
+          : provider.capabilities?.[requestedCapability])
+      ) {
         continue
       }
 
       try {
+        if (requestedCapability === 'decision') {
+          results.push({
+            providerId: provider.id,
+            providerName: provider.name,
+            providerType: provider.type,
+            models: await listDecisionModels(provider),
+          })
+          continue
+        }
         const runtime = createModelRuntime(provider)
-        const models = await this.fetchModelsFromRuntime(runtime)
+        const models = await this.fetchModelsFromRuntime(
+          runtime,
+          requestedCapability,
+        )
         results.push({
           providerId: provider.id,
           providerName: provider.name,
@@ -103,11 +142,13 @@ export class AiController {
   }
 
   @Post('/models/list')
+  @HttpCode(200)
   @Auth()
   async fetchModelsList(
     @Body() body: FetchModelsDto,
   ): Promise<{ models: ModelInfo[]; error?: string }> {
-    const { type, apiKey, endpoint } = await this.resolveModelListConfig(body)
+    const { type, apiKey, endpoint, modelListUrl } =
+      await this.resolveModelListConfig(body)
 
     if (!type) {
       throw createAppException(AppErrorCode.AI_NOT_ENABLED, {
@@ -122,7 +163,14 @@ export class AiController {
     }
 
     try {
-      const runtime = createRuntimeForModelList(type, apiKey, endpoint)
+      if (type === AIProviderType.TypeSafe)
+        return { models: await listDecisionModels({ apiKey, endpoint }) }
+      const runtime = createRuntimeForModelList(
+        type,
+        apiKey,
+        endpoint,
+        modelListUrl,
+      )
       const models = await this.fetchModelsFromRuntime(runtime)
       return { models }
     } catch (error: any) {
@@ -134,12 +182,14 @@ export class AiController {
   }
 
   @Post('/test')
+  @HttpCode(200)
   @Auth()
   async testProviderConnection(
     @Body() body: TestConnectionDto,
   ): Promise<{ ok: boolean }> {
     const { providerId } = body
-    const { type, apiKey, endpoint, model } = await this.resolveTestConfig(body)
+    const { type, apiKey, endpoint, model, appendV1 } =
+      await this.resolveTestConfig(body)
 
     if (!type) {
       throw createAppException(AppErrorCode.AI_NOT_ENABLED, {
@@ -160,12 +210,28 @@ export class AiController {
     }
 
     try {
+      if (type === AIProviderType.TypeSafe) {
+        await requestDecision(
+          { apiKey, endpoint, defaultModel: model },
+          'Hello',
+          {
+            language: {
+              type: 'choice',
+              instructions: 'Which language is this greeting?',
+              criteria: { english: 'English', other: 'Another language' },
+            },
+          },
+          AbortSignal.timeout(10000),
+        )
+        return OK_DATA
+      }
       const runtime = createModelRuntime({
         id: providerId || 'test',
         name: providerId || 'test',
         type,
         apiKey,
         endpoint,
+        appendV1,
         defaultModel: model,
         enabled: true,
       })
@@ -184,6 +250,7 @@ export class AiController {
   }
 
   @Post('/comment-review/test')
+  @HttpCode(200)
   @Auth()
   async testCommentReview(
     @Body() body: TestCommentReviewDto,
@@ -201,6 +268,25 @@ export class AiController {
       throw createAppException(AppErrorCode.AI_REVIEW_NOT_ENABLED)
     }
 
+    if (commentConfig.decisionReview) {
+      try {
+        const answers = await this.aiService.decide(
+          { text },
+          commentDecisionQuestions(commentConfig.aiReviewType || 'binary'),
+          AbortSignal.timeout(commentConfig.decisionTimeoutMs ?? 1000),
+        )
+        const decision = resolveCommentDecision(
+          answers,
+          commentConfig.decisionConfidence ?? 0.9,
+          commentConfig.aiReviewThreshold ?? 5,
+        )
+        if (decision !== 'pending')
+          return { isSpam: decision === 'rejected', reason: 'Decision model' }
+      } catch {
+        /* Unavailable decisions fall back to the configured language model. */
+      }
+    }
+
     try {
       const runtime = await this.aiService.getCommentReviewModel()
 
@@ -215,7 +301,7 @@ export class AiController {
         })
 
         const { score, hasSensitiveContent } = result.output
-        const isSpam = score >= threshold || hasSensitiveContent === true
+        const isSpam = score > threshold || hasSensitiveContent === true
 
         let reason: string | undefined
         if (hasSensitiveContent) {
@@ -253,7 +339,8 @@ export class AiController {
 
   private async resolveModelListConfig(body: FetchModelsDto) {
     const needsLookup =
-      !!body.providerId && (!body.apiKey || !body.type || !body.endpoint)
+      !!body.providerId &&
+      (!body.apiKey || !body.type || !body.endpoint || !body.modelListUrl)
     const storedProvider = needsLookup
       ? await this.configsService.getAiProviderById(body.providerId)
       : undefined
@@ -263,13 +350,18 @@ export class AiController {
       type: body.type ?? storedProvider?.type,
       apiKey: body.apiKey || storedProvider?.apiKey,
       endpoint: body.endpoint ?? storedProvider?.endpoint,
+      modelListUrl: body.modelListUrl ?? storedProvider?.modelListUrl,
     }
   }
 
   private async resolveTestConfig(body: TestConnectionDto) {
     const needsLookup =
       !!body.providerId &&
-      (!body.apiKey || !body.type || !body.endpoint || !body.model)
+      (!body.apiKey ||
+        !body.type ||
+        !body.endpoint ||
+        !body.model ||
+        body.appendV1 === undefined)
     const storedProvider = needsLookup
       ? await this.configsService.getAiProviderById(body.providerId)
       : undefined
@@ -279,6 +371,7 @@ export class AiController {
       apiKey: body.apiKey || storedProvider?.apiKey,
       endpoint: body.endpoint ?? storedProvider?.endpoint,
       model: body.model ?? storedProvider?.defaultModel,
+      appendV1: body.appendV1 ?? storedProvider?.appendV1,
     }
   }
 
@@ -297,6 +390,12 @@ export class AiController {
     }
 
     if (!provider.enabled) {
+      throw createAppException(AppErrorCode.AI_PROVIDER_DISABLED, {
+        providerId,
+      })
+    }
+
+    if (!(provider.capabilities?.text ?? true)) {
       throw createAppException(AppErrorCode.AI_PROVIDER_DISABLED, {
         providerId,
       })
@@ -331,7 +430,7 @@ export class AiController {
   @Get('/registry/models')
   @Auth()
   async getRegistryModels(
-    @Query() query: RegistryModelsQueryDto,
+    @Query({ schema: RegistryModelsQuerySchema }) query: RegistryModelsQueryDto,
   ): Promise<RegistryModelView[]> {
     const { providerId } = query
     const now = Date.now()
@@ -379,7 +478,7 @@ export class AiController {
   private loadRegistryModels(providerId: string): RegistryModelView[] {
     let models: Model<Api>[]
     try {
-      models = getModels(providerId as never) as Model<Api>[]
+      models = getBuiltinModels(providerId as never) as Model<Api>[]
     } catch {
       return []
     }
@@ -401,10 +500,11 @@ export class AiController {
 
   private async fetchModelsFromRuntime(
     runtime: IModelRuntime,
+    capability: AIProviderCapability = 'text',
   ): Promise<ModelInfo[]> {
     if (!runtime.listModels) {
       return []
     }
-    return runtime.listModels()
+    return runtime.listModels(capability)
   }
 }

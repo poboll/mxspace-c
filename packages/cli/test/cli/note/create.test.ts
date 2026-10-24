@@ -1,6 +1,7 @@
-import { NodeContext } from '@effect/platform-node'
+import { NodeServices } from '@effect/platform-node'
 import { describe, expect, it, vi } from '@effect/vitest'
 import { Effect, Layer, Option } from 'effect'
+import { handler } from '../../helper/handler'
 
 import { Api } from '../../../src/services/Api'
 import { Auth, type AuthService } from '../../../src/services/Auth'
@@ -109,14 +110,14 @@ const makeLayer = (http: ReturnType<typeof testHttpLayer>) => {
     Renderer.Default,
     Resolver.Default.pipe(Layer.provide(apiLayer)),
     Lexical.Default,
-    NodeContext.layer,
+    NodeServices.layer,
   )
 }
 
 describe('note create command', () => {
   it('defaults title to 无题 when omitted', async () => {
     const http = testHttpLayer({
-      'POST https://blog.example.com/api/v2/notes': {
+      'POST https://blog.example.com/api/v2/drafts': {
         status: 200,
         body: { id: 'n1' },
       },
@@ -125,14 +126,16 @@ describe('note create command', () => {
       .spyOn(process.stdout, 'write')
       .mockImplementation(() => true)
     try {
-      const program = create.handler({
+      const program = handler(create)({
         ...baseEmpty,
         content: some('<p>hi</p>'),
         format: some('lexical'),
       })
       await Effect.runPromise(Effect.provide(program, makeLayer(http)))
-      const body = http.recorder.calls[0]?.body as Record<string, unknown>
-      expect(body.title).toBe('无题')
+      const body = http.recorder.calls[0]?.body as {
+        data: Record<string, unknown>
+      }
+      expect(body.data.title).toBe('无题')
     } finally {
       spy.mockRestore()
     }
@@ -140,7 +143,7 @@ describe('note create command', () => {
 
   it('parses coords "lat,lng" into payload.coordinates', async () => {
     const http = testHttpLayer({
-      'POST https://blog.example.com/api/v2/notes': {
+      'POST https://blog.example.com/api/v2/drafts': {
         status: 200,
         body: { id: 'n1' },
       },
@@ -149,15 +152,20 @@ describe('note create command', () => {
       .spyOn(process.stdout, 'write')
       .mockImplementation(() => true)
     try {
-      const program = create.handler({
+      const program = handler(create)({
         ...baseEmpty,
         content: some('<p>hi</p>'),
         format: some('lexical'),
         coords: some('30.5,114.3'),
       })
       await Effect.runPromise(Effect.provide(program, makeLayer(http)))
-      const body = http.recorder.calls[0]?.body as Record<string, unknown>
-      expect(body.coordinates).toEqual({ latitude: 30.5, longitude: 114.3 })
+      const body = http.recorder.calls[0]?.body as {
+        data: { typeSpecificData: Record<string, unknown> }
+      }
+      expect(body.data.typeSpecificData.coordinates).toEqual({
+        latitude: 30.5,
+        longitude: 114.3,
+      })
     } finally {
       spy.mockRestore()
     }
@@ -165,7 +173,7 @@ describe('note create command', () => {
 
   it('rejects invalid coords with ValidationFailed', async () => {
     const http = testHttpLayer({})
-    const program = create.handler({
+    const program = handler(create)({
       ...baseEmpty,
       content: some('<p>hi</p>'),
       format: some('lexical'),

@@ -10,6 +10,7 @@ describe('OptionController (e2e)', () => {
     controllers: [BaseOptionController],
     providers: [configProvider],
   })
+
   test('GET /config/form-schema', () => {
     return proxy.app
       .inject({
@@ -29,6 +30,16 @@ describe('OptionController (e2e)', () => {
         expect(
           typeof json.data.defaults === 'object' && json.data.defaults,
         ).toBeTruthy()
+        expect(
+          json.data.groups
+            .find((group: { key: string }) => group.key === 'ai')
+            ?.sections.map((section: { key: string }) => section.key),
+        ).toEqual(['ai'])
+        expect(json.data.defaults.ai).toMatchObject({
+          image_generation: { enable: false },
+          tts: { enable: false },
+          version: 2,
+        })
       })
   })
 })

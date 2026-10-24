@@ -12,14 +12,13 @@ import { MarkdownRender } from '~/ui/primitives/markdown-render'
 import { Scroll } from '~/ui/primitives/scroll'
 
 import type { ReleaseModalState } from '../types/dashboard'
-import { formatDateTime } from '../utils/dashboard'
 
 interface UpdateReleaseModalProps {
   release: ReleaseModalState
 }
 
 function UpdateReleaseModal(props: UpdateReleaseModalProps) {
-  const { t } = useI18n()
+  const { format, t } = useI18n()
   const releaseQuery = useQuery({
     queryFn: () => getReleaseDetails(props.release.repo, props.release.version),
     queryKey: adminQueryKeys.dashboard.releaseDetail({
@@ -31,7 +30,7 @@ function UpdateReleaseModal(props: UpdateReleaseModalProps) {
   const details = releaseQuery.data
 
   return (
-    <div className="flex max-h-[min(86vh,42rem)] w-full flex-col">
+    <div className="flex max-h-[min(86svh,42rem)] w-full flex-col">
       <ModalHeader
         title={props.release.title || t('dashboard.release.fallbackTitle')}
       />
@@ -53,7 +52,7 @@ function UpdateReleaseModal(props: UpdateReleaseModalProps) {
                   </Badge>
                   <span>
                     {t('dashboard.release.publishedAt', {
-                      date: formatDateTime(details.publishedAt || ''),
+                      date: format.dateTime(details.publishedAt),
                     })}
                   </span>
                 </div>
@@ -97,7 +96,7 @@ export function presentUpdateRelease(release: ReleaseModalState) {
     { release },
     {
       modalProps: {
-        className: 'max-h-[min(86vh,42rem)]',
+        className: 'max-h-[min(86svh,42rem)]',
         popupStyle: { width: 'min(92vw, 40rem)' },
       },
     },

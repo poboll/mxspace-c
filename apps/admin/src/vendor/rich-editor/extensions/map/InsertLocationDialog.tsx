@@ -32,6 +32,7 @@ import {
   refetchMerchantForCoords,
   searchPlaces,
 } from './geocode'
+import { loadMaplibre } from './map-worker'
 import type { MapNodePayload } from './MapNode'
 import { formatLatLon, parseLocationInput } from './parse-location'
 
@@ -205,7 +206,7 @@ function InsertLocationDialog(props: InsertLocationDialogProps) {
     let map: MapLibreMap | null = null
 
     void (async () => {
-      const maplibre = await import('maplibre-gl')
+      const maplibre = await loadMaplibre()
       if (cancelled || !container) return
       maplibreRef.current = maplibre
 
@@ -429,6 +430,12 @@ function InsertLocationDialog(props: InsertLocationDialogProps) {
           <TextInput
             label="Node title (optional)"
             onChange={setNodeTitle}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' && canSubmit) {
+                event.preventDefault()
+                onSubmit()
+              }
+            }}
             placeholder="e.g. Tokyo coffee crawl"
             value={nodeTitle}
           />
@@ -446,6 +453,12 @@ function InsertLocationDialog(props: InsertLocationDialogProps) {
               autoFocus
               label="Place title"
               onChange={(v) => updateActive({ title: v })}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' && canSubmit) {
+                  event.preventDefault()
+                  onSubmit()
+                }
+              }}
               placeholder="e.g. 上海博物馆"
               value={activePoi.title}
             />

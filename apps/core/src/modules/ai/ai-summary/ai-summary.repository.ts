@@ -20,6 +20,11 @@ const mapRow = (row: typeof aiSummaries.$inferSelect): AiSummaryRow => ({
   summary: row.summary,
   refId: toEntityId(row.refId) as EntityId,
   lang: row.lang,
+  isTranslation: row.isTranslation,
+  sourceSummaryId: row.sourceSummaryId
+    ? (toEntityId(row.sourceSummaryId) as EntityId)
+    : null,
+  sourceLang: row.sourceLang,
   createdAt: row.createdAt,
 })
 
@@ -134,6 +139,22 @@ export class AiSummaryRepository extends BaseRepository {
     }
   }
 
+  async findDistinctRefIds(
+    refIds?: Array<EntityId | string>,
+  ): Promise<EntityId[]> {
+    const where = refIds?.length
+      ? inArray(
+          aiSummaries.refId,
+          refIds.map((id) => parseEntityId(id)),
+        )
+      : undefined
+    const rows = await this.db
+      .selectDistinct({ refId: aiSummaries.refId })
+      .from(aiSummaries)
+      .where(where)
+    return rows.map((r) => toEntityId(r.refId) as EntityId)
+  }
+
   async groupedByRef(
     page = 1,
     size = 20,
@@ -185,6 +206,9 @@ export class AiSummaryRepository extends BaseRepository {
     hash: string
     summary: string
     lang?: string | null
+    isTranslation?: boolean
+    sourceSummaryId?: EntityId | string | null
+    sourceLang?: string | null
   }): Promise<AiSummaryRow> {
     const refBig = parseEntityId(input.refId)
     const lang = input.lang ?? null
@@ -199,7 +223,15 @@ export class AiSummaryRepository extends BaseRepository {
     if (existing) {
       const [row] = await this.db
         .update(aiSummaries)
-        .set({ hash: input.hash, summary: input.summary })
+        .set({
+          hash: input.hash,
+          summary: input.summary,
+          isTranslation: input.isTranslation ?? existing.isTranslation,
+          sourceSummaryId: input.sourceSummaryId
+            ? parseEntityId(input.sourceSummaryId)
+            : existing.sourceSummaryId,
+          sourceLang: input.sourceLang ?? existing.sourceLang,
+        })
         .where(eq(aiSummaries.id, existing.id))
         .returning()
       return mapRow(row)
@@ -213,9 +245,33 @@ export class AiSummaryRepository extends BaseRepository {
         hash: input.hash,
         summary: input.summary,
         lang,
+        isTranslation: input.isTranslation ?? false,
+        sourceSummaryId: input.sourceSummaryId
+          ? parseEntityId(input.sourceSummaryId)
+          : null,
+        sourceLang: input.sourceLang ?? null,
       })
       .returning()
     return mapRow(row)
+  }
+
+  async findBaseForRef(
+    refId: EntityId | string,
+    lang: string,
+  ): Promise<AiSummaryRow | null> {
+    const [row] = await this.db
+      .select()
+      .from(aiSummaries)
+      .where(
+        and(
+          eq(aiSummaries.refId, parseEntityId(refId)),
+          eq(aiSummaries.lang, lang),
+          eq(aiSummaries.isTranslation, false),
+        )!,
+      )
+      .orderBy(desc(aiSummaries.createdAt))
+      .limit(1)
+    return row ? mapRow(row) : null
   }
 
   async updateSummary(

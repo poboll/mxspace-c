@@ -1,14 +1,17 @@
 import { fauxAssistantMessage } from '@earendil-works/pi-ai'
+import { PiRuntimeAdapter } from '@mx-space/ai/runtime'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import { createAiGenerationMetricsMock } from '@/helper/ai-generation-metrics-mock'
 import { withFauxAi } from '@/helper/faux-ai.helper'
 import { createPgRepositoryMock, now } from '@/helper/pg-repository-mock'
 import { CollectionRefTypes } from '~/constants/db.constant'
 import { AIProviderType } from '~/modules/ai/ai.types'
 import type { AiStreamEvent } from '~/modules/ai/ai-inflight/ai-inflight.types'
+import { MultilangGenerationService } from '~/modules/ai/ai-multilang/ai-multilang.service'
+import { AiSummaryAdapter } from '~/modules/ai/ai-summary/ai-summary.adapter'
 import type { AiSummaryRepository } from '~/modules/ai/ai-summary/ai-summary.repository'
 import { AiSummaryService } from '~/modules/ai/ai-summary/ai-summary.service'
-import { PiRuntimeAdapter } from '~/modules/ai/runtime/pi-runtime.adapter'
 
 const PROVIDER = 'faux-summary'
 const MODEL_ID = 'faux-summary-model'
@@ -86,7 +89,7 @@ function createService(runtime: PiRuntimeAdapter) {
     }),
   }
   const taskProcessor = { registerHandler: vi.fn() }
-  const aiTaskService = { createSummaryTask: vi.fn() }
+  const generationMetrics = createAiGenerationMetricsMock()
 
   repository.findByHash.mockResolvedValue(null)
   repository.upsert.mockImplementation(async (input: any) => ({
@@ -106,19 +109,43 @@ function createService(runtime: PiRuntimeAdapter) {
     createdAt: now,
   })
 
-  const service = new AiSummaryService(
+  const eventEmitter = { emit: vi.fn() }
+  const entitlementService = {
+    isPremiumLocked: vi.fn(
+      async (input: {
+        post: { isPremium?: boolean | null }
+        isOwner: boolean
+        readerId?: string
+      }) => Boolean(input.post.isPremium) && !input.isOwner && !input.readerId,
+    ),
+  }
+  const adapter = new AiSummaryAdapter(
     repository as any,
     databaseService as any,
     configService as any,
     aiService as any,
+    eventEmitter as any,
+    entitlementService as any,
+  )
+  const multilang = new MultilangGenerationService(
     aiInFlightService as any,
+    generationMetrics as any,
+    configService as any,
+  )
+  const service = new AiSummaryService(
+    repository as any,
+    databaseService as any,
+    configService as any,
+    adapter,
+    multilang,
     taskProcessor as any,
-    aiTaskService as any,
+    generationMetrics as any,
   )
   return {
     service,
     repository,
     inflightEvents,
+    generationMetrics,
     get lastInflight() {
       return lastInflight
     },
@@ -151,7 +178,9 @@ describe('ai-summary faux e2e', () => {
   it('streams happy path with PUBLIC SSE envelope shape + cached-hydrate cleanup', async () => {
     const r = makeRuntime()
     torn.push(r.teardown)
-    const { service, inflightEvents } = createService(r.adapter)
+    const { service, generationMetrics, inflightEvents } = createService(
+      r.adapter,
+    )
 
     const onToken = vi.fn(async () => {})
     const out = await service.generateSummaryByOpenAI('post-1', 'en', onToken)
@@ -159,6 +188,13 @@ describe('ai-summary faux e2e', () => {
     expect(out).toBeDefined()
     // incrementTokens called exactly once
     expect(onToken).toHaveBeenCalledTimes(1)
+    expect(generationMetrics.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        refId: 'post-1',
+        resourceId: 'summary-1',
+        resourceType: 'summary',
+      }),
+    )
 
     const sse = renderSse(inflightEvents)
     // PUBLIC envelope assertions

@@ -1,14 +1,16 @@
 import { readFileSync } from 'node:fs'
-import https from 'node:https'
 import path from 'node:path'
 
 import { seconds } from '@nestjs/throttler'
-import type { AxiosRequestConfig } from 'axios'
-import { program } from 'commander'
+import { Option, program } from 'commander'
 import { load as yamlLoad } from 'js-yaml'
 import nodeMachineId from 'node-machine-id'
 
 import { isDebugMode, isDev } from './global/env.global'
+import {
+  parseRedisConnectionString,
+  resolveRedisConnectionStringEnv,
+} from './utils/redis-config.util'
 import { parseBooleanishValue } from './utils/tool.util'
 
 const { machineIdSync } = nodeMachineId
@@ -32,49 +34,7 @@ const {
 const ENV_JWT_SECRET = JWT_SECRET || JWTSECRET
 const ENCRYPT_KEY_FROM_ENV = MX_ENCRYPT_KEY || ENV_ENCRYPT_KEY
 const ENCRYPT_ENABLE_FROM_ENV = MX_ENCRYPT_ENABLE || ENV_ENCRYPT_ENABLE
-
-function parseRedisConnectionString(input: string) {
-  const raw = String(input).trim()
-  if (!raw) return null
-
-  const withProtocol =
-    raw.includes('://') || raw.startsWith('redis:') || raw.startsWith('rediss:')
-      ? raw
-      : `redis://${raw}`
-
-  const url = new URL(withProtocol)
-
-  // `redis:` / `rediss:`
-  if (url.protocol !== 'redis:' && url.protocol !== 'rediss:') {
-    throw new Error(`Invalid redis connection string protocol: ${url.protocol}`)
-  }
-
-  const host = url.hostname
-  const port = url.port ? Number(url.port) : undefined
-  const username = url.username ? decodeURIComponent(url.username) : undefined
-  const password = url.password ? decodeURIComponent(url.password) : undefined
-
-  const dbFromPath = url.pathname?.replace(/^\//, '')
-  const db =
-    dbFromPath && /^\d+$/.test(dbFromPath) ? Number(dbFromPath) : undefined
-
-  // Build a sanitized URL (no auth) for downstream clients.
-  const origin =
-    url.port && url.port.length > 0
-      ? `${url.protocol}//${url.hostname}:${url.port}`
-      : `${url.protocol}//${url.hostname}`
-  const sanitizedUrl = `${origin}${url.pathname || ''}${url.search || ''}`
-
-  return {
-    url: sanitizedUrl,
-    host,
-    port,
-    username,
-    password,
-    db,
-    tls: url.protocol === 'rediss:',
-  }
-}
+const REDIS_CONNECTION_STRING_FROM_ENV = resolveRedisConnectionStringEnv()
 
 function applyArgvEnvFallback(argv: Record<string, any>) {
   // Fallback rule:
@@ -122,14 +82,24 @@ const commander = program
   .option('--demo', 'enable demo mode')
 
   // redis
-  .option('--redis_connection_string <string>', 'redis connection string')
+  .addOption(
+    new Option(
+      '--redis_connection_string <string>',
+      'redis connection string',
+    ).default(REDIS_CONNECTION_STRING_FROM_ENV, '[configured]'),
+  )
   .option('--redis_host <string>', 'redis host')
   .option('--redis_port <number>', 'redis port')
   .option('--redis_password <string>', 'redis password')
   .option('--disable_cache', 'disable redis cache')
 
   // jwt
-  .option('--jwt_secret <string>', 'custom jwt secret', ENV_JWT_SECRET)
+  .addOption(
+    new Option('--jwt_secret <string>', 'custom jwt secret').default(
+      ENV_JWT_SECRET,
+      '[configured]',
+    ),
+  )
   .option('--jwt_expire <number>', 'custom jwt expire time(d)')
 
   // cluster
@@ -151,10 +121,11 @@ const commander = program
   )
 
   // security
-  .option(
-    '--encrypt_key <string>',
-    'custom encrypt key, default is machine-id',
-    ENCRYPT_KEY_FROM_ENV,
+  .addOption(
+    new Option(
+      '--encrypt_key <string>',
+      '64-character hexadecimal encryption key',
+    ).default(ENCRYPT_KEY_FROM_ENV, '[configured]'),
   )
   .option(
     '--encrypt_enable',
@@ -270,22 +241,13 @@ export const HTTP_CACHE = {
   enableCDNHeader:
     parseBooleanishValue(
       (argv.http_cache_enable_cdn_header ?? CDN_CACHE_HEADER) as unknown as
-        | string
-        | boolean
-        | undefined,
+        string | boolean | undefined,
     ) ?? true, // s-maxage
   enableForceCacheHeader:
     parseBooleanishValue(
       (argv.http_cache_enable_force_cache_header ??
         FORCE_CACHE_HEADER) as unknown as string | boolean | undefined,
     ) ?? false, // cache-control: max-age
-}
-
-export const AXIOS_CONFIG: AxiosRequestConfig = {
-  timeout: 10000,
-  ...(isDev && {
-    httpsAgent: new https.Agent({ rejectUnauthorized: false }),
-  }),
 }
 
 export const SECURITY = {
@@ -315,6 +277,11 @@ export const THROTTLE_OPTIONS = {
 }
 
 const ENCRYPT_KEY = argv.encrypt_key
+// shortcut: enable v2 writes only after all replicas have the compatible reader; remove after the compatibility release.
+export const SECRET_STORAGE_V2 =
+  process.env.MX_SECRET_STORAGE_V2 === '1' ||
+  (parseBooleanishValue(process.env.MX_SECRET_STORAGE_V2) ?? false)
+
 export const ENCRYPT = {
   key: ENCRYPT_KEY || machineIdSync(),
   enable:
@@ -323,10 +290,19 @@ export const ENCRYPT = {
   algorithm: argv.encrypt_algorithm || 'aes-256-ecb',
 }
 
-if (ENCRYPT.enable && (!ENCRYPT.key || ENCRYPT.key.length !== 64))
+if (ENCRYPT.enable && (!ENCRYPT_KEY || !/^[\da-f]{64}$/i.test(ENCRYPT_KEY)))
   throw new Error(
-    `Key encryption is enabled (MX_ENCRYPT_KEY or --encrypt_key), but the key length is not 64. Current length: ${ENCRYPT.key.length}`,
+    'Encryption requires an explicit 64-character hexadecimal MX_ENCRYPT_KEY or ENCRYPT_KEY',
   )
+
+if (
+  SECRET_STORAGE_V2 &&
+  (!ENCRYPT.enable || !SECURITY.jwtSecret || SECURITY.jwtSecret.length < 32)
+) {
+  throw new Error(
+    'MX_SECRET_STORAGE_V2 requires encryption and a JWT_SECRET of at least 32 characters',
+  )
+}
 
 export const TELEMETRY = {
   enable: !parseBooleanishValue(argv.disable_telemetry ?? MX_DISABLE_TELEMETRY),

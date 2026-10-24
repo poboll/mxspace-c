@@ -1,4 +1,10 @@
-import { forwardRef, Inject, Injectable } from '@nestjs/common'
+import {
+  BadRequestException,
+  forwardRef,
+  Inject,
+  Injectable,
+} from '@nestjs/common'
+import { isNotNil } from 'es-toolkit'
 import { debounce, omit } from 'es-toolkit/compat'
 
 import { AppErrorCode, createAppException } from '~/common/errors'
@@ -6,6 +12,8 @@ import { ArticleTypeEnum } from '~/constants/article.constant'
 import { BusinessEvents, EventScope } from '~/constants/business-event.constant'
 import { CollectionRefTypes } from '~/constants/db.constant'
 import { EventBusEvents } from '~/constants/event-bus.constant'
+import type { MarkdownToLexicalMigrationDescriptor } from '~/modules/content-migration/content-migration.schema'
+import { ContentMigrationCommitService } from '~/modules/content-migration/content-migration-commit.service'
 import { FileReferenceType } from '~/modules/file/file-reference.enum'
 import { FileReferenceService } from '~/modules/file/file-reference.service'
 import { EventManagerService } from '~/processors/helper/helper.event.service'
@@ -14,11 +22,10 @@ import { LexicalService } from '~/processors/helper/helper.lexical.service'
 import type { EntityId } from '~/shared/id/entity-id'
 import { ContentFormat } from '~/shared/types/content-format.type'
 import { isNoteSecret } from '~/utils/biz.util'
-import { isLexical } from '~/utils/content.util'
+import { contentIdentityChanged, isLexical } from '~/utils/content.util'
 import { scheduleManager } from '~/utils/schedule.util'
 import { normalizeSlug } from '~/utils/slug.util'
 import { getLessThanNow } from '~/utils/time.util'
-import { isDefined } from '~/utils/validator.util'
 
 import { AiSlugBackfillService } from '../ai/ai-writer/ai-slug-backfill.service'
 import { CommentService } from '../comment/comment.service'
@@ -45,6 +52,7 @@ export class NoteService {
     private readonly fileReferenceService: FileReferenceService,
     private readonly eventManager: EventManagerService,
     private readonly lexicalService: LexicalService,
+    private readonly contentMigrationCommitService: ContentMigrationCommitService,
     private readonly slugTrackerService: SlugTrackerService,
     private readonly aiSlugBackfillService: AiSlugBackfillService,
     private readonly enrichmentService: EnrichmentService,
@@ -72,12 +80,6 @@ export class NoteService {
       latitude: coordinates.latitude,
       longitude: coordinates.longitude,
     }
-  }
-
-  private normalizeMeta(meta: unknown) {
-    if (meta === undefined) return undefined
-    if (meta === null) return null
-    return meta as Record<string, unknown>
   }
 
   public checkNoteIsSecret(note: { publicAt?: Date | null }) {
@@ -166,6 +168,10 @@ export class NoteService {
     return this.noteRepository.findRecent(size, options)
   }
 
+  async findDistinctMoodsAndWeathers() {
+    return this.noteRepository.findDistinctMoodsAndWeathers()
+  }
+
   async listPaginated(
     page: number,
     size: number,
@@ -243,7 +249,7 @@ export class NoteService {
   }
 
   async getLatestNoteId() {
-    const note = await this.noteRepository.getLatestVisible()
+    const note = await this.noteRepository.getLatestVisibleId()
     if (!note) throw createAppException(AppErrorCode.NOT_FOUND)
     return { nid: note.nid, id: note.id }
   }
@@ -276,7 +282,6 @@ export class NoteService {
 
   public async create(document: NoteCreateDocument) {
     this.lexicalService.normalizeContentForStorage(document)
-    const { draftId } = document
     const normalizedSlug = this.normalizeSlug(document.slug)
     await this.ensureSlugAvailable(normalizedSlug)
     if (normalizedSlug) document.slug = normalizedSlug
@@ -288,7 +293,7 @@ export class NoteService {
       content: document.content,
       contentFormat: document.contentFormat ?? ContentFormat.Markdown,
       images: document.images as unknown[],
-      meta: this.normalizeMeta(document.meta) as Record<string, unknown> | null,
+      meta: document.meta,
       isPublished: document.isPublished,
       password: document.password,
       publicAt: document.publicAt,
@@ -309,15 +314,6 @@ export class NoteService {
       if (refreshed) note = refreshed
     }
 
-    if (draftId) {
-      await this.fileReferenceService.removeReferencesForDocument(
-        draftId,
-        FileReferenceType.Draft,
-      )
-      await this.draftService.linkToPublished(draftId, note.id)
-      await this.draftService.markAsPublished(draftId)
-    }
-
     scheduleManager.schedule(async () => {
       await this.fileReferenceService.activateReferences(
         note,
@@ -331,7 +327,11 @@ export class NoteService {
         this.eventManager.emit(
           BusinessEvents.NOTE_CREATE,
           { id: note.id },
-          { scope: EventScope.TO_SYSTEM_VISITOR },
+          {
+            scope: note.isPublished
+              ? EventScope.TO_SYSTEM_VISITOR
+              : EventScope.TO_SYSTEM,
+          },
         ),
         !normalizedSlug &&
           this.aiSlugBackfillService
@@ -355,13 +355,37 @@ export class NoteService {
 
   public async updateById(
     id: string,
-    data: Partial<NoteModel> & { draftId?: string },
+    data: Partial<NoteModel> & {
+      migration?: MarkdownToLexicalMigrationDescriptor
+      migrationBranchId?: string
+    },
   ) {
     this.lexicalService.normalizeContentForStorage(data)
     const oldDoc = await this.findById(id)
     if (!oldDoc) throw createAppException(AppErrorCode.NO_CONTENT_MODIFIABLE)
 
-    const { draftId } = data
+    const { migration, migrationBranchId } = data
+    const isMarkdownToLexical =
+      oldDoc.contentFormat === ContentFormat.Markdown &&
+      data.contentFormat === ContentFormat.Lexical
+    if (
+      oldDoc.contentFormat === ContentFormat.Lexical &&
+      data.contentFormat === ContentFormat.Markdown
+    ) {
+      throw new BadRequestException(
+        'Published Lexical content cannot be downgraded to Markdown',
+      )
+    }
+    if (isMarkdownToLexical && !migration) {
+      throw new BadRequestException(
+        'Markdown-to-Lexical writes require a migration descriptor',
+      )
+    }
+    if (migration && !isMarkdownToLexical) {
+      throw new BadRequestException(
+        'Migration descriptor is only valid for Markdown-to-Lexical writes',
+      )
+    }
     const hasSlugInput = Object.prototype.hasOwnProperty.call(data, 'slug')
     const normalizedSlug = hasSlugInput
       ? this.normalizeSlug(data.slug ?? undefined)
@@ -371,28 +395,23 @@ export class NoteService {
     }
 
     const hasFieldChanged = (
-      ['title', 'text', 'mood', 'weather', 'meta', 'topicId', 'slug'] as const
+      ['mood', 'weather', 'meta', 'topicId', 'slug'] as const
     ).some((key) => {
       if (key === 'slug' && hasSlugInput) return normalizedSlug !== oldDoc.slug
-      return isDefined(data[key]) && data[key] !== oldDoc[key]
+      return isNotNil(data[key]) && data[key] !== oldDoc[key]
     })
-    const hasContentChanged = ['title', 'text'].some((key) =>
-      isDefined(data[key as keyof NoteModel]),
-    )
+    const hasContentChanged = contentIdentityChanged(oldDoc, data)
 
     const patch = omit(data, [...NOTE_PROTECTED_KEYS, 'slug'] as const)
     const userSuppliedCreatedAt = data.createdAt ?? (data as any).created
-    const updated = await this.noteRepository.update(id, {
+    const repositoryPatch = {
       title: patch.title,
       slug: hasSlugInput ? normalizedSlug : undefined,
       text: patch.text,
       content: patch.content,
       contentFormat: patch.contentFormat,
       images: patch.images as unknown[] | undefined,
-      meta:
-        patch.meta !== undefined
-          ? (this.normalizeMeta(patch.meta) as Record<string, unknown> | null)
-          : undefined,
+      meta: patch.meta,
       isPublished: patch.isPublished,
       password: patch.password,
       publicAt: patch.publicAt,
@@ -406,7 +425,35 @@ export class NoteService {
         ? getLessThanNow(userSuppliedCreatedAt)
         : undefined,
       modifiedAt: hasContentChanged || hasFieldChanged ? new Date() : undefined,
-    })
+    }
+    let updated
+    if (migration) {
+      if (!data.content || data.text === undefined) {
+        throw new BadRequestException(
+          'Lexical migration requires content and text',
+        )
+      }
+      await this.contentMigrationCommitService.commitMarkdownToLexical({
+        refType: DraftRefType.Note,
+        refId: id,
+        descriptor: migration,
+        branchId: migrationBranchId,
+        patch: repositoryPatch,
+        source: {
+          title: repositoryPatch.title ?? oldDoc.title,
+          text: data.text,
+          content: data.content,
+          contentFormat: ContentFormat.Lexical,
+          meta:
+            repositoryPatch.meta === undefined
+              ? oldDoc.meta
+              : repositoryPatch.meta,
+        },
+      })
+      updated = await this.noteRepository.findById(id)
+    } else {
+      updated = await this.noteRepository.update(id, repositoryPatch)
+    }
     if (!updated) throw createAppException(AppErrorCode.NO_CONTENT_MODIFIABLE)
 
     await this.trackSeoPathChanges(
@@ -417,8 +464,6 @@ export class NoteService {
       },
       id,
     )
-
-    if (draftId) await this.draftService.markAsPublished(draftId)
 
     scheduleManager.schedule(async () => {
       await this.fileReferenceService.updateReferencesForDocument(
@@ -443,17 +488,26 @@ export class NoteService {
 
     this.enrichmentService.scheduleDocPrefetch(updated)
 
-    await this.broadcastNoteUpdateEvent(updated)
+    await this.broadcastNoteUpdateEvent(updated, oldDoc.isPublished)
     return updated
   }
 
   private broadcastNoteUpdateEvent = debounce(
-    async (updated: NoteRow) => {
+    async (updated: NoteRow, wasPublished: boolean) => {
       if (!updated) return
       this.eventManager.emit(
-        BusinessEvents.NOTE_UPDATE,
+        wasPublished === updated.isPublished
+          ? BusinessEvents.NOTE_UPDATE
+          : updated.isPublished
+            ? BusinessEvents.NOTE_REPUBLISH
+            : BusinessEvents.NOTE_UNPUBLISH,
         { id: updated.id },
-        { scope: EventScope.TO_SYSTEM_VISITOR },
+        {
+          scope:
+            wasPublished || updated.isPublished
+              ? EventScope.TO_SYSTEM_VISITOR
+              : EventScope.TO_SYSTEM,
+        },
       )
     },
     1000,

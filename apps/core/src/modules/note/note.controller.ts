@@ -1,19 +1,8 @@
-import {
-  Body,
-  Delete,
-  Get,
-  Param,
-  Patch,
-  Post,
-  Put,
-  Query,
-} from '@nestjs/common'
+import { Body, Delete, Get, Param, Patch, Query } from '@nestjs/common'
 
 import { ApiController } from '~/common/decorators/api-controller.decorator'
 import { Auth } from '~/common/decorators/auth.decorator'
-import { HTTPDecorators } from '~/common/decorators/http.decorator'
-import type { IpRecord } from '~/common/decorators/ip.decorator'
-import { IpLocation } from '~/common/decorators/ip.decorator'
+import { IpLocation, type IpRecord } from '~/common/decorators/ip.decorator'
 import { Lang } from '~/common/decorators/lang.decorator'
 import { HasAdminAccess } from '~/common/decorators/role.decorator'
 import { AppErrorCode, createAppException } from '~/common/errors'
@@ -35,24 +24,32 @@ import {
   type EntryRule,
   TranslationService,
 } from '~/processors/helper/helper.translation.service'
-import { EntityIdDto } from '~/shared/dto/id.dto'
+import { type EntityIdDto, EntityIdSchema } from '~/shared/dto/id.dto'
 import { truncateAtBoundary } from '~/utils/text-summary.util'
 
 import { DEFAULT_SUMMARY_LANG } from '../ai/ai.constants'
 import { AiInsightsService } from '../ai/ai-insights/ai-insights.service'
 import { parseLanguageCode } from '../ai/ai-language.util'
 import { AiSummaryService } from '../ai/ai-summary/ai-summary.service'
+import { AiTtsQueryService } from '../ai/ai-tts/ai-tts-query.service'
 import { EnrichmentService } from '../enrichment/enrichment.service'
 import {
-  ListQueryDto,
-  NidType,
-  NoteDto,
-  NotePasswordQueryDto,
-  NoteQueryDto,
-  NoteSlugDateParamsDto,
-  NoteTopicPagerDto,
-  PartialNoteDto,
-  SetNotePublishStatusDto,
+  type ListQueryDto,
+  ListQuerySchema,
+  type NidType,
+  NidTypeSchema,
+  type NotePasswordQueryDto,
+  NotePasswordQuerySchema,
+  type NoteQueryDto,
+  NoteQuerySchema,
+  type NoteSlugDateParamsDto,
+  NoteSlugDateParamsSchema,
+  type NoteTopicPagerDto,
+  NoteTopicPagerSchema,
+  type PartialNoteDto,
+  PartialNoteSchema,
+  type SetNotePublishStatusDto,
+  SetNotePublishStatusSchema,
 } from './note.schema'
 import { NoteService } from './note.service'
 import type { NoteModel } from './note.types'
@@ -84,6 +81,7 @@ export class NoteController {
     private readonly translationService: TranslationService,
     private readonly aiSummaryService: AiSummaryService,
     private readonly aiInsightsService: AiInsightsService,
+    private readonly aiTtsQueryService: AiTtsQueryService,
     private readonly lexicalService: LexicalService,
     private readonly enrichmentService: EnrichmentService,
     private readonly translationEntryService: TranslationEntryService,
@@ -99,6 +97,43 @@ export class NoteController {
       content: note.content,
       modifiedAt: note.modifiedAt,
       createdAt: note.createdAt,
+    }
+  }
+
+  private toAdjacentNavNote(
+    note: NoteModel | null | undefined,
+  ): Pick<
+    NoteModel,
+    'id' | 'nid' | 'title' | 'slug' | 'createdAt' | 'isPublished'
+  > | null {
+    if (!note) return null
+    return {
+      id: note.id,
+      nid: note.nid,
+      title: note.title,
+      slug: note.slug,
+      createdAt: note.createdAt,
+      isPublished: note.isPublished,
+    }
+  }
+
+  private async applyCachedAdjacentTitles(
+    notes: Array<NoteModel | null | undefined>,
+    lang?: string,
+  ): Promise<void> {
+    if (!lang) return
+    const ids = notes
+      .filter((n): n is NoteModel => Boolean(n?.id))
+      .map((n) => String(n.id))
+    if (!ids.length) return
+
+    const titleMap = await this.translationService.getCachedTitles(ids, lang)
+    if (!titleMap.size) return
+
+    for (const note of notes) {
+      if (!note?.id) continue
+      const title = titleMap.get(String(note.id))
+      if (title) note.title = title
     }
   }
 
@@ -199,17 +234,26 @@ export class NoteController {
     applyArticleTranslationInPlace(current, translationResult)
 
     const insightsLang = parseLanguageCode(lang)
-    const [hasInsightsInLocale, summaryDoc] = await Promise.all([
+    const [hasInsightsInLocale, summaryDoc, ttsMeta] = await Promise.all([
       this.aiInsightsService
         .hasInsightsInLang(current.id!, insightsLang)
         .catch(() => false),
       this.aiSummaryService.getSummaryForPublicMeta(current.id!, insightsLang),
+      this.aiTtsQueryService
+        .getMetaForArticle(current.id!, insightsLang, current.modifiedAt)
+        .catch(() => ({ available: false as const })),
     ])
+
+    // A future-dated secret note has its text blanked for anonymous readers, so
+    // narration of it is exactly what the secret withholds.
+    const narrationVisible =
+      isAuthenticated || !this.noteService.checkNoteIsSecret(current)
 
     const metaBuilder = new NoteMetaBuilder()
       .view('detail')
       .interaction({ isLiked: liked })
       .insights({ hasInLocale: hasInsightsInLocale })
+      .tts(narrationVisible ? ttsMeta : { available: false })
 
     if (summaryDoc) {
       metaBuilder.summary({
@@ -256,14 +300,6 @@ export class NoteController {
       }),
     ])
 
-    if (!isAuthenticated) {
-      for (const adj of [prev, next]) {
-        if (!adj) continue
-        adj.location = null
-        adj.coordinates = null
-      }
-    }
-
     const translationMap = new Map([
       [
         String(current.id),
@@ -277,49 +313,10 @@ export class NoteController {
     ])
 
     if (lang) {
-      const adjacents = [prev, next].filter(Boolean) as NoteModel[]
-      if (adjacents.length > 0) {
-        const adjResults = await this.translationService.translateArticleList({
-          articles: adjacents.map((n) => this.toArticleTranslationInput(n)),
-          targetLang: lang,
-          translationFields: [
-            'title',
-            'text',
-            'content',
-            'contentFormat',
-            'translationMeta',
-            'sourceLang',
-            'availableTranslations',
-          ],
-        })
-        for (const adj of adjacents) {
-          const adjResult = adjResults.get(String(adj.id))
-          if (adjResult) {
-            applyArticleTranslationInPlace(adj, adjResult as any, {
-              fields: ['title', 'text', 'content', 'contentFormat'],
-            })
-            if (adjResult.isTranslated) {
-              translationMap.set(String(adj.id), {
-                article: buildArticleTranslationMeta(
-                  adjResult as any,
-                  lang,
-                ) as ArticleTranslation,
-              })
-            }
-          }
-        }
-      }
+      await this.applyCachedAdjacentTitles([prev, next], lang)
 
-      const entryMaps = await this.batchEntryTranslations(lang, [
-        current,
-        prev,
-        next,
-      ])
+      const entryMaps = await this.batchEntryTranslations(lang, [current])
       applyTranslationEntriesInPlace(current, entryMaps, NOTE_ENTRY_RULES)
-      if (prev)
-        applyTranslationEntriesInPlace(prev, entryMaps, NOTE_ENTRY_RULES)
-      if (next)
-        applyTranslationEntriesInPlace(next, entryMaps, NOTE_ENTRY_RULES)
     }
 
     metaBuilder.translation(translationMap)
@@ -331,8 +328,8 @@ export class NoteController {
     return withMeta(
       {
         ...noteData,
-        next: next ?? null,
-        prev: prev ?? null,
+        next: this.toAdjacentNavNote(next),
+        prev: this.toAdjacentNavNote(prev),
       },
       metaBuilder.build(),
     )
@@ -341,7 +338,7 @@ export class NoteController {
   @Get('/')
   async getNotes(
     @HasAdminAccess() isAuthenticated: boolean,
-    @Query() query: NoteQueryDto,
+    @Query({ schema: NoteQuerySchema }) query: NoteQueryDto,
     @Lang() lang?: string,
   ) {
     const { size, page, sortBy, sortOrder, year, withSummary } = query
@@ -349,12 +346,7 @@ export class NoteController {
     const result = await this.noteService.listPaginated(page, size, {
       visibleOnly: !isAuthenticated,
       sortBy: sortBy as
-        | 'createdAt'
-        | 'modifiedAt'
-        | 'title'
-        | 'mood'
-        | 'weather'
-        | undefined,
+        'createdAt' | 'modifiedAt' | 'title' | 'mood' | 'weather' | undefined,
       sortOrder: sortOrder === 'asc' ? 1 : -1,
       year,
       // Bodies are deleted from the response below when withSummary — skip
@@ -455,7 +447,7 @@ export class NoteController {
 
   @Get(':id')
   async getOneNote(
-    @Param() params: EntityIdDto,
+    @Param({ schema: EntityIdSchema }) params: EntityIdDto,
     @HasAdminAccess() isAuthenticated: boolean,
   ) {
     const { id } = params
@@ -483,9 +475,9 @@ export class NoteController {
 
   @Get('/:year/:month/:day/:slug')
   async getNoteByDateAndSlug(
-    @Param() params: NoteSlugDateParamsDto,
+    @Param({ schema: NoteSlugDateParamsSchema }) params: NoteSlugDateParamsDto,
     @HasAdminAccess() isAuthenticated: boolean,
-    @Query() query: NotePasswordQueryDto,
+    @Query({ schema: NotePasswordQuerySchema }) query: NotePasswordQueryDto,
     @IpLocation() { ip }: IpRecord,
     @Lang() lang?: string,
   ) {
@@ -513,8 +505,8 @@ export class NoteController {
 
   @Get('/list/:id')
   async getNoteList(
-    @Query() query: ListQueryDto,
-    @Param() params: EntityIdDto,
+    @Query({ schema: ListQuerySchema }) query: ListQueryDto,
+    @Param({ schema: EntityIdSchema }) params: EntityIdDto,
     @HasAdminAccess() isAuthenticated: boolean,
     @Lang() lang?: string,
   ) {
@@ -583,23 +575,12 @@ export class NoteController {
     return withMeta(listData, metaBuilder.build())
   }
 
-  @Post('/')
-  @HTTPDecorators.Idempotence()
-  @Auth()
-  create(@Body() body: NoteDto) {
-    return this.noteService.create(body as unknown as NoteModel)
-  }
-
-  @Put('/:id')
-  @Auth()
-  async modify(@Body() body: NoteDto, @Param() params: EntityIdDto) {
-    await this.noteService.updateById(params.id, body as unknown as NoteModel)
-    return this.noteService.findOneByIdOrNid(params.id)
-  }
-
   @Patch('/:id')
   @Auth()
-  async patch(@Body() body: PartialNoteDto, @Param() params: EntityIdDto) {
+  async patch(
+    @Body({ schema: PartialNoteSchema }) body: PartialNoteDto,
+    @Param({ schema: EntityIdSchema }) params: EntityIdDto,
+  ) {
     await this.noteService.updateById(
       params.id,
       body as unknown as Partial<NoteModel>,
@@ -608,7 +589,7 @@ export class NoteController {
 
   @Delete(':id')
   @Auth()
-  async deleteNote(@Param() params: EntityIdDto) {
+  async deleteNote(@Param({ schema: EntityIdSchema }) params: EntityIdDto) {
     await this.noteService.deleteById(params.id)
   }
 
@@ -627,10 +608,6 @@ export class NoteController {
     if (!isAuthenticated) {
       latest.location = null
       latest.coordinates = null
-      if (next) {
-        next.location = null
-        next.coordinates = null
-      }
     }
     latest.text = this.noteService.checkNoteIsSecret(latest) ? '' : latest.text
 
@@ -646,31 +623,22 @@ export class NoteController {
 
     applyArticleTranslationInPlace(latest, translationResult)
 
-    let nextTranslationResult: Awaited<
-      ReturnType<TranslationService['translateArticle']>
-    > | null = null
-
-    if (lang && next) {
-      nextTranslationResult = await this.translationService.translateArticle({
-        articleId: String(next.id),
-        targetLang: lang,
-        allowHidden: Boolean(isAuthenticated),
-        originalData: { title: next.title, text: next.text ?? '' },
-      })
-      applyArticleTranslationInPlace(next, nextTranslationResult)
-    }
-
     if (lang) {
-      const entryMaps = await this.batchEntryTranslations(lang, [latest, next])
+      await this.applyCachedAdjacentTitles([next], lang)
+
+      const entryMaps = await this.batchEntryTranslations(lang, [latest])
       applyTranslationEntriesInPlace(latest, entryMaps, NOTE_ENTRY_RULES)
-      if (next)
-        applyTranslationEntriesInPlace(next, entryMaps, NOTE_ENTRY_RULES)
     }
 
     const insightsLang = parseLanguageCode(lang)
-    const hasInsightsInLocale = await this.aiInsightsService
-      .hasInsightsInLang(latest.id!, insightsLang)
-      .catch(() => false)
+    const [hasInsightsInLocale, ttsMeta] = await Promise.all([
+      this.aiInsightsService
+        .hasInsightsInLang(latest.id!, insightsLang)
+        .catch(() => false),
+      this.aiTtsQueryService
+        .getMetaForArticle(latest.id!, insightsLang, latest.modifiedAt)
+        .catch(() => ({ available: false as const })),
+    ])
 
     const { enrichments, ...latestData } =
       await this.enrichmentService.attachEnrichments(latest)
@@ -678,6 +646,7 @@ export class NoteController {
     const metaBuilder = new NoteMetaBuilder()
       .view('detail')
       .insights({ hasInLocale: hasInsightsInLocale })
+      .tts(ttsMeta)
       .enrichments(enrichments as Record<string, EnrichmentEntry>)
 
     const translationMap = new Map([
@@ -691,20 +660,12 @@ export class NoteController {
         },
       ],
     ])
-    if (nextTranslationResult) {
-      translationMap.set(String(next!.id), {
-        article: buildArticleTranslationMeta(
-          nextTranslationResult,
-          lang,
-        ) as ArticleTranslation,
-      })
-    }
     metaBuilder.translation(translationMap)
 
     return withMeta(
       {
         ...latestData,
-        next: next ?? null,
+        next: this.toAdjacentNavNote(next),
       },
       metaBuilder.build(),
     )
@@ -712,9 +673,9 @@ export class NoteController {
 
   @Get('/nid/:nid')
   async getNoteByNid(
-    @Param() params: NidType,
+    @Param({ schema: NidTypeSchema }) params: NidType,
     @HasAdminAccess() isAuthenticated: boolean,
-    @Query() query: NotePasswordQueryDto,
+    @Query({ schema: NotePasswordQuerySchema }) query: NotePasswordQueryDto,
     @IpLocation() { ip }: IpRecord,
     @Lang() lang?: string,
   ) {
@@ -739,8 +700,8 @@ export class NoteController {
 
   @Get('/topics/:id')
   async getNotesByTopic(
-    @Param() params: EntityIdDto,
-    @Query() query: NoteTopicPagerDto,
+    @Param({ schema: EntityIdSchema }) params: EntityIdDto,
+    @Query({ schema: NoteTopicPagerSchema }) query: NoteTopicPagerDto,
     @HasAdminAccess() isAuthenticated: boolean,
     @Lang() lang?: string,
   ) {
@@ -804,7 +765,7 @@ export class NoteController {
 
   @Get('/topics/:id/recent-update')
   async getTopicRecentUpdate(
-    @Param() params: EntityIdDto,
+    @Param({ schema: EntityIdSchema }) params: EntityIdDto,
     @HasAdminAccess() isAuthenticated: boolean,
   ) {
     const ts = await this.noteService.getTopicRecentUpdate(
@@ -817,8 +778,8 @@ export class NoteController {
   @Patch('/:id/publish')
   @Auth()
   async setPublishStatus(
-    @Param() params: EntityIdDto,
-    @Body() body: SetNotePublishStatusDto,
+    @Param({ schema: EntityIdSchema }) params: EntityIdDto,
+    @Body({ schema: SetNotePublishStatusSchema }) body: SetNotePublishStatusDto,
   ) {
     await this.noteService.updateById(params.id, {
       isPublished: body.isPublished,

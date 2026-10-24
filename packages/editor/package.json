@@ -1,6 +1,6 @@
 {
   "name": "@mx-space/editor",
-  "version": "0.1.0",
+  "version": "0.4.0",
   "type": "module",
   "description": "Mx-space business editor contracts and projection utilities built on Lexical",
   "license": "MIT",
@@ -40,6 +40,18 @@
       "./package.json": "./package.json"
     }
   },
+  "bump": {
+    "before": [
+      "git pull --rebase",
+      "pnpm i",
+      "npm run build"
+    ],
+    "after": [
+      "npm publish --access=public"
+    ],
+    "tag": false,
+    "commit_message": "chore(release): bump @mx-space/editor to v${NEW_VERSION}"
+  },
   "scripts": {
     "build": "tsdown",
     "clean": "rm -rf dist",
@@ -48,14 +60,16 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@haklex/rich-headless": "0.27.0",
-    "@haklex/rich-litexml": "0.27.0",
-    "@lexical/headless": "^0.45.0",
-    "lexical": "^0.45.0"
+    "@haklex/rich-headless": "0.54.3",
+    "@haklex/rich-litexml": "0.54.3",
+    "@lexical/headless": "^0.52.0",
+    "@lexical/markdown": "^0.52.0",
+    "@noble/hashes": "2.4.0",
+    "lexical": "^0.52.0"
   },
   "devDependencies": {
-    "tsdown": "0.22.2",
+    "tsdown": "0.23.0",
     "typescript": "6.0.3",
-    "vitest": "4.1.8"
+    "vitest": "5.0.5"
   }
 }

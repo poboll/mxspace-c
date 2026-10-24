@@ -1,4 +1,773 @@
-# [13.11.1](https://github.com/mx-space/core/compare/v13.11.0...v13.11.1) (2026-06-19)
+## [15.1.0](https://github.com/mx-space/core/compare/v15.0.1...v15.1.0) (2026-10-23)
+
+### Features
+
+* **admin:** guide initial setup through account, site, AI and ready steps ([a9988f2](https://github.com/mx-space/core/commit/a9988f2a3))
+
+### Bug Fixes
+
+* **backup:** restore encrypted backups during onboarding ([a8099ce](https://github.com/mx-space/core/commit/a8099ce88c37f76238deb73b290328658af7787e))
+* **admin:** resume onboarding reliably and retain saved account and site settings ([9930478](https://github.com/mx-space/core/commit/993047805))
+
+## [15.0.1](https://github.com/mx-space/core/compare/v15.0.0...v15.0.1) (2026-10-22)
+
+### Bug Fixes
+
+* **admin,core:** stop sending and tolerate empty image accent ([#2854](https://github.com/mx-space/core/pull/2854)) ([6404db9](https://github.com/mx-space/core/commit/6404db976accc9004ec17a1bdb38637287c7a5d3))
+* **auth:** keep owner API keys usable beyond default quota ([eac0330](https://github.com/mx-space/core/commit/eac0330d1c29e261cc5a7b4907dcd68b483b2469))
+
+# [15.0.0](https://github.com/mx-space/core/compare/v14.16.0...v15.0.0) (2026-10-22)
+
+
+### Features
+
+* require Node.js 26 ([e9d43f1](https://github.com/mx-space/core/commit/e9d43f146fbcb729dfb8081fd21484b6f4ba6adf))
+
+
+### BREAKING CHANGES
+
+* mx-core now requires Node.js 26: the Docker image ships Node.js 26, Node < 26 is unsupported, and the published packages reject Node < 26 under `engine-strict`.
+
+## [14.16.0](https://github.com/mx-space/core/compare/v14.15.3...v14.16.0) (2026-10-19)
+
+
+### Features
+
+* **security:** protect stored credentials and encrypt full backups ([bf62622](https://github.com/mx-space/core/commit/bf62622f6b8bd47237eaabc7655904d1f4c0c93e))
+
+## [14.15.3](https://github.com/mx-space/core/compare/v14.15.2...v14.15.3) (2026-10-14)
+
+
+### Bug Fixes
+
+* **admin:** keep the image insert dialog within its width when file names are long ([f2011e3](https://github.com/mx-space/core/commit/f2011e339393b0c54c9b721b39fcb72d9eab439b))
+
+## [14.15.2](https://github.com/mx-space/core/compare/v14.15.1...v14.15.2) (2026-10-02)
+
+
+### Features
+
+* **publish:** remember AI resource choices per article ([4156d29](https://github.com/mx-space/core/commit/4156d296775380f6075499d74b3fde19ff43cb18))
+
+## [14.15.1](https://github.com/mx-space/core/compare/v14.15.0...v14.15.1) (2026-09-30)
+
+
+### Features
+
+* **publish:** choose per AI resource whether publishing waits for it ([fe1ffe4](https://github.com/mx-space/core/commit/fe1ffe4047b71af0cf5e590f36c4e8322eb1cc34))
+
+# [14.15.0](https://github.com/mx-space/core/compare/v14.14.5...v14.15.0) (2026-09-29)
+
+
+### Features
+
+* **admin:** review and edit images before they are inserted ([#2828](https://github.com/mx-space/core/issues/2828)) ([105d232](https://github.com/mx-space/core/commit/105d2326eb45220965cea7d9feb2dc13586bd299))
+
+## [14.14.5](https://github.com/mx-space/core/compare/v14.14.4...v14.14.5) (2026-09-27)
+
+
+### Bug Fixes
+
+* **aggregate:** translate category names on top and latest ([c8cb80b](https://github.com/mx-space/core/commit/c8cb80bc9a13c0ca0081ae5ea47a4458a147d82c))
+
+## [14.14.4](https://github.com/mx-space/core/compare/v14.14.3...v14.14.4) (2026-09-26)
+
+
+### Performance Improvements
+
+* **aggregate:** trim the dashboard payload to what the home renders ([da2fde9](https://github.com/mx-space/core/commit/da2fde916ed8704865c18c6940d8cee54e21bb44))
+
+## [14.14.3](https://github.com/mx-space/core/compare/v14.14.2...v14.14.3) (2026-09-26)
+
+
+### Features
+
+* **aggregate:** serve the dashboard home from one endpoint ([689dcd5](https://github.com/mx-space/core/commit/689dcd5a5953dfcd0c71af16a04de4134e4b1d4a))
+
+## [14.14.2](https://github.com/mx-space/core/compare/v14.14.1...v14.14.2) (2026-09-26)
+
+
+### Bug Fixes
+
+* **migration:** stop superseded branch versions from raising the waterline ([9d34f8c](https://github.com/mx-space/core/commit/9d34f8c7f764f3201301b8a0be19f44b3745e0b3))
+
+## [14.14.1](https://github.com/mx-space/core/compare/v14.14.0...v14.14.1) (2026-09-26)
+
+
+# [14.14.0](https://github.com/mx-space/core/compare/v14.13.0...v14.14.0) (2026-09-26)
+
+
+### Bug Fixes
+
+* **core:** exclude junk comments from public recent activity ([#2825](https://github.com/mx-space/core/issues/2825)) ([3432985](https://github.com/mx-space/core/commit/34329854fb6910442d5466cdb021be33f7527fe9))
+
+
+### Features
+
+* **ai:** add Jev decision model and two-stage comment moderation ([#2826](https://github.com/mx-space/core/issues/2826)) ([77225ab](https://github.com/mx-space/core/commit/77225ab723714cf1ea7693d8ccc1d5fe51c3f485))
+* **comment:** report who holds a pending submission ([0f1eb29](https://github.com/mx-space/core/commit/0f1eb2992b4a98aeab876ce61c8b2ce634916113))
+* **membership:** return category name in the sponsor archive ([edb896b](https://github.com/mx-space/core/commit/edb896b10b2488ce40c6ef1bab387c31994bb456))
+
+# [14.13.0](https://github.com/mx-space/core/compare/v14.12.4...v14.13.0) (2026-09-16)
+
+
+### Features
+
+* **admin:** drive write agent edits through virtual bash ([#2824](https://github.com/mx-space/core/issues/2824)) ([e34d5ec](https://github.com/mx-space/core/commit/e34d5ec834fe57fc52cf368ea26243f53fe676db))
+
+## [14.12.4](https://github.com/mx-space/core/compare/v14.12.3...v14.12.4) (2026-09-14)
+
+
+### Features
+
+* **membership:** add archive endpoint listing premium posts with reader entitlement ([f2fe855](https://github.com/mx-space/core/commit/f2fe855f9018ef837d76b773fe0bc799821390dc))
+
+## [14.12.3](https://github.com/mx-space/core/compare/v14.12.2...v14.12.3) (2026-09-14)
+
+
+### Features
+
+* **ai:** separate field translation model assignment ([55fb9a6](https://github.com/mx-space/core/commit/55fb9a604dd6ac2777260bb53e61fd3b7cbdb472))
+
+## [14.12.2](https://github.com/mx-space/core/compare/v14.12.1...v14.12.2) (2026-09-14)
+
+
+### Bug Fixes
+
+* **core:** map translation fields by positional keys ([59a4a2a](https://github.com/mx-space/core/commit/59a4a2a4555438fce351f6f97297b91a4fee0c73))
+
+
+### Features
+
+* **admin:** restyle Switch from lobe-ui and add FormSwitch ([12a3582](https://github.com/mx-space/core/commit/12a3582d835ab0f403802583d830df0e0cc70953))
+
+## [14.12.1](https://github.com/mx-space/core/compare/v14.12.0...v14.12.1) (2026-09-14)
+
+
+### Bug Fixes
+
+* **admin:** apply time selection in DateTimePicker ([c124118](https://github.com/mx-space/core/commit/c12411897deb6bda4fe3cd67892752691473ec16))
+* **admin:** expose post.tag and topic.description in translation entry key path filter ([5d06ba7](https://github.com/mx-space/core/commit/5d06ba7f2))
+
+# [14.12.0](https://github.com/mx-space/core/compare/v14.11.0...v14.12.0) (2026-09-14)
+
+
+### Bug Fixes
+
+* **core:** apply saved summary translations on post list ([#2821](https://github.com/mx-space/core/issues/2821)) ([#2823](https://github.com/mx-space/core/issues/2823)) ([e40a80b](https://github.com/mx-space/core/commit/e40a80b1f728cfa3c1dcbd38dcdec6b2fa0534be))
+* **core:** enrichment visibility via shared helper and guard empty cart lines ([9a775a7](https://github.com/mx-space/core/commit/9a775a71ec9d14df9120b1db99943b70fbb8a446))
+* **core:** harden paywall against webhook spoofing and content leaks ([32339df](https://github.com/mx-space/core/commit/32339dfa2e1581adf77d7ebf167a18e63775b8da))
+* **core:** resolve one-time product pricing for article purchase ([4334475](https://github.com/mx-space/core/commit/4334475198774b8e7c93c8399408009def5474a5))
+* **core:** validate article webhook ids and drop duplicate post repository provider ([2441314](https://github.com/mx-space/core/commit/2441314573aabd90e051735e81272c258d66d593))
+* validate refund payment id and zero-decimal article price display ([e78b14e](https://github.com/mx-space/core/commit/e78b14efca000a4af2f1e95237d8602a5ffc228f))
+
+
+### Features
+
+* **core:** article purchase checkout and webhook ([ec0261c](https://github.com/mx-space/core/commit/ec0261c96b5b1765313516387e518e1ec74f76bc))
+* **core:** article purchases table, config and availability ([774c13a](https://github.com/mx-space/core/commit/774c13a6c943c86a5f8fe1ebb7dcbb6e58972de6))
+* **core:** expose ai summary for locked premium posts ([034e35d](https://github.com/mx-space/core/commit/034e35d397f2087ab02e20e1aa0d5f5d522aadb4))
+* **core:** paywall meta with entitlement and purchase info ([3512a66](https://github.com/mx-space/core/commit/3512a66bc9076e2badce310cb22d70fc4c22eacc))
+* **core:** post entitlement with free window and article purchase ([5eb5810](https://github.com/mx-space/core/commit/5eb5810266a56ad353c57963db618f200471156f))
+
+# [14.11.0](https://github.com/mx-space/core/compare/v14.10.5...v14.11.0) (2026-09-13)
+
+
+### Features
+
+* **admin:** reset dashboard layout with unpublished changes and weekly rhythm ([ca8a7f2](https://github.com/mx-space/core/commit/ca8a7f29c63635334bc5638480328481a08d023a))
+
+## [14.10.5](https://github.com/mx-space/core/compare/v14.10.4...v14.10.5) (2026-09-13)
+
+
+### Bug Fixes
+
+* **ai-translation:** scope auto entry dedupe by lang so every target language gets dict entries ([150d5ad](https://github.com/mx-space/core/commit/150d5ad927f752015afdff78a682ce4f6d40f281))
+
+
+### Features
+
+* **author:** inline diff notes and live revision merge for mxs author ([22bc538](https://github.com/mx-space/core/commit/22bc53820127e742d2746367afe9ebb2a5b02aff))
+
+## [14.10.4](https://github.com/mx-space/core/compare/v14.10.3...v14.10.4) (2026-09-13)
+
+
+### Bug Fixes
+
+* **core:** type subscribe republish event filter ([3e73897](https://github.com/mx-space/core/commit/3e7389792ae7bd29d2e8b325a31bfa8199058935))
+
+## [14.10.3](https://github.com/mx-space/core/compare/v14.10.2...v14.10.3) (2026-09-13)
+
+
+### Bug Fixes
+
+* **core:** fan out draft-publish events to email, webhook, and WS ([0f190af](https://github.com/mx-space/core/commit/0f190af3bed4019f5fb534e6a8c2ec6cb3be304c))
+
+## [14.10.2](https://github.com/mx-space/core/compare/v14.10.1...v14.10.2) (2026-09-12)
+
+
+### Bug Fixes
+
+* **push:** send content notifications when drafts are published ([43446bf](https://github.com/mx-space/core/commit/43446bf1e73affb1ab32cf452bae47d20eb5cccd))
+
+
+### Features
+
+* **core:** broadcast draft head changes to admin clients ([2703448](https://github.com/mx-space/core/commit/2703448ec5fb8a6b9949d9fa11adf83a98f62580))
+
+## [14.10.1](https://github.com/mx-space/core/compare/v14.10.0...v14.10.1) (2026-09-12)
+
+
+### Bug Fixes
+
+* **core:** bound browser processes and persist enrichment retry cooldowns ([f0419d5](https://github.com/mx-space/core/commit/f0419d58c4508a016367c1a2b4ff9d778352e5aa))
+
+# [14.10.0](https://github.com/mx-space/core/compare/v14.9.1...v14.10.0) (2026-09-09)
+
+
+### Bug Fixes
+
+* **openapi:** fold zod 4.5 type-array unions into nullable/anyOf ([4babe26](https://github.com/mx-space/core/commit/4babe268e940043e8fcbf35ec19743bb35359d62))
+
+
+### Features
+
+* **admin:** preview and version agent-generated components ([6e9c14a](https://github.com/mx-space/core/commit/6e9c14abe935a2d203fdb3ad788452313308b7d7))
+* **draft:** share a draft revision through a public link ([f626b42](https://github.com/mx-space/core/commit/f626b4277b0f534034b78b5d8b2ec024154be6a3))
+
+
+### Performance Improvements
+
+* **core:** reduce search and aggregate query overhead ([29001ec](https://github.com/mx-space/core/commit/29001ec533d3c06b3339318ad875867455593bc5))
+
+## [14.9.1](https://github.com/mx-space/core/compare/v14.9.0...v14.9.1) (2026-09-02)
+
+
+### Bug Fixes
+
+* **auth:** reset review demo reader blocks ([864ab66](https://github.com/mx-space/core/commit/864ab664525e0022d43bc4a5de8f6e7acfe60920))
+
+# [14.9.0](https://github.com/mx-space/core/compare/v14.8.0...v14.9.0) (2026-09-02)
+
+
+### Features
+
+* **comment:** add report and block moderation flow ([24d53f0](https://github.com/mx-space/core/commit/24d53f0778da9ed018d6f7496bd3274c4d9ccee8))
+
+# [14.8.0](https://github.com/mx-space/core/compare/v14.7.0...v14.8.0) (2026-09-02)
+
+
+### Bug Fixes
+
+* **core:** mock listDistinctPostTags in note translation-entry spec ([eea2ecd](https://github.com/mx-space/core/commit/eea2ecddf9be634dbfc5058e8c4ea310b806e46b))
+
+
+### Features
+
+* **membership:** import sponsors from CSV alongside GitHub API ([2caa5ef](https://github.com/mx-space/core/commit/2caa5efe88650241b3f929779849a6b65767bffb))
+* **translation:** glossary-based tag translation + Lexical image caption translation ([#2816](https://github.com/mx-space/core/issues/2816)) ([e7104fd](https://github.com/mx-space/core/commit/e7104fd89df96c13efbbd4d3fb1751f61a37a394)), closes [#2815](https://github.com/mx-space/core/issues/2815)
+
+# [14.7.0](https://github.com/mx-space/core/compare/v14.6.1...v14.7.0) (2026-09-02)
+
+
+### Bug Fixes
+
+* **core:** bump modifiedAt only when content identity changes ([e61633f](https://github.com/mx-space/core/commit/e61633f9843c78bccf14126d84ba700d657eecdb))
+
+
+### Features
+
+* **membership:** import GitHub sponsors as manual memberships ([50c6f23](https://github.com/mx-space/core/commit/50c6f23c817b7a659903cb03d93720af3589aca5))
+
+## [14.6.1](https://github.com/mx-space/core/compare/v14.6.0...v14.6.1) (2026-08-31)
+
+# [14.6.0](https://github.com/mx-space/core/compare/v14.5.1...v14.6.0) (2026-08-30)
+
+
+### Bug Fixes
+
+* **core:** tease premium article bodies when lexical content is missing ([a3bb701](https://github.com/mx-space/core/commit/a3bb7016a89edc1b7bfeb6ed3f667da34278dffe))
+
+
+### Features
+
+* **core:** stream persistable article bodies as NDJSON ([c5bea4b](https://github.com/mx-space/core/commit/c5bea4bff0125787121c548d73f2165330815cb7))
+
+## [14.5.1](https://github.com/mx-space/core/compare/v14.5.0...v14.5.1) (2026-08-25)
+
+
+### Bug Fixes
+
+* **ai:** type tool-call arguments after isPlainObject guard ([9eaa226](https://github.com/mx-space/core/commit/9eaa2263015d2156e9573de1c9fd662b38568ab3))
+
+# [14.5.0](https://github.com/mx-space/core/compare/v14.4.1...v14.5.0) (2026-08-25)
+
+
+### Bug Fixes
+
+* **membership:** isolate Apple sandbox purchases ([6df3a88](https://github.com/mx-space/core/commit/6df3a88aaf15d97c4533064b32126c652028932f))
+* **tts:** retry Vertex empty-audio 200 responses ([41fc406](https://github.com/mx-space/core/commit/41fc4060599ba7b9e6c8ecfa8412999f2a5c211b))
+
+
+### Features
+
+* **ai:** serve premium insights to entitled readers ([a448c57](https://github.com/mx-space/core/commit/a448c576afe76bebab1a3ee91e6f146b4e8f4ff2))
+* **push:** write thinking notifications like homepage musings ([9bcf6f7](https://github.com/mx-space/core/commit/9bcf6f71d3f37c6f8af91586831754c14de6295a))
+* **write:** pre-generate selected AI resources before publish ([e229342](https://github.com/mx-space/core/commit/e229342d4a3edcc6589d9ae91f24d6fc32951804))
+
+## [14.4.1](https://github.com/mx-space/core/compare/v14.4.0...v14.4.1) (2026-08-25)
+
+
+### Bug Fixes
+
+* **push:** allow notifications without summaries ([3b912ea](https://github.com/mx-space/core/commit/3b912ea20c59f79c42d3ee47e8b3c31e89ec9a98))
+* update references from "MX Space" to "Mix Space" across the codebase ([d95d9c4](https://github.com/mx-space/core/commit/d95d9c48848b618af100438d91a25de20ea64680))
+* **webhooks:** migrate renamed event subscriptions ([66621d9](https://github.com/mx-space/core/commit/66621d94b5a71a064523a2f20c8aa768f1fd25ae))
+
+# [14.4.0](https://github.com/mx-space/core/compare/v14.3.1...v14.4.0) (2026-08-24)
+
+
+### Bug Fixes
+
+* **files:** restore the plugin-wide upload size limit ([e4593b0](https://github.com/mx-space/core/commit/e4593b0df4927a0bc631a2143715d161ce99191e))
+
+
+### Features
+
+* **files:** wire file attachment node through admin editor and reference guard ([ddfcc57](https://github.com/mx-space/core/commit/ddfcc57ed95700cd76ca2e86c9b067a0fc5e1c57))
+
+## [14.3.1](https://github.com/mx-space/core/compare/v14.3.0...v14.3.1) (2026-08-23)
+
+
+### Bug Fixes
+
+* **events:** emit visitor content events by visibility transition ([a9e0047](https://github.com/mx-space/core/commit/a9e0047a4d46391f01e8d2a5072441b42ab71b9e))
+
+# [14.3.0](https://github.com/mx-space/core/compare/v14.2.0...v14.3.0) (2026-08-22)
+
+
+### Bug Fixes
+
+* **files:** optimize orphan listing and TTS paths ([ddf130f](https://github.com/mx-space/core/commit/ddf130f58a29a39834b565044104bdf8e2862a44))
+
+
+### Features
+
+* **membership:** confirm Apple IAP subscriptions ([#2813](https://github.com/mx-space/core/issues/2813)) ([e7e838d](https://github.com/mx-space/core/commit/e7e838dec257cb6464b9d637d0cd488e06bc757e))
+
+# [14.2.0](https://github.com/mx-space/core/compare/v14.1.0...v14.2.0) (2026-08-17)
+
+
+### Bug Fixes
+
+* **activity:** keep presence avatars without trusting client readerId ([9e0e9ab](https://github.com/mx-space/core/commit/9e0e9aba2fa72a5147c53fd4b937b4a674ce9ccf))
+
+
+### Features
+
+* **push:** reader content and reply notification fan-out ([#2812](https://github.com/mx-space/core/issues/2812)) ([bdb7cd4](https://github.com/mx-space/core/commit/bdb7cd42629154f1ab206fb08c1b271dbe4bd306))
+
+# [14.1.0](https://github.com/mx-space/core/compare/v14.0.2...v14.1.0) (2026-08-16)
+
+
+### Features
+
+* **auth:** app review demo account for Apple sign-in review ([#2811](https://github.com/mx-space/core/issues/2811)) ([4221c20](https://github.com/mx-space/core/commit/4221c20952f385fea8f8058c7f02abd7cac1a90b))
+
+## [14.0.2](https://github.com/mx-space/core/compare/v14.0.1...v14.0.2) (2026-08-15)
+
+## [14.0.1](https://github.com/mx-space/core/compare/v14.0.0...v14.0.1) (2026-08-15)
+
+
+### Bug Fixes
+
+* **activity:** prevent private note data leakage ([d255b2e](https://github.com/mx-space/core/commit/d255b2e36b2712931a82c821ff0d164f0519e8f9))
+* **s3:** add sanitized transport diagnostics ([d2b2042](https://github.com/mx-space/core/commit/d2b204218be288809afa12f8ebc08b9a4443e6a2))
+* **s3:** avoid explicit content length in fetch uploads ([3b176de](https://github.com/mx-space/core/commit/3b176de7c7e756f8953d33f5922f46766b4dd288))
+
+# [14.0.0](https://github.com/mx-space/core/compare/v13.30.0...v14.0.0) (2026-08-15)
+
+
+### Bug Fixes
+
+* **gateway:** address codex review findings ([2a24c24](https://github.com/mx-space/core/commit/2a24c24fc3c7401de905dba99a2073d139a51553))
+* **gateway:** cap ws maxPayload and restore lost presence writes ([d672d13](https://github.com/mx-space/core/commit/d672d13f4fda6dfa6e17d8b71fbf86a8d17fca5e))
+* **gateway:** close room-cleanup check-then-act race with atomic Lua ([70d89d5](https://github.com/mx-space/core/commit/70d89d579dd88c42e9cc230fef5985d82d522630))
+* **gateway:** drop phantom presence on a connect/close race ([88d23e2](https://github.com/mx-space/core/commit/88d23e24879fe0d2d67bbd7bf601b26cd2483afc))
+* **gateway:** final review fixes ([c61beae](https://github.com/mx-space/core/commit/c61beae234fff91939b506e49b5228bfe013e325))
+* **gateway:** harden ws bus subscription and presence self-reconciliation ([b50829a](https://github.com/mx-space/core/commit/b50829a6bf5017aca4ed13cc534498a51b7deefe))
+* **gateway:** subscribe ws bus only after the redis client is ready ([1a5cbc7](https://github.com/mx-space/core/commit/1a5cbc7fc84c21afa65b71f456d1a92b1a6942b3))
+
+
+### Features
+
+* **auth:** add Apple sign-in support ([55030fb](https://github.com/mx-space/core/commit/55030fb5214ff938bc886a1be89b0984f1392161))
+* **gateway:** ws infrastructure (bus, presence, rooms, registry, envelope) ([4c969fd](https://github.com/mx-space/core/commit/4c969fd2462efb0f7d5d999528f973deb68e6121))
+
+# [13.30.0](https://github.com/mx-space/core/compare/v13.29.2...v13.30.0) (2026-08-14)
+
+
+### Features
+
+* **ai:** coordinate long-document translation ([76b0d2e](https://github.com/mx-space/core/commit/76b0d2e02c40ae5c5f75073c3c02c78e4814adcf))
+
+## [13.29.2](https://github.com/mx-space/core/compare/v13.29.1...v13.29.2) (2026-08-14)
+
+
+### Bug Fixes
+
+* **ai:** use native Vertex text protocol ([556bf64](https://github.com/mx-space/core/commit/556bf64242bcab7da6f26a0e090c32292440591b))
+
+## [13.29.1](https://github.com/mx-space/core/compare/v13.29.0...v13.29.1) (2026-08-14)
+
+
+### Bug Fixes
+
+* **ai:** stabilize session affinity across operations ([93e1bd0](https://github.com/mx-space/core/commit/93e1bd0f9ca6776a9aad9757a0ef5a0cf69c288a))
+* **redis:** accept REDIS_URL for TLS providers ([#2805](https://github.com/mx-space/core/issues/2805)) ([f05c0cc](https://github.com/mx-space/core/commit/f05c0cccb1ec1d79a5ed4d7b30b3f6dde4066ccb))
+
+# [13.29.0](https://github.com/mx-space/core/compare/v13.28.0...v13.29.0) (2026-08-11)
+
+
+### Bug Fixes
+
+* **membership:** accept every subscription webhook event and split the ambiguous error code ([9f1b6a4](https://github.com/mx-space/core/commit/9f1b6a4235f677d4e77f437e2f6eba34d5c2b246))
+
+
+### Features
+
+* **auth:** trust the yohaku:// scheme via the better-auth expo plugin ([ff52b84](https://github.com/mx-space/core/commit/ff52b84940107f7622aedfd595759d74608b4ab5))
+
+# [13.28.0](https://github.com/mx-space/core/compare/v13.27.0...v13.28.0) (2026-08-11)
+
+
+### Features
+
+* **space:** add TMDB search composer ([#2808](https://github.com/mx-space/core/issues/2808)) ([0051341](https://github.com/mx-space/core/commit/00513410c5dbbed1d6fcbdfc03b57e846d540632))
+
+# [13.27.0](https://github.com/mx-space/core/compare/v13.26.0...v13.27.0) (2026-08-10)
+
+
+### Bug Fixes
+
+* **category:** prevent unpublished post metadata disclosure ([#2801](https://github.com/mx-space/core/issues/2801)) ([2c8122f](https://github.com/mx-space/core/commit/2c8122f4a58ff821578eb9b923795a663c7ced65))
+* **core:** invalidate RSS caches after content changes ([#2802](https://github.com/mx-space/core/issues/2802)) ([0362e99](https://github.com/mx-space/core/commit/0362e99f3c24ca4d699d440a319c7d7e56ddfe9a))
+* **note:** allow clearing mood and weather ([#2800](https://github.com/mx-space/core/issues/2800)) ([a742ad8](https://github.com/mx-space/core/commit/a742ad8becac5f5816bde52a2a84a9b7247d1ab4))
+
+
+### Features
+
+* **ai:** multi-language + force regeneration in generate modal, and per-article AI overview board ([#2804](https://github.com/mx-space/core/issues/2804)) ([d8343e5](https://github.com/mx-space/core/commit/d8343e560a71eb126d1b20f7b0892077d8aa2f9b))
+* **ios:** redesign Space mobile workflows ([bec9d0a](https://github.com/mx-space/core/commit/bec9d0ab8fa220ee756f94a254c8b5ffd5318458))
+
+# [13.26.0](https://github.com/mx-space/core/compare/v13.25.3...v13.26.0) (2026-08-09)
+
+
+### Features
+
+* **ai:** add Google Vertex provider adapters ([#2794](https://github.com/mx-space/core/issues/2794)) ([2b39a81](https://github.com/mx-space/core/commit/2b39a815d02fd50b64ab5f3f48b2060d8ffb7985))
+
+## [13.25.3](https://github.com/mx-space/core/compare/v13.25.2...v13.25.3) (2026-08-09)
+
+
+### Bug Fixes
+
+* **migration:** restore monotonic journal timestamp for 0030_smooth_ultragirl ([dd74fe8](https://github.com/mx-space/core/commit/dd74fe8fdf6b185c3946fd704f175455e5deae87))
+* **migration:** stop the waterline backfill from skipping trailing migrations ([33d2a43](https://github.com/mx-space/core/commit/33d2a43dd727b9143169f17cc1034d4373bf68e8))
+
+## [13.25.2](https://github.com/mx-space/core/compare/v13.25.1...v13.25.2) (2026-08-08)
+
+
+### Bug Fixes
+
+* **ai-tts:** mark narration stale when translation is regenerated without article edit ([dbcbb21](https://github.com/mx-space/core/commit/dbcbb21d8357fcba52ea109645f65959623c7a80))
+
+
+### Performance Improvements
+
+* **core:** compile zod schemas ([6f40b9a](https://github.com/mx-space/core/commit/6f40b9a77e37902082d3c19079e6b20377de9fe5))
+
+## [13.25.1](https://github.com/mx-space/core/compare/v13.25.0...v13.25.1) (2026-08-08)
+
+
+### Bug Fixes
+
+* support Gemini TTS language steering ([3c6b476](https://github.com/mx-space/core/commit/3c6b476861fa44bfa8c8ef1c8b4174ce2f21fdbc))
+
+# [13.25.0](https://github.com/mx-space/core/compare/v13.24.0...v13.25.0) (2026-08-08)
+
+
+### Features
+
+* **ai:** implement AI generation metrics ledger ([e47f4b7](https://github.com/mx-space/core/commit/e47f4b7d2bc25c96cee3badb45f6c53782b19fe5))
+* enhance AI provider settings and test safety ([24530fe](https://github.com/mx-space/core/commit/24530fe47e17bc4e209ef27891cbb32ecf8c3309))
+
+# [13.24.0](https://github.com/mx-space/core/compare/v13.23.0...v13.24.0) (2026-08-08)
+
+
+### Features
+
+* **ai:** unify provider settings and TTS voice discovery ([cbb73df](https://github.com/mx-space/core/commit/cbb73dfe4142adbce24468cc65eb9c59c9fb4820))
+
+# [13.23.0](https://github.com/mx-space/core/compare/v13.22.0...v13.23.0) (2026-08-08)
+
+
+### Bug Fixes
+
+* **migration:** restore monotonic timestamp for 0028_ai_tts ([c3ff266](https://github.com/mx-space/core/commit/c3ff266ba0c0c3a4d73e6b282873f54a8ce6e54f))
+
+
+### Features
+
+* **ai-tts:** per-block AI narration for articles ([#2781](https://github.com/mx-space/core/issues/2781)) ([c4c4648](https://github.com/mx-space/core/commit/c4c4648bfccc34eba13bf02a11d2e843d78d900d))
+
+# [13.22.0](https://github.com/mx-space/core/compare/v13.21.0...v13.22.0) (2026-08-07)
+
+
+### Features
+
+* add Space iOS admin app and push delivery ([#2783](https://github.com/mx-space/core/issues/2783)) ([4afcdde](https://github.com/mx-space/core/commit/4afcdde3ed4d2880f622bc3dc918503f5e8e5158))
+
+# [13.21.0](https://github.com/mx-space/core/compare/v13.20.1...v13.21.0) (2026-08-06)
+
+
+### Features
+
+* **ai:** agent-conversation translation pipeline on message engine ([#2782](https://github.com/mx-space/core/issues/2782)) ([42f3e45](https://github.com/mx-space/core/commit/42f3e45335a2b650d2a974a929064cc452640a0e))
+* **ai:** generate covers from unsaved drafts ([b80610e](https://github.com/mx-space/core/commit/b80610ee773024bba30951eafbe3624128493056))
+* reconcile isolated file references ([65736d7](https://github.com/mx-space/core/commit/65736d713be4eaf92717002c7e2a29709563dad6))
+
+## [13.20.1](https://github.com/mx-space/core/compare/v13.20.0...v13.20.1) (2026-08-02)
+
+
+### Bug Fixes
+
+* **core:** preserve S3 config and serve nested uploads ([#2780](https://github.com/mx-space/core/issues/2780)) ([c4e669d](https://github.com/mx-space/core/commit/c4e669d53e4d4f44fdc02acdda72b53355273d62))
+
+
+### Performance Improvements
+
+* **core:** cut prod boot time via V8 compile cache and lazy imports ([2afacbb](https://github.com/mx-space/core/commit/2afacbbc0cf043c17e8b5e5110ff75c7d76a07a9))
+
+# [13.20.0](https://github.com/mx-space/core/compare/v13.19.0...v13.20.0) (2026-07-29)
+
+
+### Features
+
+* **content:** add progressive Markdown to Lexical migration ([#2777](https://github.com/mx-space/core/issues/2777)) ([7e6dd62](https://github.com/mx-space/core/commit/7e6dd6229be3501e03363d306332044c34941c84))
+
+# [13.19.0](https://github.com/mx-space/core/compare/v13.18.0...v13.19.0) (2026-07-29)
+
+
+### Features
+
+* **draft:** prevent conflicting autosave overwrites ([#2776](https://github.com/mx-space/core/issues/2776)) ([cd00d35](https://github.com/mx-space/core/commit/cd00d35c49066740d0de3c326c65b5505ae4a813))
+* **post:** add excludeAiWritten filter to the post list query ([d1702ec](https://github.com/mx-space/core/commit/d1702ec18cc816e67afe8dddb2c9cd82f12e9ec1))
+
+# [13.18.0](https://github.com/mx-space/core/compare/v13.17.1...v13.18.0) (2026-07-27)
+
+
+### Bug Fixes
+
+* **membership:** 404 for unknown readerId on manual grant/revoke ([ef800e9](https://github.com/mx-space/core/commit/ef800e94900a4bc89d4b273fd1d1fdaee5b0302e))
+
+
+### Features
+
+* **aggregate:** add GET /aggregate/desk endpoint for admin dashboard ([462dfc8](https://github.com/mx-space/core/commit/462dfc8d6532f8a4da08d3c6912566f2c1bc6fe3))
+* **aggregate:** add on-this-day and publish-heatmap endpoints ([7c605f1](https://github.com/mx-space/core/commit/7c605f1cb957c0bf9c5c141251ef18ee2463c6e1))
+
+
+### Performance Improvements
+
+* **build:** escape non-ASCII in bundle output to halve retained module source ([7180ae6](https://github.com/mx-space/core/commit/7180ae6f2d44d14c7524f6c5b2237aec09afc813))
+* **serverless:** lazy-load Babel toolchain off the boot path ([afca3df](https://github.com/mx-space/core/commit/afca3df1c4da1a41a67d38723deef7afa2a50603))
+
+## [13.17.1](https://github.com/mx-space/core/compare/v13.17.0...v13.17.1) (2026-07-26)
+
+# [13.17.0](https://github.com/mx-space/core/compare/v13.16.3...v13.17.0) (2026-07-26)
+
+
+### Bug Fixes
+
+* **ai:** live model list from endpoint and bump pi-ai to 0.82.0 ([a28bdf5](https://github.com/mx-space/core/commit/a28bdf5685e6cc3e5a0abf5d9f0aa879ebff4c9d))
+* **api:** return 200 for non-create POST action endpoints ([49a2572](https://github.com/mx-space/core/commit/49a257221b7c299b5201f56e7cd56efa6072498f))
+
+
+### Features
+
+* **ai-image:** AI 封面图生成链路（配置 / 运行时 / 任务队列 / 后台抽屉） ([#2775](https://github.com/mx-space/core/issues/2775)) ([f9d2b6c](https://github.com/mx-space/core/commit/f9d2b6c72679d923b3360872c073916257eedbe8))
+
+## [13.16.3](https://github.com/mx-space/core/compare/v13.16.2...v13.16.3) (2026-07-24)
+
+
+### Bug Fixes
+
+* **companion:** remove application icon host allowlist ([05853ef](https://github.com/mx-space/core/commit/05853efe5b82576c4228ce4d253bd020b7a81e1e))
+* **note:** slim adjacent next/prev and cache-title only ([6a3ab51](https://github.com/mx-space/core/commit/6a3ab51911bf3f1dbdc99a51247e2c888cd912cc))
+
+## [13.16.2](https://github.com/mx-space/core/compare/v13.16.1...v13.16.2) (2026-07-22)
+
+
+### Bug Fixes
+
+* **membership:** treat reader IDs as opaque strings, not Snowflake EntityId ([7c54268](https://github.com/mx-space/core/commit/7c5426801fac7cd374a7a7762400a94b15c0141b)), closes [#2774](https://github.com/mx-space/core/issues/2774)
+
+## [13.16.1](https://github.com/mx-space/core/compare/v13.16.0...v13.16.1) (2026-07-19)
+
+
+### Bug Fixes
+
+* **ai:** omit reasoning param for OpenRouter mandatory-reasoning models ([e899ef0](https://github.com/mx-space/core/commit/e899ef0899bbb70298380ed292382460004e5278))
+
+# [13.16.0](https://github.com/mx-space/core/compare/v13.15.1...v13.16.0) (2026-07-19)
+
+
+### Features
+
+* **companion:** publish moments to recently ([87ae308](https://github.com/mx-space/core/commit/87ae308e5f54199b4fa65cdc849e643b141d2254))
+
+## [13.15.1](https://github.com/mx-space/core/compare/v13.15.0...v13.15.1) (2026-07-19)
+
+
+### Bug Fixes
+
+* **membership:** guide payment provider setup ([c13093f](https://github.com/mx-space/core/commit/c13093f6893646e6486063d0d87c3ab9472ee1c6))
+
+# [13.15.0](https://github.com/mx-space/core/compare/v13.14.1...v13.15.0) (2026-07-19)
+
+
+### Bug Fixes
+
+* **ai:** curb zh→ja translationese in chunk translation prompt ([ef8d085](https://github.com/mx-space/core/commit/ef8d08503963a166487e93cb20bf3925238ac88c))
+* **ai:** stabilize translation editing ([1793aa3](https://github.com/mx-space/core/commit/1793aa3200f39321e5f707b274ca4e4d8829ce2a))
+
+
+### Features
+
+* paid articles via membership subscription ([#2769](https://github.com/mx-space/core/issues/2769)) ([04c082f](https://github.com/mx-space/core/commit/04c082f3faa8a97e44bd4ed3753abccb6d384f74))
+
+## [13.14.1](https://github.com/mx-space/core/compare/v13.14.0...v13.14.1) (2026-07-17)
+
+
+### Features
+
+* **companion:** add media playback links ([7f09010](https://github.com/mx-space/core/commit/7f0901006a88126603993baddfbdf109bcda7722))
+
+# [13.14.0](https://github.com/mx-space/core/compare/v13.13.1...v13.14.0) (2026-07-17)
+
+
+### Features
+
+* **companion:** support Live Desk artwork ([1af22ad](https://github.com/mx-space/core/commit/1af22adac0c6d997cbd916ea13d5ddfe2d35d583))
+
+## [13.13.1](https://github.com/mx-space/core/compare/v13.13.0...v13.13.1) (2026-07-16)
+
+
+### Bug Fixes
+
+* **companion:** enable Live Desk by default ([9a22898](https://github.com/mx-space/core/commit/9a22898932cc1ce010e8c024d2401687cc1e60c3))
+
+# [13.13.0](https://github.com/mx-space/core/compare/v13.12.0...v13.13.0) (2026-07-16)
+
+
+### Features
+
+* **companion:** add Live Desk presence platform ([4cf2163](https://github.com/mx-space/core/commit/4cf2163064bb43298d59de3f8f87e5129b018a03))
+
+# [13.12.0](https://github.com/mx-space/core/compare/v13.11.14...v13.12.0) (2026-07-10)
+
+
+### Features
+
+* **aggregate:** resolve seo config per request language ([e8ffa4c](https://github.com/mx-space/core/commit/e8ffa4c31deeb3a581ccc8b265f82ac0ad789356))
+* **configs:** add per-locale seo i18n overlay field ([88a60b1](https://github.com/mx-space/core/commit/88a60b1b54f71b4e3c2b012d270782152626a85c))
+
+## [13.11.14](https://github.com/mx-space/core/compare/v13.11.13...v13.11.14) (2026-07-09)
+
+## [13.11.13](https://github.com/mx-space/core/compare/v13.11.12...v13.11.13) (2026-07-04)
+
+
+### Bug Fixes
+
+* **core:** canonicalize skill snippet paths under sk/ root ([4541eca](https://github.com/mx-space/core/commit/4541ecac919e6a04fd7d781037f0a0fc72ceec82))
+
+## [13.11.12](https://github.com/mx-space/core/compare/v13.11.11...v13.11.12) (2026-07-03)
+
+
+### Bug Fixes
+
+* **core:** stabilize task listing and ai publish hooks ([8bba4da](https://github.com/mx-space/core/commit/8bba4da1b9ffe092a0ba5ba492fcd06db5a3e7e0))
+
+## [13.11.11](https://github.com/mx-space/core/compare/v13.11.10...v13.11.11) (2026-07-03)
+
+
+### Bug Fixes
+
+* **activity:** emit presence record keys verbatim in getPresence ([d366de1](https://github.com/mx-space/core/commit/d366de18b8fa5de867190c2f1b3457be5e6fe8ca))
+
+
+### Features
+
+* **auth:** generate digit-only snowflake ids for auth rows ([2aa0771](https://github.com/mx-space/core/commit/2aa07718348c7084b5bb085e5b51d2866c0ff7fc))
+
+## [13.11.10](https://github.com/mx-space/core/compare/v13.11.9...v13.11.10) (2026-07-02)
+
+## [13.11.9](https://github.com/mx-space/core/compare/v13.11.8...v13.11.9) (2026-07-02)
+
+
+### Bug Fixes
+
+* **ai:** configurable model list URL and /v1 suffix for compat providers ([4d4565b](https://github.com/mx-space/core/commit/4d4565b1f745dd5edec9a2521611c0975759c4bd)), closes [#2761](https://github.com/mx-space/core/issues/2761)
+
+## [13.11.8](https://github.com/mx-space/core/compare/v13.11.7...v13.11.8) (2026-06-28)
+
+
+### Bug Fixes
+
+* **stock:** switch bars source from Twelve Data to Polygon.io ([c72cd47](https://github.com/mx-space/core/commit/c72cd47bdebdf29f75efc728135f77ca117d3c2d))
+
+## [13.11.7](https://github.com/mx-space/core/compare/v13.11.6...v13.11.7) (2026-06-28)
+
+
+### Bug Fixes
+
+* **serverless:** drop fake axios stub, switch built-ins to native fetch ([b34034e](https://github.com/mx-space/core/commit/b34034e3a5ab892b0b6edc6b29f170af54d4b4e2))
+
+## [13.11.6](https://github.com/mx-space/core/compare/v13.11.5...v13.11.6) (2026-06-28)
+
+
+### Bug Fixes
+
+* **stock:** trim Twelve Data apiKey + propagate built-in updates on boot ([888af60](https://github.com/mx-space/core/commit/888af6029759ea353cf1887983dbed742b20567b))
+
+## [13.11.5](https://github.com/mx-space/core/compare/v13.11.4...v13.11.5) (2026-06-28)
+
+
+### Bug Fixes
+
+* **test:** align translation-entry note mock with findDistinctMoodsAndWeathers ([57a623d](https://github.com/mx-space/core/commit/57a623d87419bf568f5cd0513ce1e4cf7b062374))
+
+## [13.11.4](https://github.com/mx-space/core/compare/v13.11.3...v13.11.4) (2026-06-28)
+
+
+### Features
+
+* **stock:** built-in serverless stock_quote + stock_bars + admin Lexical node ([00a8f86](https://github.com/mx-space/core/commit/00a8f86fc1b4cb9a760d94b3df23abc692ba69ab))
+
+## [13.11.3](https://github.com/mx-space/core/compare/v13.11.2...v13.11.3) (2026-06-28)
+
+## [13.11.2](https://github.com/mx-space/core/compare/v13.11.1...v13.11.2) (2026-06-27)
+
+
+### Bug Fixes
+
+* **ai:** honor custom provider endpoints ([29e082a](https://github.com/mx-space/core/commit/29e082ad7ad9092603b8b5c1ead4c4c46c6236fe))
+* **ai:** seed translation glossary from every visible note, not just the last 100 ([49aa04f](https://github.com/mx-space/core/commit/49aa04f17120596f1e29582695a6c9b1aa209cdf)), closes [#2758](https://github.com/mx-space/core/issues/2758)
+* **ai:** surface orphan articles in summary/insights/translation grouped lists ([e51621a](https://github.com/mx-space/core/commit/e51621afd535c8b4c337d00e0ef82b061ed45c91)), closes [#2758](https://github.com/mx-space/core/issues/2758)
+* **recently:** hydrate enrichments on create/update so link cards survive the write path ([0c62e08](https://github.com/mx-space/core/commit/0c62e080680a8442194ea01d61178dba9e397cb4))
+
+## [13.11.1](https://github.com/mx-space/core/compare/v13.11.0...v13.11.1) (2026-06-19)
 
 
 ### Bug Fixes

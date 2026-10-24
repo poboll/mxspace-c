@@ -22,6 +22,12 @@ Use this reference when drafting or modifying posts, notes, or pages.
 └───────────┬─────────────┘
             ▼
 ┌─────────────────────────┐
+│ mxs author <file>       │
+│ wait for the human      │
+│ then read <file>.diff   │
+└───────────┬─────────────┘
+            ▼
+┌─────────────────────────┐
 │ Dry-run create/update   │
 └───────────┬─────────────┘
             ▼
@@ -33,6 +39,8 @@ Use this reference when drafting or modifying posts, notes, or pages.
 │ Read back with llm/json │
 └─────────────────────────┘
 ```
+
+After writing the envelope, run `mxs author <file>` and show the human the URL. Stop. When they say they are done, read `<file>.diff` for their edits — do not rescan the full article unless the diff is missing.
 
 ## Content Sources
 

@@ -6,16 +6,30 @@ x-mx-env: &mx-env
   NODE_ENV: production
   REDIS_HOST: redis
   PG_HOST: postgres
-  PG_PORT: "5432"
+  PG_PORT: '5432'
   PG_USER: mx
   PG_PASSWORD: mx
   PG_DATABASE: mx_core
-  SNOWFLAKE_WORKER_ID: "1"
+  SNOWFLAKE_WORKER_ID: '1'
   ALLOWED_ORIGINS: localhost
   JWT_SECRET: YOUR_SUPER_SECURED_JWT_SECRET_STRING
+  MX_SECRET_STORAGE_V2: ${MX_SECRET_STORAGE_V2:-false}
+
+# Bound crash artifacts and stdout/stderr even during dependency outages.
+x-runtime-safety: &runtime-safety
+  ulimits:
+    core:
+      soft: 0
+      hard: 0
+  logging:
+    driver: json-file
+    options:
+      max-size: '10m'
+      max-file: '3'
 
 services:
   app:
+    <<: *runtime-safety
     container_name: mx-server
     image: innei/mx-server:latest
     environment: *mx-env
@@ -32,7 +46,7 @@ services:
       - mx-space
     restart: unless-stopped
     healthcheck:
-      test: [CMD, curl, -f, 'http://127.0.0.1:2333/api/v2/ping']
+      test: [CMD, curl, -f, 'http://127.0.0.1:2333/api/v3/ping']
       interval: 1m30s
       timeout: 30s
       retries: 5
@@ -43,6 +57,7 @@ services:
   # service waits for completion via `service_completed_successfully` before
   # starting. See docs/superpowers/specs/2026-05-05-database-migration-release-phase-design.md.
   mx-migrate:
+    <<: *runtime-safety
     container_name: mx-migrate
     image: innei/mx-server:latest
     command: ['node', 'migrate.mjs']
@@ -57,6 +72,7 @@ services:
     restart: 'no'
 
   postgres:
+    <<: *runtime-safety
     container_name: postgres
     image: postgres:16-alpine
     environment:
@@ -76,6 +92,7 @@ services:
     restart: unless-stopped
 
   redis:
+    <<: *runtime-safety
     image: redis:alpine
     container_name: redis
     volumes:

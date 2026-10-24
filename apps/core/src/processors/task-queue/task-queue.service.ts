@@ -22,6 +22,7 @@ import { TaskQueueEmitter } from './task-queue.emitter'
 import {
   LUA_ACQUIRE_TASK,
   LUA_CANCEL_PENDING,
+  LUA_CLAIM_DEDUP,
   LUA_RECOVER_STALE,
   LUA_UPDATE_STATUS,
 } from './task-queue.lua'
@@ -36,6 +37,7 @@ import {
 } from './task-queue.types'
 
 const BATCH_TASK_TYPES = ['ai:translation:batch', 'ai:translation:all']
+const TASK_LIST_SCAN_BATCH_SIZE = 200
 
 const TERMINAL_STATUSES: ReadonlySet<TaskStatus> = new Set([
   TaskStatus.Completed,
@@ -48,6 +50,26 @@ type LogLevel = 'info' | 'warn' | 'error'
 
 function isTerminalStatus(status: TaskStatus): boolean {
   return TERMINAL_STATUSES.has(status)
+}
+
+function payloadTargetsRef(
+  rawPayload: string | null | undefined,
+  refId: string,
+): boolean {
+  if (!rawPayload) return false
+  let payload: unknown
+  try {
+    payload = JSON.parse(rawPayload)
+  } catch {
+    return false
+  }
+  if (!payload || typeof payload !== 'object') return false
+  const { refId: taskRefId, refIds } = payload as {
+    refId?: unknown
+    refIds?: unknown
+  }
+  if (taskRefId === refId) return true
+  return Array.isArray(refIds) && refIds.includes(refId)
 }
 
 /**
@@ -139,24 +161,23 @@ export class TaskQueueService implements OnModuleDestroy {
   ): Promise<{ taskId: string; created: boolean }> {
     const { type, payload, dedupKey, groupId, scope } = options
     const payloadHash = this.computeDedupHash(type, dedupKey)
+    const taskId = this.generateTaskId()
 
     if (dedupKey) {
       const dedupRedisKey = this.getKey(TASK_QUEUE_KEYS.dedup(payloadHash))
-      const existingTaskId = await this.redis.get(dedupRedisKey)
-
-      if (existingTaskId) {
-        const existingTask = await this.getTask(existingTaskId)
-        if (
-          existingTask &&
-          (existingTask.status === TaskStatus.Pending ||
-            existingTask.status === TaskStatus.Running)
-        ) {
-          return { taskId: existingTaskId, created: false }
-        }
+      const owner = await this.redis.eval(
+        LUA_CLAIM_DEDUP,
+        1,
+        dedupRedisKey,
+        taskId,
+        this.getKey(TASK_QUEUE_KEYS.task('')),
+        TASK_QUEUE_TTL.dedup,
+      )
+      if (owner !== taskId) {
+        return { taskId: String(owner), created: false }
       }
     }
 
-    const taskId = this.generateTaskId()
     const now = Date.now()
 
     const taskData: TaskRedis = {
@@ -211,11 +232,6 @@ export class TaskQueueService implements OnModuleDestroy {
       pipeline.expire(indexGroup, TASK_QUEUE_TTL.taskDefault)
     }
 
-    if (dedupKey) {
-      const dedupRedisKey = this.getKey(TASK_QUEUE_KEYS.dedup(payloadHash))
-      pipeline.set(dedupRedisKey, taskId, 'EX', TASK_QUEUE_TTL.dedup)
-    }
-
     await pipeline.exec()
 
     this.logger.log(
@@ -255,7 +271,7 @@ export class TaskQueueService implements OnModuleDestroy {
     groupId: string,
   ): Promise<SubTaskStats | undefined> {
     const indexGroup = this.getKey(TASK_QUEUE_KEYS.indexByGroup(groupId))
-    const taskIds = await this.redis.zrange(indexGroup, 0, -1)
+    const taskIds = await this.redis.zrange(indexGroup, '0', '-1')
 
     if (!taskIds.length) {
       return undefined
@@ -332,7 +348,7 @@ export class TaskQueueService implements OnModuleDestroy {
    */
   async recomputeGroupStats(groupId: string): Promise<SubTaskStats> {
     const indexGroup = this.getKey(TASK_QUEUE_KEYS.indexByGroup(groupId))
-    const taskIds = await this.redis.zrange(indexGroup, 0, -1)
+    const taskIds = await this.redis.zrange(indexGroup, '0', '-1')
     return this.tallyStatuses(taskIds)
   }
 
@@ -343,8 +359,18 @@ export class TaskQueueService implements OnModuleDestroy {
     page: number
     size: number
     includeSubTasks?: boolean
+    /** Keep only tasks whose payload acts on this ref (`refId`, or `refIds`). */
+    refId?: string
   }): Promise<{ data: Task[]; total: number }> {
-    const { status, type, scope, page, size, includeSubTasks = false } = options
+    const {
+      status,
+      type,
+      scope,
+      page,
+      size,
+      includeSubTasks = false,
+      refId,
+    } = options
 
     const statuses = Array.isArray(status) ? status : status ? [status] : []
     const singleStatus = statuses.length === 1 ? statuses[0] : undefined
@@ -355,42 +381,70 @@ export class TaskQueueService implements OnModuleDestroy {
       status: singleStatus,
     })
 
-    // Get all task IDs from the index first, then filter
-    const allTaskIds = await this.redis.zrevrange(indexKey, 0, -1)
-
-    if (!allTaskIds.length) {
-      return { data: [], total: 0 }
-    }
-
-    // Fetch all tasks to filter sub-tasks
-    const allTasks = await Promise.all(allTaskIds.map((id) => this.getTask(id)))
-    let filteredTasks = allTasks.filter((t): t is Task => t !== null)
-
-    if (
-      statuses.length > 0 &&
-      !(
-        singleStatus &&
-        indexKey === this.getKey(TASK_QUEUE_KEYS.indexByStatus(singleStatus))
-      )
-    ) {
-      const statusSet = new Set(statuses)
-      filteredTasks = filteredTasks.filter((t) => statusSet.has(t.status))
-    }
-    if (
-      scope &&
-      indexKey !== this.getKey(TASK_QUEUE_KEYS.indexByScope(scope))
-    ) {
-      filteredTasks = filteredTasks.filter((t) => t.scope === scope)
-    }
-
-    // Exclude sub-tasks (tasks with groupId) unless explicitly included
-    if (!includeSubTasks) {
-      filteredTasks = filteredTasks.filter((t) => !t.groupId)
-    }
-
-    const total = filteredTasks.length
     const start = (page - 1) * size
-    const paginatedTasks = filteredTasks.slice(start, start + size)
+    const pageTaskIds: string[] = []
+    let total = 0
+    let offset = 0
+    const statusSet = new Set(statuses)
+    const statusAlreadyIndexed =
+      !!singleStatus &&
+      indexKey === this.getKey(TASK_QUEUE_KEYS.indexByStatus(singleStatus))
+    const scopeAlreadyIndexed =
+      !!scope && indexKey === this.getKey(TASK_QUEUE_KEYS.indexByScope(scope))
+
+    while (true) {
+      const taskIds = await this.redis.zrevrange(
+        indexKey,
+        offset,
+        offset + TASK_LIST_SCAN_BATCH_SIZE - 1,
+      )
+      if (!taskIds.length) break
+
+      const pipeline = this.redis.pipeline()
+      for (const taskId of taskIds) {
+        const taskKey = this.getKey(TASK_QUEUE_KEYS.task(taskId))
+        if (refId) {
+          pipeline.hmget(taskKey, 'status', 'scope', 'groupId', 'payload')
+        } else {
+          pipeline.hmget(taskKey, 'status', 'scope', 'groupId')
+        }
+      }
+      const rows = await pipeline.exec()
+
+      for (let i = 0; i < taskIds.length; i++) {
+        const row = rows?.[i]
+        if (!row || row[0]) continue
+        const [taskStatus, taskScope, groupId, payload] = row[1] as [
+          string | null,
+          string | null,
+          string | null,
+          string | null | undefined,
+        ]
+        if (!taskStatus) continue
+        if (
+          statusSet.size > 0 &&
+          !statusAlreadyIndexed &&
+          !statusSet.has(taskStatus as TaskStatus)
+        ) {
+          continue
+        }
+        if (scope && !scopeAlreadyIndexed && taskScope !== scope) continue
+        if (!includeSubTasks && groupId) continue
+        if (refId && !payloadTargetsRef(payload, refId)) continue
+
+        if (total >= start && pageTaskIds.length < size) {
+          pageTaskIds.push(taskIds[i])
+        }
+        total++
+      }
+
+      offset += taskIds.length
+      if (taskIds.length < TASK_LIST_SCAN_BATCH_SIZE) break
+    }
+
+    const paginatedTasks = (
+      await Promise.all(pageTaskIds.map((id) => this.getTask(id)))
+    ).filter((t): t is Task => t !== null)
 
     return { data: paginatedTasks, total }
   }
@@ -447,7 +501,7 @@ export class TaskQueueService implements OnModuleDestroy {
 
   async cancelTasksByGroupId(groupId: string): Promise<number> {
     const indexGroup = this.getKey(TASK_QUEUE_KEYS.indexByGroup(groupId))
-    const taskIds = await this.redis.zrange(indexGroup, 0, -1)
+    const taskIds = await this.redis.zrange(indexGroup, '0', '-1')
 
     if (!taskIds.length) {
       return 0
@@ -803,9 +857,16 @@ export class TaskQueueService implements OnModuleDestroy {
     // Forward totalCost only when present (pre-spec-2 hashes lack it; zero is
     // treated as "no spend yet" and elided to keep the wire patch small).
     if (fresh.totalCost !== undefined) statusPatch.totalCost = fresh.totalCost
-    this.emitter.emitStatus(meta, statusPatch)
+    const isTerminal = isTerminalStatus(status)
+    const hasResult =
+      isTerminal && fresh.result !== undefined && fresh.result !== null
+    if (hasResult) {
+      this.emitter.emitResult(meta, statusPatch, fresh.result)
+    } else {
+      this.emitter.emitStatus(meta, statusPatch)
+    }
 
-    if (!isTerminalStatus(status)) {
+    if (!isTerminal) {
       // Non-terminal status changes (e.g. Running re-emit) — no child→parent
       // recompute, no throttle cleanup yet.
       return
@@ -814,14 +875,7 @@ export class TaskQueueService implements OnModuleDestroy {
     // Always release throttle state when a task reaches a terminal status.
     this.emitter.dispose(taskId)
 
-    const shouldEmitResult =
-      (status === TaskStatus.Completed ||
-        status === TaskStatus.PartialFailed) &&
-      fresh.result !== undefined &&
-      fresh.result !== null
-    if (shouldEmitResult) {
-      this.emitter.emitResult(meta, statusPatch, fresh.result)
-    } else if (
+    if (
       status === TaskStatus.Completed &&
       (fresh.result === undefined || fresh.result === null)
     ) {

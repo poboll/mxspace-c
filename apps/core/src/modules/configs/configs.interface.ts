@@ -14,11 +14,14 @@ import {
   type FeatureListSchema,
   type FileUploadOptionsSchema,
   type FriendLinkOptionsSchema,
+  type ImageGenerationOptionsSchema,
   type ImageStorageOptionsSchema,
   type MailOptionsSchema,
+  type MembershipSchema,
   type OAuthSchema,
   type SeoSchema,
   type ThirdPartyServiceIntegrationSchema,
+  type TtsOptionsSchema,
   type UrlSchema,
 } from './configs.schema'
 
@@ -41,6 +44,8 @@ export abstract class IConfig {
   friendLinkOptions: Required<z.infer<typeof FriendLinkOptionsSchema>>
   backupOptions: Required<z.infer<typeof BackupOptionsSchema>>
   imageStorageOptions: Required<z.infer<typeof ImageStorageOptionsSchema>>
+  imageGenerationOptions: Required<z.infer<typeof ImageGenerationOptionsSchema>>
+  ttsOptions: Required<z.infer<typeof TtsOptionsSchema>>
   fileUploadOptions: Required<z.infer<typeof FileUploadOptionsSchema>>
   commentUploadOptions: Required<z.infer<typeof CommentUploadOptionsSchema>>
   baiduSearchOptions: Required<z.infer<typeof BaiduSearchOptionsSchema>>
@@ -52,6 +57,7 @@ export abstract class IConfig {
   authSecurity: z.infer<typeof AuthSecuritySchema>
   ai: z.infer<typeof AISchema>
   oauth: z.infer<typeof OAuthSchema>
+  membership: Required<z.infer<typeof MembershipSchema>>
 }
 
 export type IConfigKeys = keyof IConfig

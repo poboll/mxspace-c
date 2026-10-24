@@ -8,10 +8,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { withFauxAi } from '@/helper/faux-ai.helper'
 import { AIProviderType } from '~/modules/ai/ai.types'
-import { AiAgentChatService } from '~/modules/ai/ai-agent/ai-agent-chat.service'
+import {
+  AiAgentChatService,
+  toPiMessages,
+} from '~/modules/ai/ai-agent/ai-agent-chat.service'
 
 const PROVIDER = 'faux-agent'
 const MODEL_ID = 'faux-agent-model'
+const SESSION_ID = 'faux-agent-session'
 
 interface SetupOpts {
   responses: ReturnType<typeof fauxAssistantMessage>[]
@@ -79,6 +83,41 @@ afterEach(() => {
 })
 
 describe('ai-agent faux e2e (streamChat)', () => {
+  it.each([
+    [AIProviderType.OpenAICompatible, 'openai-completions'],
+    [AIProviderType.Anthropic, 'anthropic-messages'],
+  ] as const)(
+    'replays assistant history using the selected %s protocol',
+    (type, api) => {
+      const { piMessages } = toPiMessages(
+        [
+          { role: 'assistant', content: 'previous answer' },
+          {
+            role: 'assistant_tool_call',
+            toolCalls: [
+              { id: 'call-1', name: 'lookup', arguments: '{"id":1}' },
+            ],
+          },
+        ],
+        { api, id: 'selected-provider', type, model: 'selected-model' },
+      )
+
+      expect(piMessages).toHaveLength(2)
+      expect(piMessages).toEqual([
+        expect.objectContaining({
+          api,
+          provider: 'selected-provider',
+          model: 'selected-model',
+        }),
+        expect.objectContaining({
+          api,
+          provider: 'selected-provider',
+          model: 'selected-model',
+        }),
+      ])
+    },
+  )
+
   it('text stream: emits text_delta + done', async () => {
     const ctx = setup({ responses: [fauxAssistantMessage('hello world')] })
     torn.push(ctx.teardown)
@@ -86,6 +125,7 @@ describe('ai-agent faux e2e (streamChat)', () => {
     for await (const event of ctx.service.streamChat({
       model: MODEL_ID,
       providerId: PROVIDER,
+      sessionId: SESSION_ID,
       messages: [{ role: 'user', content: 'hi' }],
     })) {
       types.push(event.type)
@@ -108,6 +148,7 @@ describe('ai-agent faux e2e (streamChat)', () => {
     for await (const event of ctx.service.streamChat({
       model: MODEL_ID,
       providerId: PROVIDER,
+      sessionId: SESSION_ID,
       messages: [{ role: 'user', content: 'hi' }],
     })) {
       types.push(event.type)
@@ -125,6 +166,7 @@ describe('ai-agent faux e2e (streamChat)', () => {
     for await (const event of ctx.service.streamChat({
       model: MODEL_ID,
       providerId: PROVIDER,
+      sessionId: SESSION_ID,
       messages: [{ role: 'user', content: 'use tool' }],
     })) {
       if (event.type === 'toolcall_end') {
@@ -152,6 +194,7 @@ describe('ai-agent faux e2e (streamChat)', () => {
       for await (const event of ctx.service.streamChat({
         model: MODEL_ID,
         providerId: PROVIDER,
+        sessionId: SESSION_ID,
         messages: [{ role: 'user', content: 'hi' }],
         conversationId: 'conv-1',
         signal: controller.signal,
@@ -185,6 +228,7 @@ describe('ai-agent faux e2e (streamChat)', () => {
       for await (const _ of ctx.service.streamChat({
         model: MODEL_ID,
         providerId: PROVIDER,
+        sessionId: SESSION_ID,
         messages: [{ role: 'user', content: 'go' }],
         conversationId: 'conv-2',
         signal: controller.signal,
@@ -221,6 +265,7 @@ describe('ai-agent faux e2e (streamChat)', () => {
     for await (const event of ctx.service.streamChat({
       model: MODEL_ID,
       providerId: PROVIDER,
+      sessionId: SESSION_ID,
       messages: [{ role: 'user', content: 'hi' }],
     })) {
       if (event.type === 'error') errors.push(event)

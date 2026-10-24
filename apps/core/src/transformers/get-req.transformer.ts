@@ -15,11 +15,20 @@ type BizRequest = {
   isAuthenticated: boolean
   token?: string
   readerId?: string
+  rawBody?: Buffer
+  commentUploadMaxFileSize?: number
 }
 
 export type FastifyBizRequest = FastifyRequest & BizRequest
 
 export type BizIncomingMessage = IncomingMessage & BizRequest
+
+export function isHttpExecutionContext(
+  context: Pick<ExecutionContext, 'getType'>,
+): boolean {
+  return context.getType() === 'http'
+}
+
 export function getNestExecutionContextRequest(
   context: ExecutionContext,
 ): FastifyBizRequest {

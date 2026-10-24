@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
 import { promisify } from 'node:util'
 
 import {
@@ -13,6 +14,7 @@ import {
   AGENT_BROWSER_DEFAULT_EXECUTABLE,
   AGENT_BROWSER_DEFAULT_IDLE_MS,
   AGENT_BROWSER_DEFAULT_MAX_SIZE,
+  describeAgentBrowserError,
 } from './agent-browser.constants'
 
 const execFileAsync = promisify(execFile)
@@ -35,9 +37,10 @@ export interface ReleaseOptions {
 }
 
 interface InternalSlot {
-  index: number
   name: string
   inUse: boolean
+  closing?: Promise<void>
+  quarantined?: boolean
   /** chromium has actually been started under this name. */
   live: boolean
   idleTimer?: NodeJS.Timeout
@@ -48,6 +51,7 @@ interface Waiter {
   reject: (err: Error) => void
   signal?: AbortSignal
   onAbort?: () => void
+  timer?: NodeJS.Timeout
 }
 
 export interface AgentBrowserSessionPoolOptions {
@@ -56,20 +60,7 @@ export interface AgentBrowserSessionPoolOptions {
   executable?: string
 }
 
-/**
- * Bounded pool of long-lived `agent-browser --session` names. Acts as both a
- * resource cache (avoids per-request chromium spin-up) and a concurrency
- * semaphore (no more than `maxSize` in-flight commands).
- *
- * Lifecycle invariants:
- *   - chromium is only started lazily on first command on a slot
- *   - idle slots close themselves after `idleMs` so we do not hold dozens of
- *     headless Chromiums in RAM between bursts
- *   - `release(slot, { discard: true })` synchronously evicts a wedged slot
- *     so a subsequent acquire does not reuse a broken chromium state
- *   - `onModuleDestroy` drains every in-flight close, so Nest shutdown means
- *     "no more chromium processes"
- */
+/** Session ownership includes closing and quarantined browsers, not just callers. */
 @Injectable()
 export class AgentBrowserSessionPool implements OnModuleDestroy {
   private readonly logger = new Logger(AgentBrowserSessionPool.name)
@@ -84,13 +75,16 @@ export class AgentBrowserSessionPool implements OnModuleDestroy {
   // pool is considered destroyed.
   private readonly inFlightCloses = new Set<Promise<void>>()
   private shuttingDown = false
+  private readonly sessionPrefix = `agent-browser-${process.pid}-${randomUUID()}`
+  private nextSession = 0
 
   constructor(@Optional() options?: AgentBrowserSessionPoolOptions) {
-    this.maxSize = Math.max(
-      1,
-      options?.maxSize ?? AGENT_BROWSER_DEFAULT_MAX_SIZE,
-    )
-    this.idleMs = Math.max(0, options?.idleMs ?? AGENT_BROWSER_DEFAULT_IDLE_MS)
+    const maxSize = options?.maxSize ?? AGENT_BROWSER_DEFAULT_MAX_SIZE
+    this.maxSize = Number.isFinite(maxSize)
+      ? Math.max(1, Math.floor(maxSize))
+      : 2
+    const idleMs = options?.idleMs ?? AGENT_BROWSER_DEFAULT_IDLE_MS
+    this.idleMs = Number.isFinite(idleMs) ? Math.max(0, idleMs) : 60_000
     this.executable = options?.executable ?? AGENT_BROWSER_DEFAULT_EXECUTABLE
   }
 
@@ -98,11 +92,29 @@ export class AgentBrowserSessionPool implements OnModuleDestroy {
     return this.executable
   }
 
+  get health() {
+    return {
+      capacity: this.maxSize,
+      quarantined: this.slots.filter((slot) => slot.quarantined).length,
+    }
+  }
+
   async acquire(options?: AcquireOptions): Promise<PoolSlot> {
     if (this.shuttingDown) {
       throw new Error('AgentBrowserSessionPool has been shut down')
     }
-    const free = this.slots.find((s) => !s.inUse)
+    if (options?.signal?.aborted) throw new Error('acquire aborted')
+    if (
+      this.slots.length === this.maxSize &&
+      this.slots.every((s) => s.quarantined)
+    ) {
+      throw new Error(
+        'Browser pool unavailable: sessions quarantined after close failure',
+      )
+    }
+    const free = this.slots.find(
+      (s) => !s.inUse && !s.closing && !s.quarantined,
+    )
     if (free) {
       this.cancelIdleTimer(free)
       free.inUse = true
@@ -110,8 +122,7 @@ export class AgentBrowserSessionPool implements OnModuleDestroy {
     }
     if (this.slots.length < this.maxSize) {
       const slot: InternalSlot = {
-        index: this.slots.length,
-        name: this.buildSlotName(this.slots.length),
+        name: this.buildSlotName(),
         inUse: true,
         live: false,
       }
@@ -128,23 +139,33 @@ export class AgentBrowserSessionPool implements OnModuleDestroy {
         waiter.onAbort = () => {
           const i = this.waiters.indexOf(waiter)
           if (i !== -1) this.waiters.splice(i, 1)
+          this.cleanWaiter(waiter)
           reject(new Error('acquire aborted'))
         }
         options.signal.addEventListener('abort', waiter.onAbort, { once: true })
       }
+      waiter.timer = setTimeout(() => {
+        const i = this.waiters.indexOf(waiter)
+        if (i !== -1) this.waiters.splice(i, 1)
+        this.cleanWaiter(waiter)
+        reject(new Error('Browser pool acquire timed out'))
+      }, 30_000)
       this.waiters.push(waiter)
     })
   }
 
   release(slot: PoolSlot, options?: ReleaseOptions): void {
     const internal = this.slots.find((s) => s.name === slot.name)
-    if (!internal) return
+    if (
+      !internal ||
+      !internal.inUse ||
+      internal.closing ||
+      internal.quarantined
+    )
+      return
     internal.inUse = false
     internal.live = true
     if (options?.discard) {
-      // closeSlot synchronously removes the slot from `this.slots` before
-      // awaiting the `close` CLI, so the immediately-following flushWaiter
-      // call cannot hand this same slot to a queued acquire mid-teardown.
       this.trackClose(this.closeSlot(internal))
     } else {
       this.scheduleIdleClose(internal)
@@ -160,62 +181,62 @@ export class AgentBrowserSessionPool implements OnModuleDestroy {
     if (this.shuttingDown) return
     this.shuttingDown = true
     for (const waiter of this.waiters.splice(0)) {
-      if (waiter.signal && waiter.onAbort) {
-        waiter.signal.removeEventListener('abort', waiter.onAbort)
-      }
+      this.cleanWaiter(waiter)
       waiter.reject(new Error('AgentBrowserSessionPool has been shut down'))
     }
-    await Promise.all(this.slots.splice(0).map((s) => this.closeSlot(s, true)))
+    await Promise.all(this.slots.map((s) => this.closeSlot(s)))
     // Drain in-flight closes started by release / idle paths so the caller
-    // can rely on shutdown() meaning "all chromium is gone".
+    // can await all close attempts; quarantined sessions remain owned until exit.
     if (this.inFlightCloses.size > 0) {
       await Promise.all(this.inFlightCloses)
     }
   }
 
-  /**
-   * Hook called by callers after the first successful command on a freshly-
-   * allocated slot — at that point chromium has truly started, so subsequent
-   * shutdown / discard knows to issue `close`.
-   */
+  /** Mark before launching: a failed CLI may already have created its daemon. */
   markLive(slot: PoolSlot): void {
     const internal = this.slots.find((s) => s.name === slot.name)
     if (internal) internal.live = true
   }
 
-  private buildSlotName(index: number): string {
-    return `agent-browser-${index}`
+  private buildSlotName(): string {
+    return `${this.sessionPrefix}-${this.nextSession++}`
+  }
+
+  private cleanWaiter(waiter: Waiter): void {
+    clearTimeout(waiter.timer)
+    if (waiter.signal && waiter.onAbort) {
+      waiter.signal.removeEventListener('abort', waiter.onAbort)
+    }
   }
 
   private flushWaiter(): void {
-    if (this.waiters.length === 0) return
-    const free = this.slots.find((s) => !s.inUse)
-    if (free) {
-      const waiter = this.waiters.shift()!
-      if (waiter.signal && waiter.onAbort) {
-        waiter.signal.removeEventListener('abort', waiter.onAbort)
+    if (this.shuttingDown) return
+    while (this.waiters.length) {
+      let free = this.slots.find(
+        (s) => !s.inUse && !s.closing && !s.quarantined,
+      )
+      if (!free && this.slots.length < this.maxSize) {
+        free = { name: this.buildSlotName(), inUse: false, live: false }
+        this.slots.push(free)
       }
+      if (!free) {
+        if (this.slots.every((s) => s.quarantined)) {
+          for (const waiter of this.waiters.splice(0)) {
+            this.cleanWaiter(waiter)
+            waiter.reject(
+              new Error(
+                'Browser pool unavailable: sessions quarantined after close failure',
+              ),
+            )
+          }
+        }
+        return
+      }
+      const waiter = this.waiters.shift()!
+      this.cleanWaiter(waiter)
       this.cancelIdleTimer(free)
       free.inUse = true
       waiter.resolve({ name: free.name })
-      return
-    }
-    // No reusable slot in pool, but headroom exists — typically after a
-    // discard or idle-close synchronously evicted a slot. Mint a fresh one
-    // so the waiter doesn't sit forever despite available capacity.
-    if (this.slots.length < this.maxSize) {
-      const slot: InternalSlot = {
-        index: this.slots.length,
-        name: this.buildSlotName(this.slots.length),
-        inUse: true,
-        live: false,
-      }
-      this.slots.push(slot)
-      const waiter = this.waiters.shift()!
-      if (waiter.signal && waiter.onAbort) {
-        waiter.signal.removeEventListener('abort', waiter.onAbort)
-      }
-      waiter.resolve({ name: slot.name })
     }
   }
 
@@ -243,36 +264,48 @@ export class AgentBrowserSessionPool implements OnModuleDestroy {
     p.finally(() => this.inFlightCloses.delete(p))
   }
 
-  private async closeSlot(
-    slot: InternalSlot,
-    alreadyRemovedFromList = false,
-  ): Promise<void> {
+  private closeSlot(slot: InternalSlot): Promise<void> {
+    if (slot.closing) return slot.closing
     this.cancelIdleTimer(slot)
-    // Remove from the pool SYNCHRONOUSLY before awaiting the CLI close so
-    // any concurrent acquire / flushWaiter sees a shorter pool and creates a
-    // fresh slot instead of handing this one to a new caller while chromium
-    // is being torn down. shutdown() pre-splices and passes the flag.
-    if (!alreadyRemovedFromList) {
-      const idx = this.slots.indexOf(slot)
-      if (idx !== -1) this.slots.splice(idx, 1)
-    }
-    if (slot.live) {
+    // Keep ownership and capacity until close has actually completed.
+    slot.closing = this.performClose(slot)
+    return slot.closing
+  }
+
+  private async performClose(slot: InternalSlot): Promise<void> {
+    // Yield so closeSlot installs the closing marker before completion.
+    await Promise.resolve()
+    let closed = !slot.live
+    for (let attempt = 0; !closed && attempt < 2; attempt++) {
       try {
         await execFileAsync(
           this.executable,
           ['--session', slot.name, 'close'],
           {
             timeout: AGENT_BROWSER_CLOSE_TIMEOUT_MS,
+            killSignal: 'SIGKILL',
+            maxBuffer: 16_384,
             windowsHide: true,
             env: process.env,
           },
         )
+        closed = true
       } catch (error) {
-        this.logger.debug(
-          `pool close failed for ${slot.name}: ${(error as Error).message}`,
+        // Do not log execFile.message: it contains command arguments and stderr.
+        this.logger.warn(
+          `Browser close failed: session=${slot.name} attempt=${attempt + 1} ${describeAgentBrowserError(error)}`,
         )
       }
     }
-    slot.live = false
+    slot.closing = undefined
+    if (closed) {
+      slot.live = false
+      const index = this.slots.indexOf(slot)
+      if (index !== -1) this.slots.splice(index, 1)
+    } else {
+      // Fail closed: never mint replacement browsers for unconfirmed exits.
+      slot.quarantined = true
+    }
+    this.flushWaiter()
   }
 }

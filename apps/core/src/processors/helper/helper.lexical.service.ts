@@ -1,3 +1,4 @@
+import { extractLexicalTranslatableProperties } from '@mx-space/ai/translation'
 import { mxLexicalToMarkdown } from '@mx-space/editor'
 import { Injectable } from '@nestjs/common'
 import { nanoid } from 'nanoid'
@@ -7,7 +8,6 @@ import {
   NODE_STATE_KEY,
 } from '~/constants/lexical.constant'
 import { ContentFormat } from '~/shared/types/content-format.type'
-import { extractLexicalTranslatableProperties } from '~/utils/lexical-translatable-property.util'
 import { truncateAtBoundary } from '~/utils/text-summary.util'
 import { md5 } from '~/utils/tool.util'
 
@@ -141,6 +141,22 @@ export class LexicalService {
       segments.push(node.diagram)
     }
 
+    if (node.type === 'image') {
+      for (const field of ['caption', 'altText']) {
+        if (typeof node[field] === 'string' && node[field].trim()) {
+          segments.push(node[field])
+        }
+      }
+    }
+
+    if (node.type === 'gallery' && Array.isArray(node.images)) {
+      for (const image of node.images) {
+        if (typeof image?.alt === 'string' && image.alt.trim()) {
+          segments.push(image.alt)
+        }
+      }
+    }
+
     if (node.type === 'poll') {
       if (typeof node.question === 'string' && node.question.trim()) {
         segments.push(node.question)
@@ -234,7 +250,9 @@ export class LexicalService {
       : { content, changed: false }
   }
 
-  extractRootBlocks(content: string): LexicalRootBlock[] {
+  extractRootBlockNodes(
+    content: string,
+  ): Array<{ id: string | null; type: string; node: any; index: number }> {
     const editorState = this.parseEditorState(content)
     if (!editorState?.root || !Array.isArray(editorState.root.children)) {
       return []
@@ -242,24 +260,36 @@ export class LexicalService {
 
     return editorState.root.children
       .map((child: any, index: number) => {
-        if (!child || typeof child !== 'object') {
-          return null
-        }
-
-        const text = this.extractBlockText(child)
-        const normalized = this.normalizeText(text)
-        const type = typeof child.type === 'string' ? child.type : 'unknown'
-        const fingerprint = md5(`${type}:${normalized}`)
-
+        if (!child || typeof child !== 'object') return null
         return {
           id: this.readBlockId(child),
+          type: typeof child.type === 'string' ? child.type : 'unknown',
+          node: child,
+          index,
+        }
+      })
+      .filter(Boolean) as Array<{
+      id: string | null
+      type: string
+      node: any
+      index: number
+    }>
+  }
+
+  extractRootBlocks(content: string): LexicalRootBlock[] {
+    return this.extractRootBlockNodes(content).map(
+      ({ id, type, node, index }) => {
+        const text = this.extractBlockText(node)
+        const normalized = this.normalizeText(text)
+        return {
+          id,
           type,
           text,
-          fingerprint,
+          fingerprint: md5(`${type}:${normalized}`),
           index,
         } satisfies LexicalRootBlock
-      })
-      .filter((block): block is LexicalRootBlock => !!block)
+      },
+    )
   }
 
   lexicalToMarkdown(editorState: string): string {

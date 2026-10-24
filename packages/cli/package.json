@@ -1,6 +1,6 @@
 {
   "name": "@mx-space/cli",
-  "version": "0.13.1",
+  "version": "0.21.5",
   "description": "Command line interface for mx-space (mx-core) — auth, content, configuration",
   "keywords": [
     "mx-space",
@@ -22,7 +22,7 @@
   "author": "Innei <https://innei.in>",
   "type": "module",
   "engines": {
-    "node": ">=22"
+    "node": ">=26.0.0"
   },
   "files": [
     "bin",
@@ -35,7 +35,7 @@
   "module": "./dist/index.mjs",
   "types": "./dist/index.d.mts",
   "bin": {
-    "mxs": "./bin/mxs.cjs"
+    "mxs": "bin/mxs.cjs"
   },
   "exports": {
     ".": {
@@ -48,7 +48,7 @@
     "access": "public"
   },
   "scripts": {
-    "package": "rm -rf dist && tsdown",
+    "package": "pnpm -C ../../apps/admin run build:author && tsdown && node scripts/vendor-author.mjs",
     "build": "npm run package",
     "prepackage": "rm -rf dist",
     "clean": "rm -rf dist",
@@ -60,32 +60,31 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@clack/prompts": "^1.5.1",
-    "@effect/cli": "0.75.2",
-    "@effect/platform": "0.96.1",
-    "@effect/platform-node": "0.107.0",
-    "@haklex/rich-headless": "0.27.0",
-    "@haklex/rich-litexml": "0.27.0",
-    "@haklex/rich-litexml-cli": "0.27.0",
-    "@lexical/headless": "^0.45.0",
-    "@mx-space/api-client": "workspace:*",
-    "@mx-space/editor": "workspace:*",
-    "better-auth": "^1.6.16",
-    "effect": "3.21.3",
-    "fast-xml-parser": "5.8.0",
-    "get-east-asian-width": "^1.6.0",
-    "lexical": "^0.45.0",
-    "minisearch": "^7.2.0",
-    "open": "^11.0.0",
-    "semver": "7.8.4"
+    "@haklex/rich-litexml": "0.54.3",
+    "loro-crdt": "^1.16.4"
   },
   "devDependencies": {
-    "@effect/vitest": "0.29.0",
-    "@types/node": "25.9.3",
-    "@types/semver": "7.7.1",
-    "tsdown": "0.22.2",
-    "tsx": "^4.22.4",
+    "@clack/prompts": "^1.8.1",
+    "@effect/platform-node": "4.0.1",
+    "@effect/vitest": "4.0.1",
+    "@haklex/rich-collab-loro": "0.54.3",
+    "@haklex/rich-headless": "0.54.3",
+    "@lexical/headless": "^0.52.0",
+    "@mx-space/api-client": "workspace:*",
+    "@mx-space/editor": "workspace:*",
+    "@types/node": "26.6.5",
+    "@types/semver": "7.8.0",
+    "better-auth": "^1.6.27",
+    "effect": "4.0.1",
+    "fast-xml-parser": "5.11.2",
+    "get-east-asian-width": "^1.7.0",
+    "lexical": "^0.52.0",
+    "minisearch": "^7.2.0",
+    "open": "^11.0.4",
+    "semver": "7.8.5",
+    "tsdown": "0.23.0",
+    "tsx": "^4.23.15",
     "typescript": "6.0.3",
-    "vitest": "4.1.8"
+    "vitest": "5.0.5"
   }
 }

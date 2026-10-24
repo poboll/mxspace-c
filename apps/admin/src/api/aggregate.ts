@@ -1,3 +1,6 @@
+import type { ContentDocument, DraftModel } from '~/models/draft'
+
+import type { RecentActivities } from './activity'
 import { getJson } from './http'
 
 export interface StatCount {
@@ -56,6 +59,80 @@ export interface CommentActivityItem {
 export interface TrafficSourceData {
   browser: Array<{ count: number; name: string }>
   os: Array<{ count: number; name: string }>
+}
+
+export interface DeskCommentPreview {
+  author: string
+  id: string
+  refTitle: string | null
+  text: string
+}
+
+export interface DeskLinkPreview {
+  id: string
+  name: string
+  url: string
+}
+
+export interface DeskScheduledNote {
+  id: string
+  nid: number
+  publicAt: string
+  title: string | null
+}
+
+export interface DeskSummary {
+  linkApplications: {
+    count: number
+    latest: DeskLinkPreview | null
+  }
+  scheduledNotes: DeskScheduledNote[]
+  unreadComments: {
+    count: number
+    latest: DeskCommentPreview | null
+  }
+}
+
+export interface OnThisDayEntry {
+  created: string
+  excerpt: string
+  id: string
+  title: string | null
+  type: 'note' | 'post'
+}
+
+export interface HeatmapDay {
+  count: number
+  date: string
+  notes: number
+  posts: number
+}
+
+export interface DeskDraft {
+  createdAt: string
+  document: Pick<ContentDocument, 'refId' | 'refType'>
+  documentId: string
+  headRevision: { chars: number; excerpt: string; title: string }
+  id: string
+  relationToPublished: DraftModel['relationToPublished']
+  status: DraftModel['status']
+  updatedAt: null | string
+}
+
+export interface DashboardPayload {
+  desk: DeskSummary
+  drafts: DeskDraft[]
+  onThisDay: OnThisDayEntry[]
+  ownerName: null | string
+  publishHeatmap: HeatmapDay[]
+  reads: { totalLikes: number; totalReads: number }
+  recent: RecentActivities
+  stat: StatCount
+  topArticles: TopArticle[]
+}
+
+export function getDashboard() {
+  return getJson<DashboardPayload>('/aggregate/dashboard')
 }
 
 export function getAggregateStat() {

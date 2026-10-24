@@ -8,8 +8,12 @@ export default defineConfig({
   dts: { eager: true },
   format: ['esm'],
   platform: 'node',
-  noExternal: () => true,
+  deps: {
+    // loro-crdt's node build loads its wasm and JS snippets relative to its own
+    // files, so it has to stay a runtime dependency instead of being inlined.
+    alwaysBundle: (id) => !/^loro-crdt(?:\/|$)/.test(id),
+    onlyBundle: false,
+  },
   sourcemap: false,
-
   shims: true,
 })

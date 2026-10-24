@@ -90,6 +90,38 @@ export interface SkillBundleView {
   rawUrl: string
   assets: SkillAssetView[]
 }
+export type PostEntitlementReason =
+  'public' | 'owner' | 'free-window' | 'purchase' | 'membership' | 'locked'
+
+export interface PaywallPrice {
+  amount: number
+  currency: string
+}
+
+export interface PaywallMeta {
+  locked: boolean
+  previewBlocks?: number
+  freeUntil?: string
+  entitlement: { reason: PostEntitlementReason }
+  purchase?: { enabled: boolean; price?: PaywallPrice }
+}
+
+export interface TtsMeta {
+  available: boolean
+  lang?: string
+  blockCount?: number
+  stale?: boolean
+  updatedAt?: string | null
+}
+
+export interface TagGlossaryPair {
+  source: string
+  translated: string
+}
+
+export interface GlossaryMeta {
+  tags?: TagGlossaryPair[]
+}
 
 export interface BaseResponseMeta {
   pagination?: PaginationMeta
@@ -97,6 +129,7 @@ export interface BaseResponseMeta {
   translation?: EntryTranslation | Record<string, EntryTranslation>
   interaction?: InteractionMeta | Record<string, InteractionMeta>
   enrichments?: Record<string, EnrichmentResult>
+  glossary?: GlossaryMeta
 }
 
 export interface PostResponseMeta extends BaseResponseMeta {
@@ -105,11 +138,14 @@ export interface PostResponseMeta extends BaseResponseMeta {
   articles?: Record<string, RelatedRef>
   summary?: SummaryMeta
   skills?: SkillBundleView[]
+  paywall?: PaywallMeta
+  tts?: TtsMeta
 }
 
 export interface NoteResponseMeta extends BaseResponseMeta {
   insights?: InsightsMeta
   summary?: SummaryMeta
+  tts?: TtsMeta
 }
 
 /**

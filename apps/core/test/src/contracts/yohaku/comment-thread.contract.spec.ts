@@ -18,6 +18,7 @@ import { CommentController } from '~/modules/comment/comment.controller'
 import { CommentLifecycleService } from '~/modules/comment/comment.lifecycle.service'
 import { CommentService } from '~/modules/comment/comment.service'
 import { ConfigsService } from '~/modules/configs/configs.service'
+import { EntitlementService } from '~/modules/membership/entitlement.service'
 import { ReaderService } from '~/modules/reader/reader.service'
 
 import {
@@ -27,6 +28,7 @@ import {
   assertPgTimestamps,
 } from '../../../helper/api-shape'
 import { createE2EApp } from '../../../helper/create-e2e-app'
+import { authProvider } from '../../../mock/modules/auth.mock'
 import { eventEmitterProvider } from '../../../mock/processors/event.mock'
 
 const fixtureComment = (overrides: Record<string, unknown> = {}) => ({
@@ -113,6 +115,15 @@ const readerServiceProvider = {
   },
 }
 
+const entitlementServiceProvider = {
+  provide: EntitlementService,
+  useValue: {
+    async getActiveMemberIds() {
+      return new Set<string>()
+    },
+  },
+}
+
 const getResponseData = (body: any) =>
   Array.isArray(body.data) ? body.data : body.data?.data
 
@@ -120,10 +131,12 @@ describe('Yohaku contract — comment thread (e2e)', () => {
   const proxy = createE2EApp({
     controllers: [CommentController],
     providers: [
+      authProvider,
       commentServiceProvider,
       lifecycleProvider,
       configsProvider,
       readerServiceProvider,
+      entitlementServiceProvider,
       ...eventEmitterProvider,
     ],
   })

@@ -12,8 +12,7 @@ type AppErrorDefinition<C extends AppErrorCode> =
     ? {
         status: number
         message:
-          | string
-          | ((payload: PresentPayloadFor<C> | undefined) => string)
+          string | ((payload: PresentPayloadFor<C> | undefined) => string)
         details?: (
           payload: PresentPayloadFor<C> | undefined,
         ) => Record<string, unknown> | undefined
@@ -209,6 +208,45 @@ export const APP_ERROR_DEFINITIONS = {
     message: 'Translation not found',
   },
 
+  // image generation
+  [AppErrorCode.IMAGE_GENERATION_DISABLED]: {
+    status: 400,
+    message: 'AI image generation is not enabled',
+  },
+  [AppErrorCode.IMAGE_PROVIDER_NOT_CONFIGURED]: {
+    status: 400,
+    message: 'Image generation provider is not configured',
+  },
+  [AppErrorCode.IMAGE_GENERATION_FAILED]: {
+    status: 500,
+    message: (p) => p?.message ?? 'Image generation failed',
+  },
+
+  // TTS
+  [AppErrorCode.TTS_DISABLED]: {
+    status: 403,
+    message: 'AI narration is disabled',
+  },
+  [AppErrorCode.TTS_PROVIDER_NOT_CONFIGURED]: {
+    status: 400,
+    message: 'TTS provider is not configured',
+  },
+  [AppErrorCode.TTS_SOURCE_NOT_LEXICAL]: {
+    status: 400,
+    message: 'No requested language has narratable Lexical content',
+    details: (p) => (p?.lang ? { lang: p.lang } : undefined),
+  },
+  [AppErrorCode.TTS_GENERATION_FAILED]: {
+    status: 500,
+    message: (p) => p?.message ?? 'Speech generation failed',
+  },
+  [AppErrorCode.TTS_BUDGET_EXCEEDED]: {
+    status: 400,
+    message: (p) =>
+      `Planned narration of ${p.charCount} characters exceeds the ${p.limit} limit`,
+    details: (p) => ({ charCount: p.charCount, limit: p.limit }),
+  },
+
   // auth
   [AppErrorCode.AUTH_DEVICE_FLOW_PENDING]: {
     status: 202,
@@ -379,9 +417,33 @@ export const APP_ERROR_DEFINITIONS = {
     message: 'Draft not found',
     details: (p) => (p?.id ? { id: p.id } : undefined),
   },
-  [AppErrorCode.DRAFT_HISTORY_NOT_FOUND]: {
+  [AppErrorCode.CONTENT_REVISION_NOT_FOUND]: {
     status: 404,
-    message: 'Draft history not found',
+    message: 'Content revision not found',
+    details: (p) => (p?.id ? { id: p.id } : undefined),
+  },
+  [AppErrorCode.DRAFT_SHARE_NOT_FOUND]: {
+    status: 404,
+    message: 'Share link not found',
+    details: (p) => (p?.id ? { id: p.id } : undefined),
+  },
+  [AppErrorCode.DRAFT_HEAD_CONFLICT]: {
+    status: 409,
+    message: 'The same draft was updated elsewhere',
+    details: (p) => ({
+      actualHeadRevisionId: p.actualHeadRevisionId,
+      branchId: p.branchId,
+      expectedHeadRevisionId: p.expectedHeadRevisionId,
+    }),
+  },
+  [AppErrorCode.PUBLISHED_REVISION_CHANGED]: {
+    status: 409,
+    message: 'The online revision changed',
+    details: (p) => ({
+      actualPublishedRevisionId: p.actualPublishedRevisionId,
+      documentId: p.documentId,
+      expectedPublishedRevisionId: p.expectedPublishedRevisionId,
+    }),
   },
 
   // document / helper
@@ -451,6 +513,10 @@ export const APP_ERROR_DEFINITIONS = {
   [AppErrorCode.FILE_UPLOAD_NOT_AUTHORIZED]: {
     status: 403,
     message: 'File upload is not authorized',
+  },
+  [AppErrorCode.FILE_REQUIRED]: {
+    status: 400,
+    message: 'A file must be uploaded in the "file" field',
   },
   [AppErrorCode.MIME_ZIP_REQUIRED]: {
     status: 422,
@@ -560,6 +626,52 @@ export const APP_ERROR_DEFINITIONS = {
   [AppErrorCode.USER_ALREADY_EXISTS]: {
     status: 400,
     message: 'An owner already exists',
+  },
+
+  // membership
+  [AppErrorCode.MEMBERSHIP_REQUIRED]: {
+    status: 403,
+    message: 'An active membership is required',
+  },
+  [AppErrorCode.WEBHOOK_SIGNATURE_INVALID]: {
+    status: 400,
+    message: 'Webhook signature verification failed',
+  },
+  [AppErrorCode.MEMBERSHIP_PROVIDER_NOT_CONFIGURED]: {
+    status: 400,
+    message: 'No membership payment provider is configured',
+  },
+  [AppErrorCode.MEMBERSHIP_PROVIDER_NOT_SUPPORTED]: {
+    status: 404,
+    message: 'Unknown membership payment provider',
+  },
+  [AppErrorCode.MEMBERSHIP_ALREADY_ACTIVE]: {
+    status: 409,
+    message: 'Reader already has an active membership',
+  },
+  [AppErrorCode.MEMBERSHIP_APPLE_TRANSACTION_INVALID]: {
+    status: 400,
+    message: 'Apple transaction could not be verified',
+  },
+  [AppErrorCode.MEMBERSHIP_APPLE_ALREADY_BOUND]: {
+    status: 409,
+    message: 'This Apple subscription is already linked to another reader',
+  },
+  [AppErrorCode.PREMIUM_REQUIRES_LEXICAL]: {
+    status: 400,
+    message: 'Only Lexical-format posts can be marked as premium',
+  },
+  [AppErrorCode.ARTICLE_PURCHASE_UNAVAILABLE]: {
+    status: 400,
+    message: 'Single article purchase is not available',
+  },
+  [AppErrorCode.ARTICLE_NOT_PURCHASABLE]: {
+    status: 400,
+    message: 'This article cannot be purchased',
+  },
+  [AppErrorCode.ARTICLE_ALREADY_PURCHASED]: {
+    status: 409,
+    message: 'Reader already purchased this article',
   },
 
   // page

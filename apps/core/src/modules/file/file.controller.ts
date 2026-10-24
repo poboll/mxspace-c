@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
@@ -5,10 +6,10 @@ import {
   Body,
   Delete,
   Get,
+  HttpCode,
   Param,
   Patch,
   Post,
-  Put,
   Query,
   Req,
   Res,
@@ -26,24 +27,33 @@ import { MetaObjectBuilder } from '~/common/response/meta-builder'
 import { STATIC_FILE_DIR } from '~/constants/path.constant'
 import { ConfigsService } from '~/modules/configs/configs.service'
 import { UploadService } from '~/processors/helper/helper.upload.service'
-import { BasicPagerDto } from '~/shared/dto/pager.dto'
+import { type BasicPagerDto, BasicPagerSchema } from '~/shared/dto/pager.dto'
 import {
   generateFilename,
   generateFilePath,
   replaceFilenameTemplate,
 } from '~/utils/filename-template.util'
 import { S3Uploader } from '~/utils/s3.util'
+import { resolveUniqueObjectKey } from '~/utils/unique-object-key.util'
 
 import {
-  BatchOrphanDeleteDto,
-  CommentUploadsListQueryDto,
-  FileQueryDto,
-  FileUploadDto,
-  RenameFileQueryDto,
+  type BatchOrphanDeleteDto,
+  BatchOrphanDeleteSchema,
+  type CommentUploadsListQueryDto,
+  CommentUploadsListQuerySchema,
+  type FileQueryDto,
+  FileQuerySchema,
+  type FileUploadDto,
+  FileUploadSchema,
+  type ReconcileFileReferencesDto,
+  ReconcileFileReferencesSchema,
+  type RenameFileQueryDto,
+  RenameFileQuerySchema,
 } from './file.schema'
 import { FileService } from './file.service'
 import { FileReferenceService } from './file-reference.service'
 import { FileDeletionReason } from './file-reference.types'
+import { FileReferenceReconciliationService } from './file-reference-reconciliation.service'
 
 @ApiController(['objects', 'files'])
 export class FileController {
@@ -51,18 +61,33 @@ export class FileController {
     private readonly service: FileService,
     private readonly uploadService: UploadService,
     private readonly fileReferenceService: FileReferenceService,
+    private readonly fileReferenceReconciliationService: FileReferenceReconciliationService,
     private readonly configsService: ConfigsService,
   ) {}
 
+  @Post('/references/reconcile')
+  @HttpCode(200)
+  @Auth()
+  async reconcileFileReferences(
+    @Body({ schema: ReconcileFileReferencesSchema })
+    body: ReconcileFileReferencesDto,
+  ) {
+    return this.fileReferenceReconciliationService.reconcile(body)
+  }
+
   @Delete('/orphans/batch')
   @Auth()
-  async batchDeleteOrphans(@Body() body: BatchOrphanDeleteDto) {
+  async batchDeleteOrphans(
+    @Body({ schema: BatchOrphanDeleteSchema }) body: BatchOrphanDeleteDto,
+  ) {
     return this.fileReferenceService.batchDeleteOrphans(body)
   }
 
   @Get('/orphans/list')
   @Auth()
-  async getOrphanFiles(@Query() query: BasicPagerDto) {
+  async getOrphanFiles(
+    @Query({ schema: BasicPagerSchema }) query: BasicPagerDto,
+  ) {
     const { page = 1, size = 20 } = query
     const { data: files, pagination } =
       await this.fileReferenceService.listOrphanFiles(page, size)
@@ -94,6 +119,7 @@ export class FileController {
   }
 
   @Post('/orphans/cleanup')
+  @HttpCode(200)
   @Auth()
   async cleanupOrphanFiles(@Query('maxAgeMinutes') maxAgeMinutes?: number) {
     return this.fileReferenceService.cleanupOrphanFiles(maxAgeMinutes || 60)
@@ -101,7 +127,10 @@ export class FileController {
 
   @Get('/comment-uploads/list')
   @Auth()
-  async getCommentUploads(@Query() query: CommentUploadsListQueryDto) {
+  async getCommentUploads(
+    @Query({ schema: CommentUploadsListQuerySchema })
+    query: CommentUploadsListQueryDto,
+  ) {
     const { page, size, status, readerId, refId } = query
     const { files, total } = await this.fileReferenceService.listReaderUploads({
       page,
@@ -153,8 +182,8 @@ export class FileController {
   @Get('/:type')
   @Auth()
   async getTypes(
-    @Query() query: BasicPagerDto,
-    @Param() params: FileUploadDto,
+    @Query({ schema: BasicPagerSchema }) query: BasicPagerDto,
+    @Param({ schema: FileUploadSchema }) params: FileUploadDto,
   ) {
     const { type = 'file' } = params
     const dir = await this.service.getDir(type)
@@ -173,7 +202,7 @@ export class FileController {
     return files.sort((a, b) => b.created - a.created)
   }
 
-  @Get('/:type/:name')
+  @Get('/:type/*')
   @Throttle({
     default: {
       limit: 60,
@@ -181,7 +210,18 @@ export class FileController {
     },
   })
   @HTTPDecorators.RawResponse
-  async get(@Param() params: FileQueryDto, @Res() reply: FastifyReply) {
+  async get(
+    @Param('type') routeType: string,
+    @Req() req: FastifyRequest,
+    @Res() reply: FastifyReply,
+  ) {
+    const wildcardName = decodeURIComponent(
+      (req.params as Record<string, string>)['*'],
+    )
+    const params = FileQuerySchema.parse({
+      type: routeType,
+      name: wildcardName,
+    })
     const { type, name } = params
     const ext = path.extname(name)
     const mimetype = lookup(ext)
@@ -205,7 +245,10 @@ export class FileController {
 
   @Post('/upload')
   @Auth()
-  async upload(@Query() query: FileUploadDto, @Req() req: FastifyRequest) {
+  async upload(
+    @Query({ schema: FileUploadSchema }) query: FileUploadDto,
+    @Req() req: FastifyRequest,
+  ) {
     const { type = 'file' } = query
 
     const uploadConfig = await this.configsService.get('fileUploadOptions')
@@ -214,7 +257,7 @@ export class FileController {
     )
     const s3Enabled = imageStorageConfig?.enable === true
 
-    const uploadToS3 = async () => {
+    if (type === 'video' && s3Enabled) {
       const config = imageStorageConfig!
       if (
         !config.endpoint ||
@@ -225,14 +268,11 @@ export class FileController {
         throw createAppException(AppErrorCode.FILE_STORAGE_NOT_CONFIGURED)
       }
 
-      const file = await this.uploadService.getAndValidMultipartField(
-        req,
-        type === 'video'
-          ? { maxFileSize: Number.MAX_SAFE_INTEGER }
-          : { maxFileSize: 20 * 1024 * 1024 },
-      )
+      const file = await this.uploadService.getAndValidMultipartField(req, {
+        maxFileSize: Number.MAX_SAFE_INTEGER,
+      })
 
-      const filename = generateFilename(uploadConfig, {
+      let filename = generateFilename(uploadConfig, {
         originalFilename: file.filename,
         fileType: type,
       })
@@ -246,8 +286,6 @@ export class FileController {
         prefixPath = prefixPath.replace(/\/+$/, '')
       }
 
-      const objectKey = prefixPath ? `${prefixPath}/${filename}` : filename
-
       const s3Uploader = new S3Uploader({
         endpoint: config.endpoint,
         accessKey: config.secretId,
@@ -259,22 +297,18 @@ export class FileController {
         s3Uploader.setCustomDomain(config.customDomain)
       }
 
-      const contentType = lookup(file.filename) || 'application/octet-stream'
+      const objectKey = await resolveUniqueObjectKey(
+        prefixPath ? `${prefixPath}/${filename}` : filename,
+        (key) => s3Uploader.objectExists(key),
+      )
+      filename = path.posix.basename(objectKey)
 
-      let s3Url: string
-      if (type === 'video') {
-        s3Url = await s3Uploader.uploadStream(file.file, objectKey, contentType)
-      } else {
-        const chunks: Buffer[] = []
-        for await (const chunk of file.file) {
-          chunks.push(chunk)
-        }
-        s3Url = await s3Uploader.uploadBuffer(
-          Buffer.concat(chunks),
-          objectKey,
-          contentType,
-        )
-      }
+      const contentType = lookup(file.filename) || 'application/octet-stream'
+      const s3Url = await s3Uploader.uploadStream(
+        file.file,
+        objectKey,
+        contentType,
+      )
 
       await this.fileReferenceService.createPendingReference(
         s3Url,
@@ -285,75 +319,83 @@ export class FileController {
       return { url: s3Url, name: filename }
     }
 
-    if (
-      s3Enabled &&
-      (type === 'image' || type === 'file' || type === 'video')
-    ) {
-      return uploadToS3()
-    }
+    if (type === 'video') {
+      const file = await this.uploadService.getAndValidMultipartField(req, {
+        maxFileSize: (uploadConfig.videoMaxSize ?? 100) * 1024 * 1024,
+      })
 
-    const file = await this.uploadService.getAndValidMultipartField(
-      req,
-      type === 'image'
-        ? {
-            maxFileSize: 20 * 1024 * 1024,
-          }
-        : type === 'video'
-          ? {
-              maxFileSize: (uploadConfig.videoMaxSize ?? 100) * 1024 * 1024,
-            }
-          : undefined,
-    )
+      const rawFilename = generateFilename(uploadConfig, {
+        originalFilename: file.filename,
+        fileType: type,
+      })
 
-    const rawFilename = generateFilename(uploadConfig, {
-      originalFilename: file.filename,
-      fileType: type,
-    })
+      const basePath = generateFilePath(uploadConfig, {
+        originalFilename: file.filename,
+        fileType: type,
+      })
 
-    const basePath = generateFilePath(uploadConfig, {
-      originalFilename: file.filename,
-      fileType: type,
-    })
+      let relativePath: string
+      if (basePath === type || !basePath) {
+        relativePath = rawFilename
+      } else {
+        const pathWithoutType = basePath.startsWith(`${type}/`)
+          ? basePath.slice(Math.max(0, type.length + 1))
+          : basePath
+        relativePath = path.join(pathWithoutType, rawFilename)
+      }
+      relativePath = await this.service.resolveUniqueLocalName(
+        type,
+        relativePath,
+      )
 
-    let relativePath: string
-    if (basePath === type || !basePath) {
-      relativePath = rawFilename
-    } else {
-      const pathWithoutType = basePath.startsWith(`${type}/`)
-        ? basePath.slice(Math.max(0, type.length + 1))
-        : basePath
-      relativePath = path.join(pathWithoutType, rawFilename)
-    }
-
-    await this.service.writeFile(type, relativePath, file.file)
-    if (file.file.truncated) {
-      await this.service.deleteFile(type, relativePath).catch(() => void 0)
-      throw createAppException(AppErrorCode.FILE_TOO_LARGE)
-    }
-    const fileUrl = await this.service.resolveFileUrl(type, relativePath)
-    if (type === 'image') {
+      await this.service.writeFile(type, relativePath, file.file)
+      if (file.file.truncated) {
+        await this.service.deleteFile(type, relativePath).catch(() => void 0)
+        throw createAppException(AppErrorCode.FILE_TOO_LARGE)
+      }
+      const fileUrl = await this.service.resolveFileUrl(type, relativePath)
       await this.fileReferenceService.createPendingReference(
         fileUrl,
         relativePath,
       )
+
+      return { url: fileUrl, name: path.basename(relativePath) }
     }
 
-    return { url: fileUrl, name: path.basename(relativePath) }
-  }
+    const isS3Routed = s3Enabled && (type === 'image' || type === 'file')
+    const maxFileSize =
+      type === 'image' || isS3Routed ? 20 * 1024 * 1024 : undefined
 
-  @Put('/:type/:name')
-  @Auth()
-  async update(@Param() params: FileQueryDto, @Req() req: FastifyRequest) {
-    const { type, name } = params
-    const file = await this.uploadService.getAndValidMultipartField(req)
-    await this.service.updateFile(type, name, file.file)
-    const fileUrl = await this.service.resolveFileUrl(type, name)
-    return { url: fileUrl, name }
+    const file = await this.uploadService.getAndValidMultipartField(
+      req,
+      maxFileSize === undefined ? undefined : { maxFileSize },
+    )
+
+    const chunks: Buffer[] = []
+    for await (const chunk of file.file) {
+      chunks.push(chunk)
+    }
+    const buffer = Buffer.concat(chunks)
+
+    if (!isS3Routed && file.file.truncated) {
+      throw createAppException(AppErrorCode.FILE_TOO_LARGE)
+    }
+
+    const contentType = lookup(file.filename) || 'application/octet-stream'
+
+    return this.service.uploadBuffer(buffer, {
+      type,
+      originalFilename: file.filename,
+      contentType,
+      objectKey: query.immutable
+        ? `versions/${randomUUID()}${path.extname(file.filename)}`
+        : undefined,
+    })
   }
 
   @Delete('/:type/:name')
   @Auth()
-  async delete(@Param() params: FileQueryDto) {
+  async delete(@Param({ schema: FileQuerySchema }) params: FileQueryDto) {
     const { type, name } = params
     await this.service.deleteFile(type, name)
   }
@@ -361,8 +403,8 @@ export class FileController {
   @Auth()
   @Patch('/:type/:name/rename')
   async rename(
-    @Param() params: FileQueryDto,
-    @Query() query: RenameFileQueryDto,
+    @Param({ schema: FileQuerySchema }) params: FileQueryDto,
+    @Query({ schema: RenameFileQuerySchema }) query: RenameFileQueryDto,
   ) {
     const { type, name } = params
     const { newName } = query

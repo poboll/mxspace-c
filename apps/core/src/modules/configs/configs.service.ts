@@ -7,7 +7,12 @@ import { AppErrorCode, createAppException } from '~/common/errors'
 import { BusinessEvents, EventScope } from '~/constants/business-event.constant'
 import { RedisKeys } from '~/constants/cache.constant'
 import { EventBusEvents } from '~/constants/event-bus.constant'
-import type { AIProviderConfig } from '~/modules/ai/ai.types'
+import {
+  type AIModelAssignment,
+  type AIProviderCapability,
+  type AIProviderConfig,
+  AIProviderType,
+} from '~/modules/ai/ai.types'
 import { EventManagerService } from '~/processors/helper/helper.event.service'
 import {
   ConfigVersionScopes,
@@ -17,6 +22,7 @@ import { RedisService } from '~/processors/redis/redis.service'
 import { getRedisKey } from '~/utils/redis.util'
 import { camelcaseKeys } from '~/utils/tool.util'
 
+import { backupEncryptionPublicKey } from '../backup/backup-crypto'
 import { generateDefaultConfig } from './configs.default'
 import {
   decryptObject,
@@ -35,6 +41,45 @@ const aggregateConfigKeys = new Set<keyof IConfig>([
   'seo',
   'url',
 ])
+
+const s3StorageNullDefaults = {
+  endpoint: '',
+  bucket: '',
+  region: 'auto',
+} as const
+
+function normalizeS3StorageOptionNulls<T extends object>(value: T): T {
+  const normalized = { ...value } as Record<string, unknown>
+
+  for (const [key, defaultValue] of Object.entries(s3StorageNullDefaults)) {
+    if (normalized[key] === null) {
+      normalized[key] = defaultValue
+    }
+  }
+
+  return normalized as T
+}
+
+function isGoogleVertexEndpoint(endpoint: string): boolean {
+  try {
+    const url = new URL(endpoint)
+    return (
+      url.hostname === 'aiplatform.googleapis.com' &&
+      url.pathname.endsWith('/endpoints/openapi')
+    )
+  } catch {
+    return false
+  }
+}
+
+function extractGoogleVertexProjectId(endpoint: string): string | undefined {
+  try {
+    const match = new URL(endpoint).pathname.match(/\/projects\/([^/]+)/)
+    return match?.[1] ? decodeURIComponent(match[1]) : undefined
+  } catch {
+    return undefined
+  }
+}
 
 /*
  * NOTE:
@@ -72,7 +117,10 @@ export class ConfigsService implements OnModuleInit {
 
   private async setConfig(config: IConfig) {
     const redis = await this.getRedisClient()
-    await redis.set(getRedisKey(RedisKeys.ConfigCache), JSON.stringify(config))
+    await redis.set(
+      getRedisKey(RedisKeys.ConfigCache),
+      JSON.stringify(encryptObject(cloneDeep(config))),
+    )
   }
 
   private async ensureConfigInitialized(force = false) {
@@ -125,6 +173,8 @@ export class ConfigsService implements OnModuleInit {
     }
 
     const configs = await this.optionsRepository.findAll()
+    const storedAiConfig = configs.find((field) => field.name === 'ai')
+      ?.value as Record<string, any> | undefined
     const mergedConfig = generateDefaultConfig()
     const mergeStoredConfig = <T extends keyof IConfig>(
       name: T,
@@ -154,12 +204,176 @@ export class ConfigsService implements OnModuleInit {
           field.value as Record<string, any>,
         )
         mergeStoredConfig(name, normalized)
+      } else if (name === 'membership') {
+        const normalized = this.normalizeMembershipConfig(
+          field.value as Record<string, any>,
+        )
+        mergeStoredConfig(name, normalized)
       } else {
         mergeStoredConfig(name, field.value)
       }
     })
 
+    mergedConfig.ai = this.normalizeAiConfig(
+      storedAiConfig,
+      mergedConfig.ai,
+      mergedConfig.imageGenerationOptions,
+      mergedConfig.ttsOptions,
+    )
+
     await this.setConfig(mergedConfig)
+  }
+
+  private normalizeAiConfig(
+    storedAiConfig: Record<string, any> | undefined,
+    aiConfig: IConfig['ai'],
+    legacyImageConfig: IConfig['imageGenerationOptions'],
+    legacyTtsConfig: IConfig['ttsOptions'],
+  ): IConfig['ai'] {
+    const providers = (aiConfig.providers ?? []).map((provider) => {
+      const endpoint = provider.endpoint?.trim() ?? ''
+      const isLegacyVertex =
+        provider.type === AIProviderType.OpenAICompatible &&
+        isGoogleVertexEndpoint(endpoint)
+      return {
+        ...provider,
+        ...(isLegacyVertex
+          ? {
+              type: AIProviderType.GoogleVertex,
+              modelListUrl: undefined,
+            }
+          : {}),
+        projectId: provider.projectId ?? extractGoogleVertexProjectId(endpoint),
+        capabilities: isLegacyVertex
+          ? { text: true, image: true, speech: true }
+          : {
+              decision: provider.capabilities?.decision ?? false,
+              text: provider.capabilities?.text ?? true,
+              image: provider.capabilities?.image ?? false,
+              speech: provider.capabilities?.speech ?? false,
+            },
+      }
+    })
+
+    if (storedAiConfig?.version === 2) {
+      return { ...aiConfig, version: 2, providers }
+    }
+
+    const imageGeneration = {
+      enable: legacyImageConfig.enable,
+      model: undefined as { providerId: string; model?: string } | undefined,
+      defaultAspectRatio: legacyImageConfig.defaultAspectRatio,
+      defaultQuality: legacyImageConfig.defaultQuality,
+      defaultFormat: legacyImageConfig.defaultFormat,
+    }
+    const tts = {
+      enable: legacyTtsConfig.enable,
+      model: undefined as { providerId: string; model?: string } | undefined,
+      voice: legacyTtsConfig.voice,
+      speed: legacyTtsConfig.speed,
+      maxCharsPerChunk: legacyTtsConfig.maxCharsPerChunk,
+      concurrency: legacyTtsConfig.concurrency,
+      maxCharsPerRun: legacyTtsConfig.maxCharsPerRun,
+    }
+
+    const addLegacyProvider = (input: {
+      apiKey?: string | null
+      capability: 'image' | 'speech'
+      defaultModel?: string | null
+      endpoint?: string | null
+      id: string
+      name: string
+    }): string | undefined => {
+      if (!input.apiKey) return undefined
+
+      const normalizedEndpoint = input.endpoint?.trim().replace(/\/+$/, '')
+      const existing = providers.find(
+        (provider) =>
+          provider.apiKey === input.apiKey &&
+          provider.endpoint?.trim().replace(/\/+$/, '') === normalizedEndpoint,
+      )
+      if (existing) {
+        existing.capabilities = {
+          text: existing.capabilities?.text ?? true,
+          image: existing.capabilities?.image || input.capability === 'image',
+          speech:
+            existing.capabilities?.speech || input.capability === 'speech',
+        }
+        return existing.id
+      }
+
+      let id = input.id
+      let suffix = 2
+      while (providers.some((provider) => provider.id === id)) {
+        id = `${input.id}-${suffix}`
+        suffix += 1
+      }
+
+      providers.push({
+        id,
+        name: input.name,
+        type: AIProviderType.OpenAICompatible,
+        apiKey: input.apiKey,
+        endpoint: normalizedEndpoint,
+        projectId: undefined,
+        defaultModel: input.defaultModel ?? '',
+        enabled: true,
+        capabilities: {
+          text: false,
+          image: input.capability === 'image',
+          speech: input.capability === 'speech',
+        },
+      })
+      return id
+    }
+
+    const imageProviderId = addLegacyProvider({
+      apiKey: legacyImageConfig.apiKey,
+      capability: 'image',
+      defaultModel: legacyImageConfig.model,
+      endpoint:
+        legacyImageConfig.endpoint ||
+        (legacyImageConfig.provider === 'openrouter'
+          ? 'https://openrouter.ai/api/v1'
+          : undefined),
+      id: '__legacy_image_generation__',
+      name: 'Imported image generation provider',
+    })
+    if (imageProviderId && legacyImageConfig.model) {
+      imageGeneration.model = {
+        providerId: imageProviderId,
+        model: legacyImageConfig.model,
+      }
+    }
+
+    const ttsProviderId = addLegacyProvider({
+      apiKey: legacyTtsConfig.apiKey,
+      capability: 'speech',
+      defaultModel: legacyTtsConfig.model,
+      endpoint:
+        legacyTtsConfig.endpoint ||
+        (legacyTtsConfig.provider === 'openrouter'
+          ? 'https://openrouter.ai/api/v1'
+          : legacyTtsConfig.provider === 'openai'
+            ? 'https://api.openai.com/v1'
+            : undefined),
+      id: '__legacy_tts__',
+      name: 'Imported speech provider',
+    })
+    if (ttsProviderId && legacyTtsConfig.model) {
+      tts.model = {
+        providerId: ttsProviderId,
+        model: legacyTtsConfig.model,
+      }
+    }
+
+    return {
+      ...aiConfig,
+      version: 2,
+      providers,
+      imageGeneration,
+      tts,
+    }
   }
 
   /**
@@ -186,15 +400,30 @@ export class ConfigsService implements OnModuleInit {
     } as IConfig['thirdPartyServiceIntegration']
   }
 
+  private normalizeMembershipConfig(
+    raw: Record<string, any>,
+  ): IConfig['membership'] {
+    const { dodoApiKey, dodoEnvironment, dodoWebhookKey, ...providerConfig } =
+      raw
+
+    return {
+      ...providerConfig,
+      apiKey: providerConfig.apiKey ?? dodoApiKey ?? '',
+      webhookSigningKey:
+        providerConfig.webhookSigningKey ?? dodoWebhookKey ?? '',
+      environment: providerConfig.environment ?? dodoEnvironment ?? 'live_mode',
+    } as IConfig['membership']
+  }
+
   public async get<T extends keyof IConfig>(
     key: T,
   ): Promise<Readonly<IConfig[T]>> {
-    const config = await this.waitForConfigReady()
-    return config[key]
+    const config = await this.getStoredConfig()
+    return decryptObject(config[key], key)
   }
 
   // Single entry point for config reads
-  public async getConfig(errorRetryCount = 3): Promise<Readonly<IConfig>> {
+  private async getStoredConfig(errorRetryCount = 3): Promise<IConfig> {
     await this.ensureConfigInitialized()
 
     const redis = await this.getRedisClient()
@@ -203,11 +432,11 @@ export class ConfigsService implements OnModuleInit {
     if (configCache) {
       try {
         const configValue = JSON.parse(configCache) as IConfig
-        return decryptObject(configValue)
+        return configValue
       } catch (error) {
         await this.ensureConfigInitialized(true)
         if (errorRetryCount > 0) {
-          return await this.getConfig(errorRetryCount - 1)
+          return await this.getStoredConfig(errorRetryCount - 1)
         }
         this.logger.error('Failed to load config')
         throw error
@@ -215,16 +444,19 @@ export class ConfigsService implements OnModuleInit {
     } else {
       await this.ensureConfigInitialized(true)
 
-      return await this.getConfig()
+      return await this.getStoredConfig()
     }
+  }
+
+  public async getConfig(): Promise<Readonly<IConfig>> {
+    return decryptObject(await this.getStoredConfig())
   }
 
   /**
    * Get config with encrypted fields removed (for API response)
    */
   public async getConfigForResponse(): Promise<Readonly<IConfig>> {
-    const config = await this.getConfig()
-    return sanitizeConfigForResponse(config)
+    return sanitizeConfigForResponse(await this.getStoredConfig())
   }
 
   /**
@@ -233,7 +465,7 @@ export class ConfigsService implements OnModuleInit {
   public async getForResponse<T extends keyof IConfig>(
     key: T,
   ): Promise<Readonly<IConfig[T]>> {
-    const config = await this.waitForConfigReady()
+    const config = await this.getStoredConfig()
     const value = config[key]
     return sanitizeConfigForResponse(value as object, key) as IConfig[T]
   }
@@ -245,16 +477,27 @@ export class ConfigsService implements OnModuleInit {
     const config = await this.getConfig()
     const updatedConfigRow = await this.optionsRepository.upsert(
       key as string,
-      mergeWith(cloneDeep(config[key]), data, (old, newer) => {
-        // Arrays are not merged
-        if (Array.isArray(old)) {
-          return newer
-        }
-        // Objects are merged
-        if (typeof old === 'object' && typeof newer === 'object') {
-          return { ...old, ...newer }
-        }
-      }),
+      encryptObject(
+        mergeWith(cloneDeep(config[key]), data, (old, newer, field) => {
+          if (newer === null) {
+            return null
+          }
+          // Arrays are not merged
+          if (Array.isArray(old)) {
+            return newer
+          }
+          // seo.i18n is replaced wholesale, otherwise a shallow object merge
+          // could never drop a locale key that was removed in the patch
+          if (field === 'i18n') {
+            return newer
+          }
+          // Objects are merged
+          if (typeof old === 'object' && typeof newer === 'object') {
+            return { ...old, ...newer }
+          }
+        }),
+        key,
+      ),
     )
     const newData = updatedConfigRow.value as IConfig[T]
     const mergedFullConfig = Object.assign({}, config, { [key]: newData })
@@ -302,6 +545,10 @@ export class ConfigsService implements OnModuleInit {
       IConfig[T]
     >
 
+    if (key === 'backupOptions' || key === 'imageStorageOptions') {
+      value = normalizeS3StorageOptionNulls(value)
+    }
+
     if (key === 'ai') {
       value = await this.hydrateAiProviderApiKeys(value as any)
     }
@@ -315,12 +562,38 @@ export class ConfigsService implements OnModuleInit {
     // If this is the comment settings and AI review is being enabled, validate the AI config
     if (key === 'commentOptions' && (value as any).aiReview === true) {
       const aiConfig = await this.get('ai')
-      const hasEnabledProvider = aiConfig.providers?.some((p) => p.enabled)
+      const hasEnabledProvider = aiConfig.providers?.some(
+        (p) => p.enabled && (p.capabilities?.text ?? true),
+      )
       if (!hasEnabledProvider) {
         throw createAppException(AppErrorCode.AI_PROVIDER_DISABLED)
       }
     }
     const instanceValue = this.validWithDto(dto, value) as Partial<IConfig[T]>
+
+    if (key === 'backupOptions') {
+      const next = await this.buildNextConfigForValidation(key, instanceValue)
+      if (
+        next.backupOptions.encryptionPublicKey ||
+        next.backupOptions.encryptionEnabled
+      ) {
+        try {
+          backupEncryptionPublicKey(next.backupOptions.encryptionPublicKey)
+        } catch (error) {
+          throw createAppException(AppErrorCode.INVALID_PARAMETER, {
+            message: error.message,
+          })
+        }
+      }
+    }
+
+    if (key === 'ai') {
+      const nextConfig = await this.buildNextConfigForValidation(
+        key,
+        instanceValue,
+      )
+      this.validateAiFeatureRoutes(nextConfig.ai)
+    }
 
     if (key === 'mailOptions') {
       const nextConfig = await this.buildNextConfigForValidation(
@@ -330,7 +603,21 @@ export class ConfigsService implements OnModuleInit {
       this.validateMailProvider(nextConfig)
     }
 
-    encryptObject(instanceValue, key)
+    if (key === 'imageGenerationOptions') {
+      const nextConfig = await this.buildNextConfigForValidation(
+        key,
+        instanceValue,
+      )
+      this.validateImageGenerationProvider(nextConfig)
+    }
+
+    if (key === 'ttsOptions') {
+      const nextConfig = await this.buildNextConfigForValidation(
+        key,
+        instanceValue,
+      )
+      this.validateTtsProvider(nextConfig)
+    }
 
     switch (key) {
       case 'url': {
@@ -355,7 +642,10 @@ export class ConfigsService implements OnModuleInit {
         const value = instanceValue as unknown as OAuthConfig
         const current = await this.get('oauth')
 
-        const currentProvidersMap = (current.providers || []).reduce(
+        const currentProviders = (current.providers || []).map((provider) => ({
+          ...provider,
+        }))
+        const currentProvidersMap = currentProviders.reduce(
           (acc, item) => {
             acc[item.type] = item
             return acc
@@ -363,7 +653,6 @@ export class ConfigsService implements OnModuleInit {
           {} as Record<string, any>,
         )
 
-        const currentProviders = current.providers || []
         ;(value.providers || []).forEach((p) => {
           if (!currentProvidersMap[p.type]) {
             currentProviders.push(p)
@@ -372,20 +661,12 @@ export class ConfigsService implements OnModuleInit {
           }
         })
 
-        let nextAuthSecrets = value.secrets
-        if (value.secrets) {
-          nextAuthSecrets = merge(current.secrets, nextAuthSecrets)
-        }
-
-        let nextAuthPublic = value.public
-        if (value.public) {
-          nextAuthPublic = merge(current.public, nextAuthPublic)
-        }
-        const option = await this.patch(key as 'oauth', {
+        const nextOauth = {
           providers: currentProviders,
-          secrets: nextAuthSecrets,
-          public: nextAuthPublic,
-        })
+          public: merge(cloneDeep(current.public || {}), value.public || {}),
+          secrets: merge(cloneDeep(current.secrets || {}), value.secrets || {}),
+        }
+        const option = await this.patch(key as 'oauth', nextOauth)
 
         await this.configVersionService.bump(ConfigVersionScopes.OAuth)
         return option
@@ -408,6 +689,9 @@ export class ConfigsService implements OnModuleInit {
       cloneDeep(current[key]),
       data,
       (old, newer) => {
+        if (newer === null) {
+          return null
+        }
         if (Array.isArray(old)) {
           return newer
         }
@@ -450,7 +734,160 @@ export class ConfigsService implements OnModuleInit {
     }
   }
 
-  private validWithDto(schema: z.ZodTypeAny, value: unknown): any {
+  private validateImageGenerationProvider(config: IConfig) {
+    const { imageGenerationOptions } = config
+
+    if (
+      imageGenerationOptions.provider === 'custom' &&
+      !imageGenerationOptions.endpoint
+    ) {
+      throw createAppException(AppErrorCode.CONFIG_VALIDATION_FAILED, {
+        message:
+          'imageGenerationOptions.endpoint: required when provider is "custom"',
+      })
+    }
+  }
+
+  private validateTtsProvider(config: IConfig) {
+    const { ttsOptions } = config
+
+    if (ttsOptions.provider === 'custom' && !ttsOptions.endpoint) {
+      throw createAppException(AppErrorCode.CONFIG_VALIDATION_FAILED, {
+        message: 'ttsOptions.endpoint: required when provider is "custom"',
+      })
+    }
+  }
+
+  private validateAiFeatureRoutes(aiConfig: IConfig['ai']) {
+    const providerIds = new Set<string>()
+    for (const provider of aiConfig.providers ?? []) {
+      if (providerIds.has(provider.id)) {
+        throw createAppException(AppErrorCode.CONFIG_VALIDATION_FAILED, {
+          message: `ai.providers: duplicate provider id "${provider.id}"`,
+        })
+      }
+      if (
+        provider.type === 'typesafe' &&
+        ((provider.capabilities?.text ?? true) ||
+          provider.capabilities?.image ||
+          provider.capabilities?.speech)
+      ) {
+        throw createAppException(AppErrorCode.CONFIG_VALIDATION_FAILED, {
+          message: 'TypeSafe supports decision capability only',
+        })
+      }
+      providerIds.add(provider.id)
+    }
+
+    const textAssignments = [
+      ['summaryModel', aiConfig.summaryModel],
+      ['writerModel', aiConfig.writerModel],
+      ['commentReviewModel', aiConfig.commentReviewModel],
+      ['translationModel', aiConfig.translationModel],
+      ['translationReviewModel', aiConfig.translationReviewModel],
+      ['fieldTranslationModel', aiConfig.fieldTranslationModel],
+      ['insightsModel', aiConfig.insightsModel],
+      ['insightsTranslationModel', aiConfig.insightsTranslationModel],
+    ] as const
+    for (const [key, assignment] of textAssignments) {
+      if (!assignment?.providerId) continue
+      const provider = aiConfig.providers?.find(
+        (candidate) => candidate.id === assignment.providerId,
+      )
+      if (!provider) {
+        throw createAppException(AppErrorCode.CONFIG_VALIDATION_FAILED, {
+          message: `ai.${key}.providerId: provider "${assignment.providerId}" does not exist`,
+        })
+      }
+      if (!(provider.capabilities?.text ?? true)) {
+        throw createAppException(AppErrorCode.CONFIG_VALIDATION_FAILED, {
+          message: `ai.providers.${provider.id}.capabilities.text: required by ai.${key}`,
+        })
+      }
+      if (!assignment.model?.trim() && !provider.defaultModel.trim()) {
+        throw createAppException(AppErrorCode.CONFIG_VALIDATION_FAILED, {
+          message: `ai.${key}.model: a model or provider default model is required`,
+        })
+      }
+    }
+
+    const decision = aiConfig.decisionModel
+    if (decision?.providerId) {
+      const provider = aiConfig.providers?.find(
+        (p) => p.id === decision.providerId,
+      )
+      if (
+        !provider?.capabilities?.decision ||
+        provider.type !== 'typesafe' ||
+        !(decision.model?.trim() || provider.defaultModel?.trim())
+      ) {
+        throw createAppException(AppErrorCode.CONFIG_VALIDATION_FAILED, {
+          message:
+            'Decision model requires a TypeSafe provider with decision capability and a model',
+        })
+      }
+    }
+
+    const mediaAssignments = [
+      ['imageGeneration', 'image', aiConfig.imageGeneration?.model],
+      ['tts', 'speech', aiConfig.tts?.model],
+    ] as const
+    for (const [feature, capability, assignment] of mediaAssignments) {
+      if (!assignment?.providerId) continue
+      const provider = aiConfig.providers?.find(
+        (candidate) => candidate.id === assignment.providerId,
+      )
+      if (!provider) {
+        throw createAppException(AppErrorCode.CONFIG_VALIDATION_FAILED, {
+          message: `ai.${feature}.model.providerId: provider "${assignment.providerId}" does not exist`,
+        })
+      }
+      if (!provider.capabilities?.[capability]) {
+        throw createAppException(AppErrorCode.CONFIG_VALIDATION_FAILED, {
+          message: `ai.providers.${provider.id}.capabilities.${capability}: required by ai.${feature}`,
+        })
+      }
+    }
+
+    const validateRoute = (
+      feature: 'imageGeneration' | 'tts',
+      capability: 'image' | 'speech',
+    ) => {
+      const config = aiConfig[feature]
+      if (!config?.enable) return
+
+      const providerId = config.model?.providerId
+      const provider = aiConfig.providers?.find(
+        (candidate) => candidate.id === providerId,
+      )
+      if (!providerId || !provider || !provider.enabled) {
+        throw createAppException(AppErrorCode.CONFIG_VALIDATION_FAILED, {
+          message: `ai.${feature}.model.providerId: an enabled provider is required`,
+        })
+      }
+      if (!provider.capabilities?.[capability]) {
+        throw createAppException(AppErrorCode.CONFIG_VALIDATION_FAILED, {
+          message: `ai.providers.${provider.id}.capabilities.${capability}: required by ai.${feature}`,
+        })
+      }
+      if (!config.model?.model?.trim()) {
+        throw createAppException(AppErrorCode.CONFIG_VALIDATION_FAILED, {
+          message: `ai.${feature}.model.model: a model is required`,
+        })
+      }
+    }
+
+    validateRoute('imageGeneration', 'image')
+    validateRoute('tts', 'speech')
+
+    if (aiConfig.tts?.enable && !aiConfig.tts.voice) {
+      throw createAppException(AppErrorCode.CONFIG_VALIDATION_FAILED, {
+        message: 'ai.tts.voice: required when TTS is enabled',
+      })
+    }
+  }
+
+  private validWithDto(schema: z.ZodType, value: unknown): any {
     const result = schema.safeParse(value)
     if (!result.success) {
       const zodError = result.error as ZodError
@@ -476,6 +913,24 @@ export class ConfigsService implements OnModuleInit {
     const cachedProvider = aiConfig.providers?.find((p) => p.id === providerId)
 
     return cachedProvider || null
+  }
+
+  public async resolveAiProviderForCapability(
+    capability: Exclude<AIProviderCapability, 'text'>,
+    assignment?: AIModelAssignment | null,
+  ): Promise<{ model?: string; provider: AIProviderConfig } | null> {
+    if (!assignment?.providerId) return null
+
+    const aiConfig = await this.get('ai')
+    const provider = aiConfig.providers?.find(
+      (candidate) =>
+        candidate.id === assignment.providerId &&
+        candidate.enabled &&
+        candidate.capabilities?.[capability],
+    )
+    if (!provider) return null
+
+    return { model: assignment.model?.trim() || undefined, provider }
   }
 
   private async hydrateAiProviderApiKeys(value: any) {

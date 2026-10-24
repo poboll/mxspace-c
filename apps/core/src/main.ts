@@ -20,14 +20,17 @@ process.title = `Mix Space (${cluster.isPrimary ? 'master' : 'worker'}) - ${
 export async function startMain() {
   initializeApp()
 
+  const importStartedAt = performance.now()
   const [{ bootstrap }, { CLUSTER, ENCRYPT }, { Cluster }] = await Promise.all([
     import('./bootstrap'),
     import('./app.config.js'),
     import('./cluster'),
   ])
+  logger.log(
+    `Startup imports: ${Math.round(performance.now() - importStartedAt)}ms`,
+  )
 
   if (!CLUSTER.enable || cluster.isPrimary || isMainCluster) {
-    logger.debug(process.argv)
     logger.log('cwd: ', cwd)
   }
 
@@ -39,13 +42,7 @@ export async function startMain() {
       process.exit(1)
     }
 
-    logger.debug('encrypt key: ', ENCRYPT.key)
-    logger.log(
-      `Encrypt is enabled, please remember encrypt key. Your key is starts with ${ENCRYPT.key.slice(
-        0,
-        3,
-      )}`,
-    )
+    logger.log('Secret encryption is enabled')
   }
 
   DEBUG_MODE.memoryDump && registerForMemoryDump()

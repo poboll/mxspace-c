@@ -3,78 +3,135 @@ import type { LucideIcon } from 'lucide-react'
 import type { ConfigFormGroup } from '~/api/options'
 import type { TranslationKey } from '~/i18n/types'
 
-export type AIProviderType = 'anthropic' | 'generic' | 'openai-compatible'
+export type AIProviderType =
+  'anthropic' | 'generic' | 'google-vertex' | 'openai-compatible' | 'typesafe'
+export type AIProviderCapability = 'decision' | 'image' | 'speech' | 'text'
+
+export interface AIProviderCapabilities {
+  decision?: boolean
+  image: boolean
+  speech: boolean
+  text: boolean
+}
 
 export interface AIProviderConfig {
   apiKey: string
+  appendV1?: boolean
+  capabilities?: AIProviderCapabilities
   contextWindow?: number | null
   defaultModel: string
   enabled: boolean
   endpoint?: string
   id: string
   maxTokens?: number | null
+  modelListUrl?: string
   name: string
+  projectId?: string
   type: AIProviderType
+  voiceListUrl?: string
 }
+
+export type AIReasoningEffort = 'none' | 'low' | 'medium' | 'high'
 
 export interface AIModelAssignment {
   model?: string
   providerId?: string
+  reasoningEffort?: AIReasoningEffort
 }
 
 export interface AIConfig {
-  commentReviewModel?: AIModelAssignment
-  enableAutoGenerateInsightsOnCreate?: boolean
-  enableAutoGenerateInsightsOnUpdate?: boolean
-  enableAutoGenerateSummaryOnCreate?: boolean
-  enableAutoGenerateSummaryOnUpdate?: boolean
-  enableAutoGenerateTranslation?: boolean
+  version?: 2
+  decisionModel?: AIModelAssignment | null
+  commentReviewModel?: AIModelAssignment | null
   enableAutoTranslateInsights?: boolean
   enableInsights?: boolean
   enableSummary?: boolean
   enableTranslation?: boolean
   enableTranslationReview?: boolean
-  insightsMinTextLength?: number
-  insightsModel?: AIModelAssignment
+  insightsModel?: AIModelAssignment | null
   insightsTargetLanguages?: string[]
-  insightsTranslationModel?: AIModelAssignment
+  insightsTranslationModel?: AIModelAssignment | null
+  imageGeneration?: {
+    defaultAspectRatio?: string
+    defaultFormat?: 'jpeg' | 'png' | 'webp'
+    defaultQuality?: 'high' | 'low' | 'standard'
+    enable?: boolean
+    model?: AIModelAssignment | null
+  }
   providers?: AIProviderConfig[]
-  summaryMinTextLength?: number
-  summaryModel?: AIModelAssignment
+  summaryModel?: AIModelAssignment | null
   summaryTargetLanguages?: string[]
-  translationModel?: AIModelAssignment
-  translationReviewModel?: AIModelAssignment
-  translationReviewScoreThreshold?: number
+  translationModel?: AIModelAssignment | null
+  translationReviewModel?: AIModelAssignment | null
+  fieldTranslationModel?: AIModelAssignment | null
   translationTargetLanguages?: string[]
-  writerModel?: AIModelAssignment
+  tts?: {
+    concurrency?: number
+    enable?: boolean
+    maxCharsPerChunk?: number
+    maxCharsPerRun?: number
+    model?: AIModelAssignment | null
+    speed?: number
+    voice?: string
+  }
+  writerModel?: AIModelAssignment | null
 }
 
 export interface AIProviderModel {
   id: string
   name: string
+  pricing?: AIModelPricing
+  supportedVoices?: string[]
 }
 
-export type SettingsGroupType = 'account' | 'meta-preset' | 'system' | 'user'
-export type OauthProviderType = 'github' | 'google'
+export interface AIModelPricing {
+  completion?: string
+  image?: string
+  prompt?: string
+  request?: string
+  unit: 'character' | 'token'
+}
+
+export interface SeoI18nOverlay {
+  description?: string
+  keywords?: string[]
+  title?: string
+}
+
+export type SettingsGroupType =
+  'account' | 'maintenance' | 'meta-preset' | 'system' | 'user'
+export type OauthProviderType = 'apple' | 'github' | 'google'
 
 export interface OauthOptions {
   providers?: Array<{
     enabled?: boolean
     type: OauthProviderType
   }>
-  public?: Partial<
-    Record<
-      OauthProviderType,
-      {
-        clientId?: string
-      }
-    >
-  >
+  public?: Partial<Record<OauthProviderType, Record<string, string>>>
+}
+
+export interface OauthProviderField {
+  descriptionKey?: TranslationKey
+  key: string
+  label: string
+  multiline?: boolean
+  optional?: boolean
+  placeholder?: string
+  placeholderKey?: TranslationKey
+  secret?: boolean
 }
 
 export interface FlatOauthProvider {
-  clientId: string
+  configured: boolean
   enabled: boolean
+  public: Record<string, string>
+  type: OauthProviderType
+}
+
+export interface OauthProviderPayload {
+  enabled: boolean
+  public: Record<string, string>
+  secrets: Record<string, string>
   type: OauthProviderType
 }
 

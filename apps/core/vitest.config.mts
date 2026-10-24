@@ -4,6 +4,9 @@ import path, { resolve } from 'node:path'
 import swc from 'unplugin-swc'
 import tsconfigPath from 'vite-tsconfig-paths'
 import { defineConfig } from 'vitest/config'
+import zodCompiler from 'zod-compiler/vite'
+
+import { zodCompilerOptions } from './zod-compiler.config'
 
 if (
   existsSync(
@@ -16,6 +19,18 @@ if (
     { recursive: true },
   )
 }
+
+// @mx-space/ai resolves its own peer variant of these from packages/ai; without
+// dedupe the server would load two pi-ai copies with separate provider registries.
+const sharedAiDependencies = [
+  '@earendil-works/pi-agent-core',
+  '@earendil-works/pi-ai',
+  '@haklex/rich-headless',
+  '@innei/message-engine',
+  'lexical',
+  'typebox',
+  'zod',
+]
 
 export default defineConfig({
   root: './test',
@@ -31,6 +46,7 @@ export default defineConfig({
   },
 
   resolve: {
+    dedupe: sharedAiDependencies,
     alias: {
       '~/app.config': resolve(__dirname, './src/app.config.test.ts'),
       '~/common/decorators/auth.decorator': resolve(
@@ -49,6 +65,7 @@ export default defineConfig({
   },
 
   plugins: [
+    zodCompiler(zodCompilerOptions),
     swc.vite(),
 
     tsconfigPath({

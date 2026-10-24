@@ -25,23 +25,30 @@ export function AppProviders(props: PropsWithChildren) {
             <ContextMenuHost />
           </I18nProvider>
         </FloatLayerProvider>
-        <Toaster
-          closeButton
-          gap={12}
-          position="bottom-right"
-          theme={isDark ? 'dark' : 'light'}
-          toastOptions={{
-            classNames: {
-              actionButton: 'sonner-action-button',
-              cancelButton: 'sonner-cancel-button',
-              closeButton: 'sonner-close-button',
-              description: 'sonner-description',
-              title: 'sonner-title',
-              toast: 'sonner-toast',
-            },
-          }}
-        />
+        <AppToaster isDark={isDark} />
       </QueryClientProvider>
     </JotaiProvider>
+  )
+}
+
+function AppToaster({ isDark }: { isDark: boolean }) {
+  return (
+    <Toaster
+      closeButton
+      gap={12}
+      offset={{ bottom: 68, right: 16 }}
+      position="bottom-right"
+      theme={isDark ? 'dark' : 'light'}
+      toastOptions={{
+        classNames: {
+          actionButton: 'sonner-action-button',
+          cancelButton: 'sonner-cancel-button',
+          closeButton: 'sonner-close-button',
+          description: 'sonner-description',
+          title: 'sonner-title',
+          toast: 'sonner-toast',
+        },
+      }}
+    />
   )
 }

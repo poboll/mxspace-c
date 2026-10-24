@@ -1,5 +1,7 @@
 import { forwardRef, Module } from '@nestjs/common'
 
+import { DraftModule } from '../draft/draft.module'
+import { MembershipModule } from '../membership/membership.module'
 import { NoteModule } from '../note/note.module'
 import { TopicModule } from '../topic/topic.module'
 import { AiController } from './ai.controller'
@@ -8,11 +10,21 @@ import { AiAgentController } from './ai-agent/ai-agent.controller'
 import { AiAgentChatService } from './ai-agent/ai-agent-chat.service'
 import { AiAgentConversationRepository } from './ai-agent/ai-agent-conversation.repository'
 import { AiAgentConversationService } from './ai-agent/ai-agent-conversation.service'
+import { AiGenerationMetricsRepository } from './ai-generation-metrics/ai-generation-metrics.repository'
+import { AiGenerationMetricsService } from './ai-generation-metrics/ai-generation-metrics.service'
+import { AiImageController } from './ai-image/ai-image.controller'
+import { AiImageService } from './ai-image/ai-image.service'
 import { AiInFlightService } from './ai-inflight/ai-inflight.service'
+import { AiInsightsAdapter } from './ai-insights/ai-insights.adapter'
 import { AiInsightsController } from './ai-insights/ai-insights.controller'
 import { AiInsightsRepository } from './ai-insights/ai-insights.repository'
 import { AiInsightsService } from './ai-insights/ai-insights.service'
 import { AiInsightsTranslationService } from './ai-insights/ai-insights-translation.service'
+import { MultilangGenerationService } from './ai-multilang/ai-multilang.service'
+import { AiOverviewController } from './ai-overview/ai-overview.controller'
+import { AiOverviewRepository } from './ai-overview/ai-overview.repository'
+import { AiOverviewService } from './ai-overview/ai-overview.service'
+import { AiSummaryAdapter } from './ai-summary/ai-summary.adapter'
 import { AiSummaryController } from './ai-summary/ai-summary.controller'
 import { AiSummaryRepository } from './ai-summary/ai-summary.repository'
 import { AiSummaryService } from './ai-summary/ai-summary.service'
@@ -35,20 +47,39 @@ import {
   LEXICAL_TRANSLATION_STRATEGY,
   MARKDOWN_TRANSLATION_STRATEGY,
 } from './ai-translation/translation-strategy.interface'
+import { AiTtsController } from './ai-tts/ai-tts.controller'
+import { AiTtsRepository } from './ai-tts/ai-tts.repository'
+import { AiTtsService } from './ai-tts/ai-tts.service'
+import { AiTtsQueryService } from './ai-tts/ai-tts-query.service'
+import { TtsVoiceCatalogService } from './ai-tts/tts-voice-catalog.service'
 import { AiSlugBackfillService } from './ai-writer/ai-slug-backfill.service'
 import { AiWriterController } from './ai-writer/ai-writer.controller'
 import { AiWriterService } from './ai-writer/ai-writer.service'
 
 @Module({
-  imports: [AiTaskModule, TopicModule, forwardRef(() => NoteModule)],
+  imports: [
+    AiTaskModule,
+    TopicModule,
+    DraftModule,
+    MembershipModule,
+    forwardRef(() => NoteModule),
+  ],
   providers: [
+    MultilangGenerationService,
     AiSummaryService,
     AiSummaryRepository,
+    AiSummaryAdapter,
     AiInsightsService,
     AiInsightsRepository,
+    AiInsightsAdapter,
     AiInsightsTranslationService,
+    AiGenerationMetricsRepository,
+    AiGenerationMetricsService,
+    AiOverviewService,
+    AiOverviewRepository,
     AiInFlightService,
     AiService,
+    AiImageService,
     AiWriterService,
     AiSlugBackfillService,
     {
@@ -70,15 +101,22 @@ import { AiWriterService } from './ai-writer/ai-writer.service'
     AiAgentChatService,
     AiAgentConversationService,
     AiAgentConversationRepository,
+    AiTtsService,
+    AiTtsRepository,
+    AiTtsQueryService,
+    TtsVoiceCatalogService,
   ],
   controllers: [
     AiController,
+    AiImageController,
     AiSummaryController,
     AiInsightsController,
+    AiOverviewController,
     AiWriterController,
     AiTranslationController,
     TranslationEntryController,
     AiAgentController,
+    AiTtsController,
   ],
   exports: [
     AiService,
@@ -89,6 +127,9 @@ import { AiWriterService } from './ai-writer/ai-writer.service'
     AiSummaryService,
     AiInsightsService,
     TranslationEntryService,
+    AiTtsService,
+    AiTtsQueryService,
+    AiGenerationMetricsService,
   ],
 })
 export class AiModule {}

@@ -2,15 +2,19 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Loader2, Mail } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
-import type { ConfigFormGroup, ConfigFormSchema } from '~/api/options'
 
 import { sendTestEmail } from '~/api/health'
+import type { ConfigFormGroup, ConfigFormSchema } from '~/api/options'
 import { getAllOptions, patchOption } from '~/api/options'
+import { presentEnableBackupEncryption } from '~/features/backup/components/BackupKeyModals'
 import { useI18n } from '~/i18n'
+import { messages } from '~/i18n/resources'
+import type { TranslationKey } from '~/i18n/types'
 import { adminQueryKeys } from '~/query/keys'
 import { Button } from '~/ui/primitives/button'
 
-import { settingsQueryKey } from '../constants'
+import { settingsQueryKey, systemGroupTranslationKeys } from '../constants'
+import type { MembershipConfigValue } from '../utils/membership'
 import {
   cloneJson,
   getErrorMessage,
@@ -20,7 +24,9 @@ import {
 } from '../utils/settings'
 import { AIConfigEditor } from './ai/AIConfigEditor'
 import { ConfigSectionFields } from './config/ConfigSectionFields'
+import { MembershipConfigEditor } from './membership/MembershipConfigEditor'
 import { presentTestAiReview } from './modals/TestAiReviewModal'
+import { SeoConfigEditor } from './seo/SeoConfigEditor'
 import { useSettingsActionBarSetter } from './SettingsActionBar'
 import { SettingsSection, SettingsSkeleton } from './SettingsPrimitives'
 
@@ -28,7 +34,7 @@ export function SystemSettings(props: {
   activeGroup: ConfigFormGroup
   schema?: ConfigFormSchema
 }) {
-  const { t } = useI18n()
+  const { locale, t } = useI18n()
   const queryClient = useQueryClient()
   const setDirtyAction = useSettingsActionBarSetter()
   const [configs, setConfigs] = useState<Record<string, unknown>>({})
@@ -66,7 +72,18 @@ export function SystemSettings(props: {
       toast.success(
         t('settings.common.savedAll', { count: dirtySections.length }),
       )
-      await queryClient.invalidateQueries({ queryKey: settingsQueryKey })
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: settingsQueryKey }),
+        queryClient.invalidateQueries({
+          queryKey: adminQueryKeys.ai.imageGenerationOptions(),
+        }),
+        queryClient.invalidateQueries({
+          queryKey: adminQueryKeys.ai.ttsOptions(),
+        }),
+        queryClient.invalidateQueries({
+          queryKey: adminQueryKeys.ai.ttsVoicesRoot,
+        }),
+      ])
     },
   })
 
@@ -88,8 +105,37 @@ export function SystemSettings(props: {
   })
 
   const updateValue = (path: string, value: unknown) => {
+    if (path === 'backupOptions.encryptionEnabled' && value === true) {
+      void (async () => {
+        const publicKey = await presentEnableBackupEncryption()
+        if (!publicKey) return
+        setConfigs((current) =>
+          setPathImmutable(
+            setPathImmutable(
+              current,
+              'backupOptions.encryptionPublicKey',
+              publicKey,
+            ),
+            path,
+            true,
+          ),
+        )
+      })()
+      return
+    }
     setConfigs((current) => setPathImmutable(current, path, value))
   }
+
+  const handleFieldAction = useCallback(
+    (actionId: string) => {
+      if (actionId === 'test-ai-review') void presentTestAiReview()
+      else
+        toast.warning(
+          t('settings.common.section.unknownAction', { action: actionId }),
+        )
+    },
+    [t],
+  )
 
   const discardChanges = useCallback(() => {
     setConfigs(cloneJson(origin))
@@ -114,65 +160,91 @@ export function SystemSettings(props: {
     return () => setDirtyAction(null)
   }, [hasDirty, dirtyCount, saving, saveMutate, discardChanges, setDirtyAction])
 
-  if (optionsQuery.isLoading)
-    return <SettingsSkeleton title={props.activeGroup.title} />
+  if (optionsQuery.isLoading) {
+    const titleKey = systemGroupTranslationKeys[props.activeGroup.key]?.titleKey
+    return (
+      <SettingsSkeleton
+        title={titleKey ? t(titleKey) : props.activeGroup.title}
+      />
+    )
+  }
 
   return (
     <div className="space-y-10">
       {props.activeGroup.sections
         .filter((section) => !section.hidden)
-        .map((section) => (
-          <SettingsSection
-            actions={
-              section.key === 'mailOptions' ? (
-                <Button
-                  disabled={testEmailMutation.isPending}
-                  onClick={() => testEmailMutation.mutate()}
-                  type="button"
-                  variant="subtle"
-                >
-                  {testEmailMutation.isPending ? (
-                    <Loader2
-                      aria-hidden="true"
-                      className="size-4 animate-spin"
-                    />
-                  ) : (
-                    <Mail aria-hidden="true" className="size-4" />
-                  )}
-                  {t('settings.system.section.sendTestEmail')}
-                </Button>
-              ) : null
-            }
-            description={section.description}
-            dirty={dirtySections.includes(section.key)}
-            key={section.key}
-            title={section.title}
-          >
-            {section.key === 'ai' ? (
-              <AIConfigEditor
-                modelCacheKey={adminQueryKeys.settings.aiModels()}
-                onChange={(value) => updateValue(section.key, value)}
-                value={normalizeAIConfig(configs[section.key])}
-              />
-            ) : (
-              <ConfigSectionFields
-                fields={section.fields}
-                formData={configs}
-                onAction={(actionId) => {
-                  if (actionId === 'test-ai-review') void presentTestAiReview()
-                  else
-                    toast.warning(
-                      t('settings.common.section.unknownAction', {
-                        action: actionId,
-                      }),
-                    )
-                }}
-                prefix={section.key}
-                updateValue={updateValue}
-              />
-            )}
-          </SettingsSection>
-        ))}
+        .map((section) => {
+          const titleKey =
+            `settings.schema.${section.key}.title` as TranslationKey
+          const descriptionKey =
+            `settings.schema.${section.key}.description` as TranslationKey
+          return (
+            <SettingsSection
+              actions={
+                section.key === 'mailOptions' ? (
+                  <Button
+                    disabled={testEmailMutation.isPending}
+                    onClick={() => testEmailMutation.mutate()}
+                    type="button"
+                    variant="subtle"
+                  >
+                    {testEmailMutation.isPending ? (
+                      <Loader2
+                        aria-hidden="true"
+                        className="size-4 animate-spin"
+                      />
+                    ) : (
+                      <Mail aria-hidden="true" className="size-4" />
+                    )}
+                    {t('settings.system.section.sendTestEmail')}
+                  </Button>
+                ) : null
+              }
+              description={
+                Object.hasOwn(messages[locale], descriptionKey)
+                  ? t(descriptionKey)
+                  : section.description
+              }
+              dirty={dirtySections.includes(section.key)}
+              key={section.key}
+              title={
+                Object.hasOwn(messages[locale], titleKey)
+                  ? t(titleKey)
+                  : section.title
+              }
+            >
+              {section.key === 'ai' ? (
+                <AIConfigEditor
+                  modelCacheKey={adminQueryKeys.settings.aiModels()}
+                  onChange={(value) => updateValue(section.key, value)}
+                  value={normalizeAIConfig(configs[section.key])}
+                />
+              ) : section.key === 'seo' ? (
+                <SeoConfigEditor
+                  fields={section.fields}
+                  formData={configs}
+                  onAction={handleFieldAction}
+                  prefix={section.key}
+                  updateValue={updateValue}
+                />
+              ) : section.key === 'membership' ? (
+                <MembershipConfigEditor
+                  fields={section.fields}
+                  onChange={(value) => updateValue(section.key, value)}
+                  value={(configs[section.key] ?? {}) as MembershipConfigValue}
+                />
+              ) : (
+                <ConfigSectionFields
+                  fields={section.fields}
+                  formData={configs}
+                  onAction={handleFieldAction}
+                  prefix={section.key}
+                  updateValue={updateValue}
+                />
+              )}
+            </SettingsSection>
+          )
+        })}
     </div>
   )
 }

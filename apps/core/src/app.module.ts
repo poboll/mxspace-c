@@ -1,4 +1,3 @@
-import { LoggerModule } from '@innei/pretty-logger-nestjs'
 import type {
   DynamicModule,
   MiddlewareConsumer,
@@ -25,11 +24,15 @@ import { ActivityModule } from './modules/activity/activity.module'
 import { AggregateModule } from './modules/aggregate/aggregate.module'
 import { AiModule } from './modules/ai/ai.module'
 import { AnalyzeModule } from './modules/analyze/analyze.module'
+import { ArticleBodyModule } from './modules/article-body/article-body.module'
 import { AuthModule } from './modules/auth/auth.module'
+import { ReviewDemoModule } from './modules/auth/review-demo.module'
 import { BackupModule } from './modules/backup/backup.module'
 import { CategoryModule } from './modules/category/category.module'
 import { CommentModule } from './modules/comment/comment.module'
+import { CompanionModule } from './modules/companion/companion.module'
 import { ConfigsModule } from './modules/configs/configs.module'
+import { ContentMigrationModule } from './modules/content-migration/content-migration.module'
 import { CronTaskModule } from './modules/cron-task/cron-task.module'
 import { DebugModule } from './modules/debug/debug.module'
 import { DependencyModule } from './modules/dependency/dependency.module'
@@ -42,6 +45,7 @@ import { HelperModule as BizHelperModule } from './modules/helper/helper.module'
 import { InitModule } from './modules/init/init.module'
 import { LinkModule } from './modules/link/link.module'
 import { MarkdownModule } from './modules/markdown/markdown.module'
+import { MembershipModule } from './modules/membership/membership.module'
 import { MetaPresetModule } from './modules/meta-preset/meta-preset.module'
 import { NoteModule } from './modules/note/note.module'
 import { OptionModule } from './modules/option/option.module'
@@ -51,6 +55,8 @@ import { PageProxyModule } from './modules/pageproxy/pageproxy.module'
 import { PollModule } from './modules/poll/poll.module'
 import { PostModule } from './modules/post/post.module'
 import { ProjectModule } from './modules/project/project.module'
+import { PublishModule } from './modules/publish/publish.module'
+import { PushModule } from './modules/push/push.module'
 import { ReaderModule } from './modules/reader/reader.module'
 import { RecentlyModule } from './modules/recently/recently.module'
 import { RenderEjsModule } from './modules/render/render.module'
@@ -70,13 +76,14 @@ import { AgentBrowserModule } from './processors/agent-browser/agent-browser.mod
 import { DatabaseModule } from './processors/database/database.module'
 import { GatewayModule } from './processors/gateway/gateway.module'
 import { HelperModule } from './processors/helper/helper.module'
+import { PrettyLoggerModule } from './processors/logger/pretty-logger.module'
 import { RedisModule } from './processors/redis/redis.module'
 import { TaskQueueModule } from './processors/task-queue/task-queue.module'
 import { SampleResponseInterceptor } from './shared/sample/sample-response.interceptor'
 
 @Module({
   imports: [
-    LoggerModule,
+    PrettyLoggerModule,
     DatabaseModule,
     AppMigrationsModule,
     RedisModule,
@@ -87,14 +94,18 @@ import { SampleResponseInterceptor } from './shared/sample/sample-response.inter
     AckModule,
     ActivityModule,
     AggregateModule,
+    ArticleBodyModule,
     AnalyzeModule,
     EnrichmentModule,
     AuthModule.forRoot(),
+    ReviewDemoModule,
     BackupModule,
     BizHelperModule,
     CategoryModule,
     CommentModule,
+    CompanionModule,
     ConfigsModule,
+    ContentMigrationModule,
     CronTaskModule,
 
     DependencyModule,
@@ -104,13 +115,16 @@ import { SampleResponseInterceptor } from './shared/sample/sample-response.inter
     HealthModule,
     LinkModule,
     MarkdownModule,
+    MembershipModule,
     MetaPresetModule,
     NoteModule,
     OptionModule,
     PageModule,
     PollModule,
     PostModule,
+    PublishModule,
     ProjectModule,
+    PushModule,
     RecentlyModule,
     ReaderModule,
     SayModule,

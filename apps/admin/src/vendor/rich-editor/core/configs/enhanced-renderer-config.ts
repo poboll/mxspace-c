@@ -4,12 +4,14 @@ import {
   BANNER_NODE_KEY,
   CODE_BLOCK_NODE_KEY,
   IMAGE_NODE_KEY,
+  KATEX_NODE_KEY,
   LINK_CARD_NODE_KEY,
   MENTION_NODE_KEY,
   MERMAID_NODE_KEY,
   RUBY_NODE_KEY,
   VIDEO_NODE_KEY,
 } from '@haklex/rich-editor'
+import { KaTeXRenderer } from '@haklex/rich-editor/renderers'
 import { CHAT_NODE_KEY } from '@haklex/rich-ext-chat/node'
 import { ChatRenderer } from '@haklex/rich-ext-chat/renderer'
 import { CODE_SNIPPET_NODE_KEY } from '@haklex/rich-ext-code-snippet/node'
@@ -17,9 +19,12 @@ import { CodeSnippetRenderer } from '@haklex/rich-ext-code-snippet/renderer'
 import { DYNAMIC_NODE_KEY } from '@haklex/rich-ext-dynamic/static'
 import { GALLERY_NODE_KEY } from '@haklex/rich-ext-gallery/node'
 import { GalleryRenderer } from '@haklex/rich-ext-gallery/renderer'
+import { STEPS_NODE_KEY } from '@haklex/rich-ext-steps/node'
+import { StepsRenderer } from '@haklex/rich-ext-steps/renderer'
 import { AlertRenderer } from '@haklex/rich-renderer-alert/static'
 import { BannerRenderer } from '@haklex/rich-renderer-banner/static'
 import { CodeBlockRenderer } from '@haklex/rich-renderer-codeblock/static'
+import { FileRenderer } from '@haklex/rich-renderer-file/static'
 import { ImageRenderer } from '@haklex/rich-renderer-image/static'
 import { LinkCardRenderer } from '@haklex/rich-renderer-linkcard/static'
 import { MentionRenderer } from '@haklex/rich-renderer-mention/static'
@@ -36,15 +41,18 @@ export const enhancedRendererConfig: RendererConfig = {
   [ALERT_NODE_KEY]: AlertRenderer,
   [BANNER_NODE_KEY]: BannerRenderer,
   [CHAT_NODE_KEY]: ChatRenderer,
+  [STEPS_NODE_KEY]: StepsRenderer,
   [CODE_BLOCK_NODE_KEY]: CodeBlockRenderer,
   [CODE_SNIPPET_NODE_KEY]: CodeSnippetRenderer,
   [DYNAMIC_NODE_KEY]: MxDynamicRenderer,
   [GALLERY_NODE_KEY]: GalleryRenderer,
   [IMAGE_NODE_KEY]: ImageRenderer,
+  [KATEX_NODE_KEY]: KaTeXRenderer,
   [LINK_CARD_NODE_KEY]: LinkCardRenderer,
   [MAP_NODE_KEY]: MapBlockReadonly,
   [MENTION_NODE_KEY]: MentionRenderer,
   [MERMAID_NODE_KEY]: MermaidRenderer,
   [RUBY_NODE_KEY]: RubyRenderer,
   [VIDEO_NODE_KEY]: VideoRenderer,
+  File: FileRenderer,
 }

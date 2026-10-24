@@ -1,6 +1,7 @@
-import { NodeContext } from '@effect/platform-node'
+import { NodeServices } from '@effect/platform-node'
 import { describe, expect, it, vi } from '@effect/vitest'
 import { Effect, Layer, Option } from 'effect'
+import { handler } from '../../helper/handler'
 
 import { Api } from '../../../src/services/Api'
 import { Auth, type AuthService } from '../../../src/services/Auth'
@@ -87,6 +88,7 @@ const baseEmpty = {
   state: none<'publish' | 'draft'>(),
   tags: none<string>(),
   copyright: none<string>(),
+  premium: none<string>(),
   pin: none<string>(),
   pinOrder: none<number>(),
   related: none<string>(),
@@ -107,14 +109,14 @@ const makeLayer = (http: ReturnType<typeof testHttpLayer>) => {
     Renderer.Default,
     Resolver.Default.pipe(Layer.provide(apiLayer)),
     Lexical.Default,
-    NodeContext.layer,
+    NodeServices.layer,
   )
 }
 
 describe('post create command', () => {
-  it('builds payload from inline lexical content and POSTs /posts', async () => {
+  it('builds payload from inline lexical content and creates a branch', async () => {
     const http = testHttpLayer({
-      'POST https://blog.example.com/api/v2/posts': {
+      'POST https://blog.example.com/api/v2/drafts': {
         status: 200,
         body: { id: '1', title: 't' },
       },
@@ -123,7 +125,7 @@ describe('post create command', () => {
       .spyOn(process.stdout, 'write')
       .mockImplementation(() => true)
     try {
-      const program = create.handler({
+      const program = handler(create)({
         ...baseEmpty,
         title: some('t'),
         slug: some('s'),
@@ -132,13 +134,17 @@ describe('post create command', () => {
       })
       await Effect.runPromise(Effect.provide(program, makeLayer(http)))
       expect(http.recorder.calls.length).toBe(1)
-      const body = http.recorder.calls[0]?.body as Record<string, unknown>
-      expect(body.title).toBe('t')
-      expect(body.slug).toBe('s')
-      expect(body.contentFormat).toBe('lexical')
-      expect(typeof body.content).toBe('string')
+      const body = http.recorder.calls[0]?.body as {
+        data: Record<string, unknown>
+        refType: string
+      }
+      expect(body.refType).toBe('post')
+      expect(body.data.title).toBe('t')
+      expect(body.data.contentFormat).toBe('lexical')
+      expect(typeof body.data.content).toBe('string')
+      expect(body.data.typeSpecificData).toMatchObject({ slug: 's' })
       // No category was specified so we never resolve.
-      expect(body.categoryId).toBeUndefined()
+      expect(body.data.typeSpecificData).not.toHaveProperty('categoryId')
     } finally {
       spy.mockRestore()
     }
@@ -152,7 +158,7 @@ describe('post create command', () => {
           data: [{ id: 'cat-1', name: 'Tech', slug: 'tech' }],
         },
       },
-      'POST https://blog.example.com/api/v2/posts': {
+      'POST https://blog.example.com/api/v2/drafts': {
         status: 200,
         body: { id: '1' },
       },
@@ -161,7 +167,7 @@ describe('post create command', () => {
       .spyOn(process.stdout, 'write')
       .mockImplementation(() => true)
     try {
-      const program = create.handler({
+      const program = handler(create)({
         ...baseEmpty,
         title: some('t'),
         slug: some('s'),
@@ -171,11 +177,11 @@ describe('post create command', () => {
       })
       await Effect.runPromise(Effect.provide(program, makeLayer(http)))
       const postCall = http.recorder.calls.find(
-        (c) => c.method === 'POST' && c.url.endsWith('/posts'),
+        (c) => c.method === 'POST' && c.url.endsWith('/drafts'),
       )
-      const body = postCall?.body as Record<string, unknown>
-      expect(body.categoryId).toBe('cat-1')
-      expect(body.__categoryName).toBeUndefined()
+      const body = postCall?.body as { data: Record<string, unknown> }
+      expect(body.data.typeSpecificData).toMatchObject({ categoryId: 'cat-1' })
+      expect(body.data.typeSpecificData).not.toHaveProperty('__categoryName')
     } finally {
       spy.mockRestore()
     }
@@ -183,7 +189,7 @@ describe('post create command', () => {
 
   it('rejects empty lexical content with ValidationFailed', async () => {
     const http = testHttpLayer({})
-    const program = create.handler({
+    const program = handler(create)({
       ...baseEmpty,
       title: some('t'),
       slug: some('s'),

@@ -69,7 +69,6 @@ export type NoteModel = NoteRow & {
 
 export type NoteCreateDocument = Omit<Partial<NoteModel>, 'nid' | 'text'> &
   Pick<NoteModel, 'text'> & {
-    draftId?: string
     created?: Date | string | number
   }
 
@@ -89,4 +88,11 @@ export interface NoteSortOptions {
 export interface NoteListFilter {
   year?: number
   metaOnly?: boolean
+}
+
+export interface ScheduledNoteRow {
+  id: EntityId
+  nid: number
+  title: string | null
+  publicAt: Date
 }

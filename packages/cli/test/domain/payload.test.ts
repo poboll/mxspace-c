@@ -2,7 +2,7 @@ import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
-import { NodeContext } from '@effect/platform-node'
+import { NodeServices } from '@effect/platform-node'
 import { Effect, Layer } from 'effect'
 import { beforeEach, describe, expect, it } from 'vitest'
 
@@ -20,7 +20,7 @@ beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'mxs-next-create-'))
 })
 
-const TestLayer = Layer.mergeAll(Lexical.Default, NodeContext.layer)
+const TestLayer = Layer.mergeAll(Lexical.Default, NodeServices.layer)
 
 const run = <A>(eff: Effect.Effect<A, any, any>) =>
   Effect.runPromise(Effect.provide(eff, TestLayer) as Effect.Effect<A, any, never>)
@@ -153,6 +153,7 @@ describe('buildPostPayload (src)', () => {
         state: 'publish',
         tags: ['a', 'b'],
         copyright: true,
+        premium: true,
         pin: '2026-01-01',
         pinOrder: 2,
         related: ['p1', 'p2'],
@@ -164,6 +165,7 @@ describe('buildPostPayload (src)', () => {
       isPublished: true,
       tags: ['a', 'b'],
       copyright: true,
+      isPremium: true,
       pin: '2026-01-01',
       pinOrder: 2,
       relatedId: ['p1', 'p2'],

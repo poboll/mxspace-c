@@ -1,18 +1,24 @@
-import { forwardRef, Inject, Injectable } from '@nestjs/common'
+import {
+  BadRequestException,
+  forwardRef,
+  Inject,
+  Injectable,
+} from '@nestjs/common'
 import { omit } from 'es-toolkit/compat'
 import slugify from 'slugify'
 
 import { AppErrorCode, createAppException } from '~/common/errors'
 import { BusinessEvents, EventScope } from '~/constants/business-event.constant'
+import type { MarkdownToLexicalMigrationDescriptor } from '~/modules/content-migration/content-migration.schema'
+import { ContentMigrationCommitService } from '~/modules/content-migration/content-migration-commit.service'
 import { FileReferenceType } from '~/modules/file/file-reference.enum'
 import { FileReferenceService } from '~/modules/file/file-reference.service'
 import { EventManagerService } from '~/processors/helper/helper.event.service'
 import { ImageService } from '~/processors/helper/helper.image.service'
 import { LexicalService } from '~/processors/helper/helper.lexical.service'
 import { ContentFormat } from '~/shared/types/content-format.type'
-import { isLexical } from '~/utils/content.util'
+import { contentIdentityChanged, isLexical } from '~/utils/content.util'
 import { scheduleManager } from '~/utils/schedule.util'
-import { isDefined } from '~/utils/validator.util'
 
 import { DraftRefType } from '../draft/draft.enum'
 import { DraftService } from '../draft/draft.service'
@@ -28,6 +34,7 @@ export class PageService {
     private readonly fileReferenceService: FileReferenceService,
     private readonly eventManager: EventManagerService,
     private readonly lexicalService: LexicalService,
+    private readonly contentMigrationCommitService: ContentMigrationCommitService,
     private readonly enrichmentService: EnrichmentService,
     @Inject(forwardRef(() => DraftService))
     private readonly draftService: DraftService,
@@ -35,12 +42,6 @@ export class PageService {
 
   public get repository() {
     return this.pageRepository
-  }
-
-  private normalizeMeta(meta: unknown) {
-    if (meta === undefined) return undefined
-    if (meta === null) return null
-    return meta as Record<string, unknown>
   }
 
   async list(page = 1, size = 10) {
@@ -71,10 +72,9 @@ export class PageService {
     return this.pageRepository.findManyByIds(ids)
   }
 
-  public async create(doc: PageModel & { draftId?: string }) {
+  public async create(doc: PageModel) {
     this.lexicalService.normalizeContentForStorage(doc)
 
-    const { draftId } = doc
     const count = await this.pageRepository.count()
     if (count >= 10) {
       throw createAppException(AppErrorCode.MAX_COUNT_LIMIT)
@@ -90,18 +90,9 @@ export class PageService {
       content: doc.content,
       contentFormat: doc.contentFormat ?? ContentFormat.Markdown,
       images: doc.images as unknown[],
-      meta: this.normalizeMeta(doc.meta) as Record<string, unknown> | null,
+      meta: doc.meta,
       order: doc.order,
     })
-
-    if (draftId) {
-      await this.fileReferenceService.removeReferencesForDocument(
-        draftId,
-        FileReferenceType.Draft,
-      )
-      await this.draftService.linkToPublished(draftId, res.id)
-      await this.draftService.markAsPublished(draftId)
-    }
 
     scheduleManager.schedule(async () => {
       await this.fileReferenceService.activateReferences(
@@ -137,13 +128,43 @@ export class PageService {
 
   public async updateById(
     id: string,
-    doc: Partial<PageModel> & { draftId?: string },
+    doc: Partial<PageModel> & {
+      migration?: MarkdownToLexicalMigrationDescriptor
+      migrationBranchId?: string
+    },
   ) {
     this.lexicalService.normalizeContentForStorage(doc)
 
-    const { draftId } = doc
+    const { migration, migrationBranchId } = doc
 
-    if (['text', 'title', 'subtitle'].some((key) => isDefined(doc[key]))) {
+    const oldDoc = await this.findById(id)
+    if (!oldDoc) {
+      throw createAppException(AppErrorCode.NO_CONTENT_MODIFIABLE)
+    }
+
+    const isMarkdownToLexical =
+      oldDoc.contentFormat === ContentFormat.Markdown &&
+      doc.contentFormat === ContentFormat.Lexical
+    if (
+      oldDoc.contentFormat === ContentFormat.Lexical &&
+      doc.contentFormat === ContentFormat.Markdown
+    ) {
+      throw new BadRequestException(
+        'Published Lexical content cannot be downgraded to Markdown',
+      )
+    }
+    if (isMarkdownToLexical && !migration) {
+      throw new BadRequestException(
+        'Markdown-to-Lexical writes require a migration descriptor',
+      )
+    }
+    if (migration && !isMarkdownToLexical) {
+      throw new BadRequestException(
+        'Migration descriptor is only valid for Markdown-to-Lexical writes',
+      )
+    }
+
+    if (contentIdentityChanged(oldDoc, doc)) {
       doc.modifiedAt = new Date()
     }
     if (doc.slug) {
@@ -151,7 +172,7 @@ export class PageService {
     }
 
     const patch = omit(doc, PAGE_PROTECTED_KEYS as any) as Partial<PageModel>
-    const newDoc = await this.pageRepository.update(id, {
+    const repositoryPatch = {
       title: patch.title,
       slug: patch.slug,
       subtitle: patch.subtitle,
@@ -159,19 +180,44 @@ export class PageService {
       content: patch.content,
       contentFormat: patch.contentFormat,
       images: patch.images as unknown[] | undefined,
-      meta:
-        patch.meta !== undefined
-          ? (this.normalizeMeta(patch.meta) as Record<string, unknown> | null)
-          : undefined,
+      meta: patch.meta,
       order: patch.order,
-    })
+    }
+    let newDoc
+    if (migration) {
+      if (!doc.content || doc.text === undefined) {
+        throw new BadRequestException(
+          'Lexical migration requires content and text',
+        )
+      }
+      await this.contentMigrationCommitService.commitMarkdownToLexical({
+        refType: DraftRefType.Page,
+        refId: id,
+        descriptor: migration,
+        branchId: migrationBranchId,
+        patch: repositoryPatch,
+        source: {
+          title: repositoryPatch.title ?? oldDoc.title,
+          subtitle:
+            repositoryPatch.subtitle === undefined
+              ? oldDoc.subtitle
+              : repositoryPatch.subtitle,
+          text: doc.text,
+          content: doc.content,
+          contentFormat: ContentFormat.Lexical,
+          meta:
+            repositoryPatch.meta === undefined
+              ? oldDoc.meta
+              : repositoryPatch.meta,
+        },
+      })
+      newDoc = await this.pageRepository.findById(id)
+    } else {
+      newDoc = await this.pageRepository.update(id, repositoryPatch)
+    }
 
     if (!newDoc) {
       throw createAppException(AppErrorCode.NO_CONTENT_MODIFIABLE)
-    }
-
-    if (draftId) {
-      await this.draftService.markAsPublished(draftId)
     }
 
     scheduleManager.schedule(async () => {

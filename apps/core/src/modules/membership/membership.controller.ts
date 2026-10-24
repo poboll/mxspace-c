@@ -1,0 +1,475 @@
+import {
+  Body,
+  Delete,
+  Get,
+  Headers,
+  HttpCode,
+  Param,
+  Post,
+  Put,
+  Query,
+  Req,
+} from '@nestjs/common'
+import { z } from 'zod'
+
+import { DEMO_MODE } from '~/app.config'
+import { ApiController } from '~/common/decorators/api-controller.decorator'
+import { Auth } from '~/common/decorators/auth.decorator'
+import {
+  CurrentReaderId,
+  CurrentUser,
+} from '~/common/decorators/current-user.decorator'
+import { WithFastifyRouteOptions } from '~/common/decorators/fastify-route-options.decorator'
+import { ReaderAuth } from '~/common/decorators/reader-auth.decorator'
+import { HasAdminAccess } from '~/common/decorators/role.decorator'
+import { AppErrorCode, createAppException } from '~/common/errors'
+import { withMeta } from '~/common/response/envelope.types'
+import { MetaObjectBuilder } from '~/common/response/meta-builder'
+import { zEntityId } from '~/common/zod'
+import { PostRepository } from '~/modules/post/post.repository'
+import { readPaywallMeta } from '~/modules/post/post-paywall.util'
+import type { FastifyBizRequest } from '~/transformers/get-req.transformer'
+
+import type { SessionUser } from '../auth/auth.types'
+import { ConfigsService } from '../configs/configs.service'
+import { ArticlePurchaseService } from './article-purchase.service'
+import { EntitlementService } from './entitlement.service'
+import { MembershipService } from './membership.service'
+import {
+  effectiveMembershipStatus,
+  REGISTERED_PAYMENT_PROVIDERS,
+  resolveAppleIapAvailability,
+  resolveArticlePurchaseAvailability,
+  resolveMembershipAvailability,
+  resolveMembershipReturnUrl,
+} from './membership.types'
+import { AppleProvider } from './providers/apple.provider'
+import { appleAccountTokenForReader } from './providers/apple-transaction'
+import { PaymentProviderRegistry } from './providers/provider.registry'
+import { SponsorsService } from './sponsors.service'
+
+export const CheckoutSchema = z.object({
+  plan: z.enum(['monthly', 'yearly']),
+  returnPath: z.string().max(2048).optional(),
+})
+type CheckoutDto = z.infer<typeof CheckoutSchema>
+
+export const ArticleCheckoutSchema = z.object({
+  postId: zEntityId,
+  returnPath: z.string().max(2048).optional(),
+})
+type ArticleCheckoutDto = z.infer<typeof ArticleCheckoutSchema>
+
+export const PostIdParamSchema = z.object({ postId: zEntityId })
+type PostIdParamDto = z.infer<typeof PostIdParamSchema>
+
+export const ManualGrantSchema = z.object({
+  plan: z.enum(['monthly', 'yearly']),
+  expiresAt: z.coerce.date(),
+})
+type ManualGrantDto = z.infer<typeof ManualGrantSchema>
+
+export const MembersListQuerySchema = z.object({
+  page: z.coerce.number().int().positive().default(1),
+  size: z.coerce.number().int().positive().max(100).default(20),
+})
+type MembersListQueryDto = z.infer<typeof MembersListQuerySchema>
+
+export const ReaderIdParamSchema = z.object({
+  readerId: z.string().min(1),
+})
+type ReaderIdParamDto = z.infer<typeof ReaderIdParamSchema>
+
+export const SponsorsListQuerySchema = z.object({
+  refresh: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
+})
+type SponsorsListQueryDto = z.infer<typeof SponsorsListQuerySchema>
+
+export const SponsorsCsvPreviewSchema = z.object({
+  csv: z
+    .string()
+    .min(1)
+    .max(1024 * 1024),
+})
+type SponsorsCsvPreviewDto = z.infer<typeof SponsorsCsvPreviewSchema>
+
+export const SponsorImportSchema = z.object({
+  grants: z
+    .array(
+      z.object({
+        readerId: z.string().min(1),
+        months: z.number().int().positive().max(120),
+      }),
+    )
+    .min(1)
+    .max(500),
+})
+type SponsorImportDto = z.infer<typeof SponsorImportSchema>
+
+export const AppleConfirmSchema = z.object({
+  signedTransactionInfo: z.string().min(1),
+})
+type AppleConfirmDto = z.infer<typeof AppleConfirmSchema>
+
+const assertNotDemoMode = () => {
+  if (DEMO_MODE) {
+    throw createAppException(AppErrorCode.DEMO_FORBIDDEN)
+  }
+}
+
+@ApiController('membership')
+export class MembershipController {
+  constructor(
+    private readonly membershipService: MembershipService,
+    private readonly configsService: ConfigsService,
+    private readonly providers: PaymentProviderRegistry,
+    private readonly appleProvider: AppleProvider,
+    private readonly sponsorsService: SponsorsService,
+    private readonly articlePurchaseService: ArticlePurchaseService,
+    private readonly entitlementService: EntitlementService,
+    private readonly postRepository: PostRepository,
+  ) {}
+
+  @ReaderAuth()
+  @Post('/checkout')
+  @HttpCode(200)
+  async checkout(
+    @Body({ schema: CheckoutSchema }) body: CheckoutDto,
+    @CurrentUser() user: SessionUser,
+  ) {
+    assertNotDemoMode()
+
+    const membershipConfig = await this.configsService.get('membership')
+    if (!membershipConfig.enabled || !membershipConfig.provider) {
+      throw createAppException(AppErrorCode.MEMBERSHIP_PROVIDER_NOT_CONFIGURED)
+    }
+
+    const existing = await this.membershipService.getByReaderId(user.id)
+    if (existing) {
+      const status = effectiveMembershipStatus(existing)
+      if (status === 'active' || status === 'on_hold') {
+        throw createAppException(AppErrorCode.MEMBERSHIP_ALREADY_ACTIVE)
+      }
+    }
+
+    const { webUrl } = await this.configsService.get('url')
+    const returnUrl = resolveMembershipReturnUrl(body.returnPath, webUrl)
+
+    const adapter = this.providers.resolve(membershipConfig.provider)
+    const checkout = await adapter.createCheckout({
+      reader: { id: user.id, email: user.email, name: user.name },
+      plan: body.plan,
+      returnUrl,
+    })
+    if (existing) {
+      await this.membershipService.prepareForCheckout(
+        existing,
+        membershipConfig.provider,
+      )
+    }
+    return checkout
+  }
+
+  @ReaderAuth()
+  @Post('/article-checkout')
+  @HttpCode(200)
+  async articleCheckout(
+    @Body({ schema: ArticleCheckoutSchema }) body: ArticleCheckoutDto,
+    @CurrentUser() user: SessionUser,
+  ) {
+    assertNotDemoMode()
+
+    const membershipConfig = await this.configsService.get('membership')
+    if (
+      !resolveArticlePurchaseAvailability(membershipConfig).enabled ||
+      !membershipConfig.articleProductId
+    ) {
+      throw createAppException(AppErrorCode.ARTICLE_PURCHASE_UNAVAILABLE)
+    }
+
+    const post = await this.postRepository.findById(body.postId)
+    if (!post) {
+      throw createAppException(AppErrorCode.POST_NOT_FOUND, { id: body.postId })
+    }
+    if (
+      user.role === 'owner' ||
+      !post.isPremium ||
+      !post.isPublished ||
+      readPaywallMeta(post.meta).purchaseEnabled === false
+    ) {
+      throw createAppException(AppErrorCode.ARTICLE_NOT_PURCHASABLE)
+    }
+    if (await this.articlePurchaseService.hasPurchased(user.id, body.postId)) {
+      throw createAppException(AppErrorCode.ARTICLE_ALREADY_PURCHASED)
+    }
+
+    const { webUrl } = await this.configsService.get('url')
+    const returnUrl = resolveMembershipReturnUrl(
+      body.returnPath,
+      webUrl,
+      'purchase',
+    )
+
+    const adapter = this.providers.resolve(membershipConfig.provider)
+    if (!adapter.createArticleCheckout) {
+      throw createAppException(AppErrorCode.ARTICLE_PURCHASE_UNAVAILABLE)
+    }
+    return adapter.createArticleCheckout({
+      reader: { id: user.id, email: user.email, name: user.name },
+      postId: body.postId,
+      productId: membershipConfig.articleProductId,
+      returnUrl,
+    })
+  }
+
+  @ReaderAuth()
+  @Get('/article-purchases/:postId')
+  async articlePurchased(
+    @Param({ schema: PostIdParamSchema }) params: PostIdParamDto,
+    @CurrentUser() user: SessionUser,
+  ) {
+    return {
+      purchased: await this.articlePurchaseService.hasPurchased(
+        user.id,
+        params.postId,
+      ),
+    }
+  }
+
+  @Get('/archive')
+  async archive(
+    @HasAdminAccess() isOwner: boolean,
+    @CurrentReaderId() readerId?: string,
+  ) {
+    const rows = await this.postRepository.listPremium({
+      publishedOnly: !isOwner,
+    })
+    const entitlements = await this.entitlementService.resolvePostEntitlements({
+      posts: rows,
+      isOwner,
+      readerId,
+    })
+    return {
+      posts: rows.map((row) => ({
+        id: row.id,
+        title: row.title,
+        slug: row.slug,
+        category: {
+          slug: row.category?.slug ?? '',
+          name: row.category?.name ?? '',
+        },
+        createdAt: row.createdAt,
+        entitlement: entitlements.get(String(row.id))?.reason ?? 'locked',
+        freeUntil: readPaywallMeta(row.meta).freeUntil,
+      })),
+    }
+  }
+
+  @Get('/plans')
+  async plans() {
+    const membershipConfig = await this.configsService.get('membership')
+    const availability = resolveMembershipAvailability(membershipConfig)
+    const appleIap = resolveAppleIapAvailability(membershipConfig)
+    const articlePurchase =
+      await this.entitlementService.resolveArticlePurchaseMeta(undefined)
+    if (!availability.enabled) {
+      return { enabled: false, plans: [], appleIap, articlePurchase }
+    }
+
+    const adapter = this.providers.get(membershipConfig.provider)
+    const productIdByPlan: Record<string, string | undefined> = {
+      monthly: membershipConfig.monthlyProductId,
+      yearly: membershipConfig.yearlyProductId,
+    }
+
+    const plans = await Promise.all(
+      availability.plans.map(async (plan) => {
+        const productId = productIdByPlan[plan]
+        const pricing =
+          adapter?.getPlanPricing && productId
+            ? await adapter.getPlanPricing(productId).catch(() => null)
+            : null
+        return { plan, pricing: pricing ?? undefined }
+      }),
+    )
+
+    return { enabled: true, plans, appleIap, articlePurchase }
+  }
+
+  @ReaderAuth()
+  @Get('/apple/account-token')
+  appleAccountToken(@CurrentUser() user: SessionUser) {
+    return { accountToken: appleAccountTokenForReader(user.id) }
+  }
+
+  @ReaderAuth()
+  @Post('/apple/confirm')
+  @HttpCode(200)
+  async confirmApple(
+    @Body({ schema: AppleConfirmSchema }) body: AppleConfirmDto,
+    @CurrentUser() user: SessionUser,
+  ) {
+    assertNotDemoMode()
+
+    const membershipConfig = await this.configsService.get('membership')
+    const appleIap = resolveAppleIapAvailability(membershipConfig)
+    if (
+      !appleIap.enabled ||
+      !appleIap.monthlyProductId ||
+      !appleIap.yearlyProductId
+    ) {
+      throw createAppException(AppErrorCode.MEMBERSHIP_PROVIDER_NOT_CONFIGURED)
+    }
+
+    const decoded = await this.appleProvider.verifySignedTransaction(
+      body.signedTransactionInfo,
+    )
+    return this.membershipService.confirmAppleTransaction({
+      decoded,
+      monthlyProductId: appleIap.monthlyProductId,
+      readerId: user.id,
+      yearlyProductId: appleIap.yearlyProductId,
+    })
+  }
+
+  @Auth()
+  @Get('/config-status')
+  async configStatus() {
+    const membershipConfig = await this.configsService.get('membership')
+
+    return {
+      apiKeyConfigured: Boolean(membershipConfig.apiKey),
+      applePrivateKeyConfigured: Boolean(membershipConfig.applePrivateKey),
+      supportedProviders: REGISTERED_PAYMENT_PROVIDERS,
+      webhookSigningKeyConfigured: Boolean(membershipConfig.webhookSigningKey),
+    }
+  }
+
+  @ReaderAuth()
+  @Get('/status')
+  async status(@Req() req: FastifyBizRequest) {
+    const readerId = req.readerId!
+    const membership = await this.membershipService.getByReaderId(readerId)
+    if (!membership) {
+      return { status: 'none' as const }
+    }
+
+    return {
+      status: effectiveMembershipStatus(membership),
+      plan: membership.plan,
+      provider: membership.provider,
+      currentPeriodEnd: membership.currentPeriodEnd,
+    }
+  }
+
+  @Post('/webhook/:provider')
+  @HttpCode(200)
+  @WithFastifyRouteOptions({ rawBody: true })
+  async webhook(
+    @Param('provider') provider: string,
+    @Req() req: FastifyBizRequest,
+    @Headers() headers: Record<string, string>,
+  ) {
+    assertNotDemoMode()
+
+    const adapter = this.providers.get(provider)
+    if (!adapter) {
+      throw createAppException(AppErrorCode.MEMBERSHIP_PROVIDER_NOT_SUPPORTED)
+    }
+    const rawBody = req.rawBody ?? Buffer.alloc(0)
+    const verified = await adapter.verifyAndParseWebhook(rawBody, headers)
+    if (verified.kind === 'ignored') {
+      return { ok: true, applied: false, ignored: verified.reason }
+    }
+    if (verified.kind === 'article') {
+      const result = await this.articlePurchaseService.applyEvent(
+        provider,
+        verified,
+      )
+      return { ok: true, applied: result.applied }
+    }
+    if (!verified.event.readerId) {
+      const bound = await this.membershipService.getByProviderSubscriptionId(
+        verified.event.subscriptionId,
+      )
+      if (!bound) {
+        if (verified.event.provider === 'apple') {
+          await this.membershipService.deferEvent(verified)
+        }
+        return {
+          ok: true,
+          applied: false,
+          ignored: 'missing_reader_metadata',
+        }
+      }
+      verified.event.readerId = bound.readerId
+    }
+    const result = await this.membershipService.applyEvent(verified)
+    return { ok: true, applied: result.applied }
+  }
+
+  @Auth()
+  @Get('/members')
+  async members(
+    @Query({ schema: MembersListQuerySchema }) query: MembersListQueryDto,
+  ) {
+    const result = await this.membershipService.listMembers(
+      query.page,
+      query.size,
+    )
+    return withMeta(
+      result.data,
+      new MetaObjectBuilder().pagination(result.pagination).build(),
+    )
+  }
+
+  @Auth()
+  @Put('/members/:readerId')
+  async grant(
+    @Param({ schema: ReaderIdParamSchema }) params: ReaderIdParamDto,
+    @Body({ schema: ManualGrantSchema }) body: ManualGrantDto,
+  ) {
+    return this.membershipService.grantManual(params.readerId, {
+      plan: body.plan,
+      expiresAt: body.expiresAt,
+    })
+  }
+
+  @Auth()
+  @Delete('/members/:readerId')
+  async revoke(
+    @Param({ schema: ReaderIdParamSchema }) params: ReaderIdParamDto,
+  ) {
+    return this.membershipService.revokeManual(params.readerId)
+  }
+
+  @Auth()
+  @Get('/sponsors/github')
+  async githubSponsors(
+    @Query({ schema: SponsorsListQuerySchema }) query: SponsorsListQueryDto,
+  ) {
+    return this.sponsorsService.list(query.refresh)
+  }
+
+  @Auth()
+  @Post('/sponsors/csv/preview')
+  @HttpCode(200)
+  async previewSponsorsCsv(
+    @Body({ schema: SponsorsCsvPreviewSchema }) body: SponsorsCsvPreviewDto,
+  ) {
+    return this.sponsorsService.previewCsv(body.csv)
+  }
+
+  @Auth()
+  @Post('/sponsors/import')
+  @HttpCode(200)
+  async importSponsors(
+    @Body({ schema: SponsorImportSchema }) body: SponsorImportDto,
+  ) {
+    assertNotDemoMode()
+    return this.sponsorsService.importGrants(body.grants)
+  }
+}

@@ -1,7 +1,7 @@
 import { API_URL } from '~/constants/env'
 import { translate } from '~/i18n/translate'
 
-import { deleteJson, getJson, patchJson, requestJson } from './http'
+import { deleteJson, getJson, patchJson, postJson, requestJson } from './http'
 
 export interface FileItem {
   thumbhash?: null | string
@@ -54,6 +54,19 @@ export interface CleanupResult {
   totalOrphan: number
 }
 
+export interface FileReferenceReconciliationResult {
+  applied: boolean
+  discoveredLocalFiles: number
+  isolatedFiles: number
+  missingReferences: number
+  referencedFiles: number
+  scannedFiles: number
+  statusToActive: number
+  statusToPending: number
+  usageChanges: number
+  usages: number
+}
+
 export interface CommentUploadFile {
   thumbhash?: null | string
   byteSize?: number
@@ -82,13 +95,15 @@ export function getFilesByType(type: FileType) {
   return getJson<FileItem[]>(`/files/${type}`)
 }
 
-export function uploadFile(file: File, type?: FileType) {
+export function uploadFile(file: File, type?: FileType, immutable = false) {
   const formData = new FormData()
   formData.append('file', file)
 
-  const query = type ? `?type=${encodeURIComponent(type)}` : ''
+  const query = new URLSearchParams()
+  if (type) query.set('type', type)
+  if (immutable) query.set('immutable', 'true')
 
-  return requestJson<UploadResponse>(`/files/upload${query}`, {
+  return requestJson<UploadResponse>(`/files/upload?${query}`, {
     body: formData,
     method: 'POST',
   })
@@ -135,19 +150,6 @@ export function uploadFileWithProgress(
   })
 }
 
-export function updateFile(type: FileType, name: string, file: File) {
-  const formData = new FormData()
-  formData.append('file', file)
-
-  return requestJson<UploadResponse>(
-    `/files/${type}/${encodeURIComponent(name)}`,
-    {
-      body: formData,
-      method: 'PUT',
-    },
-  )
-}
-
 export function deleteFileByTypeAndName(type: FileType, name: string) {
   return deleteJson<void>(`/files/${type}/${encodeURIComponent(name)}`)
 }
@@ -171,6 +173,13 @@ export function cleanupOrphanFiles(maxAgeMinutes = 60) {
   return requestJson<CleanupResult>(
     `/files/orphans/cleanup?maxAgeMinutes=${maxAgeMinutes}`,
     { method: 'POST' },
+  )
+}
+
+export function reconcileFileReferences(apply = false) {
+  return postJson<FileReferenceReconciliationResult, { apply: boolean }>(
+    '/files/references/reconcile',
+    { apply },
   )
 }
 

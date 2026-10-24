@@ -1,26 +1,12 @@
 import {
-  CodeBlockNode,
-  CodeSnippetNode,
-  EmbedNode,
-  ExcalidrawNode,
-  FootnoteNode,
-  GalleryNode,
-  ImageNode,
-  KaTeXBlockNode,
-  KaTeXInlineNode,
-  LinkCardNode,
-  MentionNode,
-  MermaidNode,
-  VideoNode,
-} from '@haklex/rich-headless'
-
-import {
   BLOCK_ID_STATE_KEY,
+  extractDocumentContext,
   NODE_STATE_KEY,
-} from '~/constants/lexical.constant'
+} from '@mx-space/ai/translation'
+
 import { ContentFormat } from '~/shared/types/content-format.type'
 
-import { pickImagesFromMarkdown } from './pic.util'
+import { pickFilesFromMarkdown } from './pic.util'
 import { md5 } from './tool.util'
 
 interface ContentDoc {
@@ -29,69 +15,11 @@ interface ContentDoc {
   subtitle?: string | null
   contentFormat?: ContentFormat | string | null
   content?: string | null
+  images?: unknown[] | null
   summary?: string | null
   tags?: string[]
   meta?: Record<string, any> | string | null
 }
-
-export const LEXICAL_CONTEXT_EXCALIDRAW_TYPE = ExcalidrawNode.getType()
-export const LEXICAL_CONTEXT_MERMAID_TYPE = MermaidNode.getType()
-
-export const LEXICAL_CONTEXT_SKIP_BLOCKS = new Set([
-  'code',
-  CodeBlockNode.getType(),
-  CodeSnippetNode.getType(),
-  'code-highlight',
-  ImageNode.getType(),
-  VideoNode.getType(),
-  GalleryNode.getType(),
-  LinkCardNode.getType(),
-  KaTeXBlockNode.getType(),
-  MermaidNode.getType(),
-  EmbedNode.getType(),
-  'horizontalrule',
-  'component',
-])
-
-export const LEXICAL_CONTEXT_SKIP_INLINE = new Set([
-  KaTeXInlineNode.getType(),
-  MentionNode.getType(),
-  FootnoteNode.getType(),
-])
-
-export const KNOWN_LEXICAL_STRUCTURAL_PROPS = new Set([
-  'children',
-  'type',
-  'version',
-  'direction',
-  'format',
-  'indent',
-  'style',
-  'detail',
-  'mode',
-  'text',
-  'tag',
-  'listType',
-  'start',
-  'value',
-  'url',
-  'rel',
-  'target',
-  'colSpan',
-  'headerState',
-  'width',
-  NODE_STATE_KEY,
-])
-
-const LEXICAL_CONTEXT_BLOCK_TYPES = new Set([
-  'listitem',
-  'tablecell',
-  'tablerow',
-  'details',
-  'list',
-  'table',
-  'root',
-])
 
 export function isLexical(doc: Pick<ContentDoc, 'contentFormat'>): boolean {
   return doc.contentFormat === ContentFormat.Lexical
@@ -122,143 +50,124 @@ export function extractTextFromContent(
   }
 }
 
-export function extractImagesFromContent(
-  doc: Pick<ContentDoc, 'text' | 'contentFormat' | 'content' | 'meta'>,
+export function extractFileUrlsFromContent(
+  doc: Pick<
+    ContentDoc,
+    'text' | 'contentFormat' | 'content' | 'images' | 'meta'
+  >,
 ): string[] {
-  const coverUrl = extractCoverUrlFromMeta(doc.meta)
+  const documentMetadataUrls = collectFileUrls([
+    doc.images,
+    parseMeta(doc.meta),
+  ])
 
   if (!isLexical(doc)) {
-    return dedupeImageUrls([
-      ...pickImagesFromMarkdown(doc.text ?? ''),
-      coverUrl,
+    return dedupeFileUrls([
+      ...pickFilesFromMarkdown(doc.text ?? ''),
+      ...collectFileUrls(doc.text),
+      ...documentMetadataUrls,
     ])
   }
 
   if (!doc.content) {
-    return dedupeImageUrls([coverUrl])
+    return dedupeFileUrls(documentMetadataUrls)
   }
 
   try {
     const editorState = JSON.parse(doc.content)
-    const images: string[] = []
-    traverseLexicalNodes(editorState.root, (node) => {
-      if (node.type === 'image' && node.src) {
-        images.push(node.src)
-      } else if (node.type === 'gallery' && Array.isArray(node.images)) {
-        for (const img of node.images) {
-          if (img?.src) images.push(img.src)
-        }
-      } else if (node.type === 'link-card' && node.image) {
-        images.push(node.image)
-      }
-    })
-    return dedupeImageUrls([...images, coverUrl])
+    return dedupeFileUrls([
+      ...collectFileUrls(editorState),
+      ...documentMetadataUrls,
+    ])
   } catch {
-    return dedupeImageUrls([coverUrl])
+    return dedupeFileUrls(documentMetadataUrls)
   }
 }
 
-function extractCoverUrlFromMeta(meta: ContentDoc['meta']): string | undefined {
-  if (!meta) return undefined
+/**
+ * Backward-compatible name retained for call sites outside the file module.
+ * The extraction now covers every uploaded file URL, not only images.
+ */
+export const extractImagesFromContent = extractFileUrlsFromContent
 
-  const parsedMeta =
-    typeof meta === 'string'
-      ? (JSON.safeParse(meta) as Record<string, any>)
-      : meta
-
-  const cover = parsedMeta?.cover
-  return typeof cover === 'string' && cover.trim() ? cover.trim() : undefined
+function parseMeta(meta: ContentDoc['meta']): unknown {
+  if (!meta || typeof meta !== 'string') return meta
+  return JSON.safeParse(meta)
 }
 
-function dedupeImageUrls(urls: Array<string | undefined>): string[] {
-  return [...new Set(urls.filter((url): url is string => !!url))]
-}
+function collectFileUrls(value: unknown): string[] {
+  const urls: string[] = []
+  const visited = new WeakSet<object>()
 
-export function extractExcalidrawTextForContext(node: any): string {
-  if (!node.snapshot || typeof node.snapshot !== 'string') return ''
-  try {
-    const parsed = JSON.parse(node.snapshot)
-    if (!parsed.store) return ''
-    const texts: string[] = []
-    for (const value of Object.values(parsed.store)) {
-      const shape = value as any
-      if (
-        shape?.props?.text &&
-        typeof shape.props.text === 'string' &&
-        shape.props.text.trim()
-      ) {
-        texts.push(shape.props.text)
-      }
+  const visit = (current: unknown) => {
+    if (typeof current === 'string') {
+      urls.push(...extractHttpUrls(current))
+      return
     }
-    return texts.join('\n')
-  } catch {
-    return ''
+    if (!current || typeof current !== 'object') return
+    if (visited.has(current)) return
+    visited.add(current)
+
+    if (Array.isArray(current)) {
+      for (const item of current) visit(item)
+      return
+    }
+
+    for (const nested of Object.values(current)) visit(nested)
   }
+
+  visit(value)
+  return urls
 }
 
-export function isNestedLexicalEditorState(
-  value: unknown,
-): value is { root: { children: any[] } } {
-  return (
-    !!value &&
-    typeof value === 'object' &&
-    !Array.isArray(value) &&
-    'root' in value &&
-    !!value.root &&
-    typeof value.root === 'object' &&
-    'children' in value.root &&
-    Array.isArray(value.root.children)
+function extractHttpUrls(value: string): string[] {
+  const trimmed = value.trim()
+  if (!trimmed) return []
+
+  if (!/\s/u.test(trimmed)) {
+    try {
+      const url = new URL(trimmed)
+      if (url.protocol === 'http:' || url.protocol === 'https:') {
+        return [trimmed]
+      }
+    } catch {
+      // Fall through to extracting URLs embedded in Markdown, JSON, or text.
+    }
+  }
+
+  return [...trimmed.matchAll(/https?:\/\/[^\s<>"'`\\]+/giu)].map(([url]) =>
+    url.replaceAll(/[\]),.;!?]+$/gu, ''),
   )
 }
 
-export function extractLexicalContextBlockText(node: any): string {
-  if (!node) return ''
-  if (node.type === LEXICAL_CONTEXT_EXCALIDRAW_TYPE) {
-    return extractExcalidrawTextForContext(node)
-  }
-  if (LEXICAL_CONTEXT_SKIP_BLOCKS.has(node.type)) return ''
-  if (LEXICAL_CONTEXT_SKIP_INLINE.has(node.type)) return ''
-  if (node.type === 'text') return node.text ?? ''
-  if (node.type === 'linebreak') return '\n'
-
-  const parts: string[] = []
-
-  if (Array.isArray(node.children)) {
-    const sep = LEXICAL_CONTEXT_BLOCK_TYPES.has(node.type) ? '\n' : ''
-    const joined = node.children
-      .map(extractLexicalContextBlockText)
-      .filter(Boolean)
-      .join(sep)
-    if (joined) parts.push(joined)
-  }
-
-  for (const [propName, propValue] of Object.entries(node)) {
-    if (KNOWN_LEXICAL_STRUCTURAL_PROPS.has(propName)) continue
-    if (isNestedLexicalEditorState(propValue)) {
-      const nested = propValue.root.children
-        .map(extractLexicalContextBlockText)
-        .filter(Boolean)
-      if (nested.length) parts.push(nested.join('\n'))
-    }
-    if (Array.isArray(propValue)) {
-      for (const item of propValue) {
-        if (!isNestedLexicalEditorState(item)) continue
-        const nested = item.root.children
-          .map(extractLexicalContextBlockText)
-          .filter(Boolean)
-        if (nested.length) parts.push(nested.join('\n'))
-      }
-    }
-  }
-
-  return parts.join('\n')
+function dedupeFileUrls(urls: string[]): string[] {
+  return [...new Set(urls.filter(Boolean))]
 }
 
-export function extractDocumentContext(rootChildren: any[]): string {
-  return rootChildren
-    .map(extractLexicalContextBlockText)
-    .filter(Boolean)
-    .join('\n\n')
+const CONTENT_IDENTITY_KEYS = [
+  'title',
+  'text',
+  'subtitle',
+  'contentFormat',
+  'content',
+  'summary',
+  'tags',
+] as const
+
+type ContentIdentity = Pick<ContentDoc, (typeof CONTENT_IDENTITY_KEYS)[number]>
+
+export function contentIdentityChanged(
+  current: ContentIdentity,
+  patch: Partial<Record<(typeof CONTENT_IDENTITY_KEYS)[number], unknown>>,
+): boolean {
+  const next = { ...current } as ContentIdentity
+  for (const key of CONTENT_IDENTITY_KEYS) {
+    const value = patch[key]
+    if (value !== undefined) {
+      ;(next as Record<string, unknown>)[key] = value
+    }
+  }
+  return computeContentHash(next, '') !== computeContentHash(current, '')
 }
 
 export function computeContentHash(

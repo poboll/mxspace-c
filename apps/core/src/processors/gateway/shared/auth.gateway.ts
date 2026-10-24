@@ -1,55 +1,64 @@
+import type { IncomingMessage } from 'node:http'
+
 import { OnEvent } from '@nestjs/event-emitter'
-import type {
-  OnGatewayConnection,
-  OnGatewayDisconnect,
-} from '@nestjs/websockets'
-import { WebSocketServer } from '@nestjs/websockets'
-import type { BroadcastOperator, Emitter } from '@socket.io/redis-emitter'
-import type { DefaultEventsMap, Namespace, Socket } from 'socket.io'
+import type { WebSocket } from 'ws'
 
 import { EventBusEvents } from '~/constants/event-bus.constant'
 import { AuthService } from '~/modules/auth/auth.service'
-import { RedisService } from '~/processors/redis/redis.service'
 
 import { BusinessEvents } from '../../../constants/business-event.constant'
-import { BroadcastBaseGateway } from '../base.gateway'
+import type { WsBusFrame, WsConnection, WsNamespace } from '../ws/ws.types'
+import { WsBusService } from '../ws/ws-bus.service'
+import { WsGatewayBase } from '../ws/ws-gateway.base'
+import { WsPresenceService } from '../ws/ws-presence.service'
 
 export type AuthGatewayOptions = {
-  namespace: string
+  namespace: WsNamespace
 }
 
-// @ts-ignore
-export interface IAuthGateway
-  extends OnGatewayConnection, OnGatewayDisconnect, BroadcastBaseGateway {}
+const AUTH_FAILED_CLOSE_CODE = 4401
 
-export const createAuthGateway = (
-  options: AuthGatewayOptions,
-): new (...args: any[]) => IAuthGateway => {
+export const createAuthGateway = (options: AuthGatewayOptions) => {
   const { namespace } = options
-  class AuthGateway extends BroadcastBaseGateway implements IAuthGateway {
+
+  class AuthGateway extends WsGatewayBase {
     constructor(
       protected readonly authService: AuthService,
-      private readonly redisService: RedisService,
+      bus: WsBusService,
+      presence: WsPresenceService,
     ) {
-      super()
+      super(namespace, bus, presence)
     }
 
-    @WebSocketServer()
-    protected namespace: Namespace
+    tokenSocketIdMap = new Map<string, Set<string>>()
+    private readonly socketIdTokenMap = new Map<string, string>()
 
-    authFailed(client: Socket) {
-      client.send(
-        this.gatewayMessageFormat(
-          BusinessEvents.AUTH_FAILED,
-          'Authentication failed',
-        ),
-      )
-      client.disconnect()
+    protected bindToken(token: string, conn: WsConnection) {
+      const ids = this.tokenSocketIdMap.get(token) ?? new Set<string>()
+      ids.add(conn.id)
+      this.tokenSocketIdMap.set(token, ids)
+      this.socketIdTokenMap.set(conn.id, token)
     }
 
-    async handleConnection(client: Socket) {
-      const cookie = client.handshake.headers.cookie as string | undefined
-      const origin = client.handshake.headers.origin as string | undefined
+    protected unbindToken(conn: WsConnection) {
+      const token = this.socketIdTokenMap.get(conn.id)
+      if (!token) return
+      this.socketIdTokenMap.delete(conn.id)
+      const ids = this.tokenSocketIdMap.get(token)
+      ids?.delete(conn.id)
+      if (!ids?.size) this.tokenSocketIdMap.delete(token)
+    }
+
+    authFailed(conn: WsConnection) {
+      this.sendTo(conn, BusinessEvents.AUTH_FAILED, 'Authentication failed')
+      conn.ws.close(AUTH_FAILED_CLOSE_CODE, 'auth failed')
+    }
+
+    async handleConnection(ws: WebSocket, request: IncomingMessage) {
+      const conn = this.trackConnection(ws)
+      await this.presence.addConnection(namespace, conn.id)
+
+      const { cookie, origin } = request.headers
       if (cookie) {
         const headers = new Headers()
         headers.set('cookie', cookie)
@@ -59,24 +68,18 @@ export const createAuthGateway = (
         const session =
           await this.authService.getSessionUserFromHeaders(headers)
         if (session?.user?.role === 'owner') {
-          super.handleConnect(client)
-          if (session.session?.token) {
-            this.tokenSocketIdMap.set(session.session.token, client.id)
-          }
-          return
+          return this.completeConnection(conn, session.session?.token)
         }
       }
 
-      const headerApiKey = client.handshake.headers['x-api-key']
-      const headerAuthorization = client.handshake.headers.authorization
+      const headerApiKey = request.headers['x-api-key']
+      const headerAuthorization = request.headers.authorization
       const apiKey =
         (Array.isArray(headerApiKey) ? headerApiKey[0] : headerApiKey) ||
-        (Array.isArray(headerAuthorization)
-          ? headerAuthorization[0]
-          : headerAuthorization) ||
-        (client.handshake.query.token as string | undefined)
+        headerAuthorization ||
+        queryToken(request)
       if (!apiKey) {
-        return this.authFailed(client)
+        return this.authFailed(conn)
       }
 
       const token = apiKey.replace(/^bearer\s+/i, '')
@@ -85,60 +88,75 @@ export const createAuthGateway = (
         !result ||
         !(await this.authService.isOwnerReaderId(result.referenceId))
       ) {
-        return this.authFailed(client)
+        return this.authFailed(conn)
       }
 
-      super.handleConnect(client)
-
-      const sid = client.id
-      this.tokenSocketIdMap.set(token.toString(), sid)
+      this.completeConnection(conn, result.id)
     }
 
-    handleDisconnect(client: Socket) {
-      super.handleDisconnect(client)
+    // A close during the auth lookups already unbound this connection; binding
+    // now would strand the token entry, since nothing unbinds it again.
+    private completeConnection(conn: WsConnection, token?: string) {
+      if (!this.resolveConnection(conn.ws)) return
+      this.sendConnectGreeting(conn)
+      if (token) this.bindToken(token, conn)
     }
-    tokenSocketIdMap = new Map<string, string>()
+
+    async handleDisconnect(ws: WebSocket) {
+      const conn = this.resolveConnection(ws)
+      if (!conn) return
+
+      await this.releaseConnection(conn)
+      this.unbindToken(conn)
+      this.sendDisconnectGreeting(conn)
+    }
 
     @OnEvent(EventBusEvents.TokenExpired)
     handleTokenExpired(token: string) {
-      // consola.debug(`token expired: ${token}`)
-
-      const server = this.namespace.server
-      const sid = this.tokenSocketIdMap.get(token)
-      if (!sid) {
-        return false
-      }
-      const socket = server.of(`/${namespace}`).sockets.get(sid)
-      if (socket) {
-        socket.disconnect()
-        super.handleDisconnect(socket)
-        return true
-      }
-      return false
+      const closed = this.closeExpiredToken(token)
+      this.bus.publish({
+        ns: this.namespace,
+        event: EventBusEvents.TokenExpired,
+        payload: token,
+      })
+      return closed
     }
 
-    override broadcast(
-      event: BusinessEvents,
-      data: any,
-      options?: {
-        rooms?: string[]
-        exclude?: string[]
-      },
-    ) {
-      let socket = this.redisService.emitter.of(`/${namespace}`) as
-        | Emitter<DefaultEventsMap>
-        | BroadcastOperator<DefaultEventsMap>
-
-      if (options?.rooms?.length) {
-        socket = socket.in(options.rooms)
+    protected override deliverLocal(frame: WsBusFrame) {
+      if (
+        frame.event === EventBusEvents.TokenExpired &&
+        typeof frame.payload === 'string'
+      ) {
+        this.closeExpiredToken(frame.payload)
+        return
       }
-      if (options?.exclude?.length) {
-        socket = socket.except(options.exclude)
-      }
+      super.deliverLocal(frame)
+    }
 
-      socket.emit('message', this.gatewayMessageFormat(event, data))
+    private closeExpiredToken(token: string) {
+      const ids = this.tokenSocketIdMap.get(token)
+      if (!ids) return false
+      for (const id of ids) {
+        const conn = this.registry.get(id)
+        if (!conn) continue
+        conn.ws.close(AUTH_FAILED_CLOSE_CODE, 'token expired')
+        void this.handleDisconnect(conn.ws)
+      }
+      this.tokenSocketIdMap.delete(token)
+      return true
     }
   }
 
   return AuthGateway
+}
+
+function queryToken(request: IncomingMessage): string | undefined {
+  try {
+    return (
+      new URL(request.url ?? '', 'ws://localhost').searchParams.get('token') ??
+      undefined
+    )
+  } catch {
+    return undefined
+  }
 }

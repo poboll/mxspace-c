@@ -1,9 +1,22 @@
 import type { PaginateResult } from '~/models/base'
 
-import { getJson, patchJson } from './http'
+import { deleteJson, getJson, patchJson, postJson, putJson } from './http'
 
 export type ReaderRole = 'reader' | 'owner'
 export type ReaderRoleFilter = 'all' | 'owner' | 'reader'
+
+export type MembershipProvider =
+  'creem' | 'dodo' | 'lemonsqueezy' | 'manual' | 'stripe'
+export type MembershipPlan = 'monthly' | 'yearly'
+export type MembershipStatus = 'active' | 'cancelled' | 'expired' | 'on_hold'
+export type ReaderMembershipStatusFilter = 'none' | MembershipStatus
+
+export interface ReaderMembership {
+  status: MembershipStatus
+  plan: MembershipPlan
+  provider: MembershipProvider
+  currentPeriodEnd: string
+}
 
 export interface ReaderModel {
   id: string
@@ -20,6 +33,7 @@ export interface ReaderModel {
   createdAt: string
   updatedAt: string | null
   lastLoginAt: string | null
+  membership: ReaderMembership | null
 }
 
 export interface ReaderStats {
@@ -34,10 +48,12 @@ export interface ReaderListParams {
   size: number
   search?: string
   role?: ReaderRoleFilter
+  membershipStatus?: ReaderMembershipStatusFilter
 }
 
 export function getReaders(params: ReaderListParams) {
   return getJson<PaginateResult<ReaderModel>>('/readers', {
+    membershipStatus: params.membershipStatus,
     page: params.page,
     role: params.role,
     search: params.search,
@@ -71,5 +87,72 @@ export function unbanReader(id: string) {
   return patchJson<ReaderModel, Record<string, never>>(
     `/readers/${id}/unban`,
     {},
+  )
+}
+
+export function grantMembership(
+  readerId: string,
+  data: { plan: MembershipPlan; expiresAt: string },
+) {
+  return putJson<ReaderMembership, typeof data>(
+    `/membership/members/${readerId}`,
+    data,
+  )
+}
+
+export function revokeMembership(readerId: string) {
+  return deleteJson<ReaderMembership>(`/membership/members/${readerId}`)
+}
+
+export interface SponsorReaderMatch {
+  id: string
+  name: string | null
+  handle: string | null
+  membership: ReaderMembership | null
+}
+
+export interface GithubSponsorModel {
+  githubId: string
+  login: string
+  avatarUrl: string
+  tierName: string | null
+  monthlyPrice: number | null
+  isActive: boolean
+  sponsoredAt: string
+  reader: SponsorReaderMatch | null
+}
+
+export interface SponsorCsvPreviewRow {
+  line: number
+  githubId: string | null
+  email: string | null
+  handle: string | null
+  months: number | null
+  note: string | null
+  reader: SponsorReaderMatch | null
+}
+
+export interface SponsorImportResult {
+  granted: number
+  skipped: { readerId: string; reason: string }[]
+}
+
+export function getGithubSponsors(refresh = false) {
+  return getJson<GithubSponsorModel[]>('/membership/sponsors/github', {
+    refresh: refresh ? 'true' : undefined,
+  })
+}
+
+export function previewSponsorsCsv(csv: string) {
+  return postJson<SponsorCsvPreviewRow[], { csv: string }>(
+    '/membership/sponsors/csv/preview',
+    { csv },
+  )
+}
+
+export function importSponsors(grants: { readerId: string; months: number }[]) {
+  return postJson<SponsorImportResult, { grants: typeof grants }>(
+    '/membership/sponsors/import',
+    { grants },
   )
 }

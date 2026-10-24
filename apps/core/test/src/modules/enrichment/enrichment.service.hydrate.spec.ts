@@ -37,9 +37,11 @@ describe('EnrichmentService.hydrateUrls', () => {
       url: string,
     ) => { provider: string; externalId: string } | null
     rows?: Map<string, EnrichmentRow>
+    fetchStates?: any[]
     taskQueueService?: { createTask: ReturnType<typeof vi.fn> }
   }) {
     const repository = {
+      findFetchStates: vi.fn(async () => stubs.fetchStates ?? []),
       findManyByRefs: vi.fn(
         async (
           refs: {
@@ -174,6 +176,7 @@ describe('EnrichmentService.hydrateUrls', () => {
           provider: 'gh-repo',
           externalId: 'vercel/next.js',
           locale: '',
+          url: row.url,
         },
       }),
     )
@@ -184,8 +187,8 @@ describe('EnrichmentService.hydrateUrls', () => {
     const row = makeRow({
       expiresAt: new Date(Date.now() - 1000),
       failureCount: 1,
-      // backoff = 60 * 2^1 = 120s. fetchedAt now → still in backoff.
-      fetchedAt: new Date(Date.now() - 1000),
+      // A recent failure of a weeks-old success still imposes cooldown.
+      fetchedAt: new Date(Date.now() - 14 * 86400_000),
     })
     const taskQueueService = {
       createTask: vi.fn(async () => ({ taskId: 't1', created: true })),
@@ -197,6 +200,15 @@ describe('EnrichmentService.hydrateUrls', () => {
       }),
       rows: new Map([['gh-repo:vercel/next.js', row]]),
       taskQueueService,
+      fetchStates: [
+        {
+          provider: row.provider,
+          externalId: row.externalId,
+          locale: '',
+          nextRetryAt: new Date(Date.now() + 120_000),
+          leaseExpiresAt: null,
+        },
+      ],
     })
 
     const result = await svc.hydrateUrls([url])
@@ -229,7 +241,10 @@ describe('EnrichmentService.hydrateUrls', () => {
         externalId: 'vercel/next.js',
       }),
     }) as any
-    svc.repository = { findManyByRefs: repoSpy }
+    svc.repository = {
+      findManyByRefs: repoSpy,
+      findFetchStates: async () => [],
+    }
     await svc.hydrateUrls([url, url, url])
     expect(repoSpy).toHaveBeenCalledTimes(1)
     expect(repoSpy).toHaveBeenCalledWith([
@@ -248,6 +263,7 @@ describe('EnrichmentService.hydrateUrls', () => {
     })
 
     const repository = {
+      findFetchStates: vi.fn(async () => [] as any[]),
       // First call: zh refs → empty. Second call: '' fallback refs → fallback.
       findManyByRefs: vi
         .fn()
@@ -300,6 +316,7 @@ describe('EnrichmentService.hydrateUrls', () => {
     const url = 'https://github.com/vercel/next.js'
     const row = makeRow({})
     const repository = {
+      findFetchStates: vi.fn(async () => [] as any[]),
       findManyByRefs: vi.fn(async () => [row]),
     }
     const service = Object.create(EnrichmentService.prototype) as any

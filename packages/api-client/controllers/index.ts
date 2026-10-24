@@ -2,10 +2,14 @@ import { AckController } from './ack'
 import { ActivityController } from './activity'
 import { AggregateController } from './aggregate'
 import { AIController } from './ai'
+import { ArticleController } from './article'
 import { CategoryController } from './category'
 import { CommentController } from './comment'
+import { CompanionController } from './companion'
+import { DraftController } from './draft'
 import { EnrichmentController } from './enrichment'
 import { LinkController } from './link'
+import { MembershipController } from './membership'
 import type {
   NoteMiddleListOptions,
   NoteTimelineItem,
@@ -33,11 +37,15 @@ export const allControllers = [
   AckController,
   ActivityController,
   AggregateController,
+  ArticleController,
   AIController,
   CategoryController,
   CommentController,
+  CompanionController,
+  DraftController,
   EnrichmentController,
   LinkController,
+  MembershipController,
   NoteController,
   PageController,
   PostController,
@@ -57,10 +65,14 @@ export const allControllerNames = [
   'ack',
   'activity',
   'aggregate',
+  'article',
   'category',
   'comment',
+  'companion',
+  'draft',
   'enrichment',
   'link',
+  'membership',
   'note',
   'page',
   'post',
@@ -84,10 +96,14 @@ export {
   ActivityController,
   AggregateController,
   AIController,
+  ArticleController,
   CategoryController,
   CommentController,
+  CompanionController,
+  DraftController,
   EnrichmentController,
   LinkController,
+  MembershipController,
   NoteController,
   PageController,
   PostController,
@@ -107,3 +123,4 @@ export {
 
 export type { NoteMiddleListOptions, NoteTimelineItem, NoteTopicListOptions }
 export type { PostListOptions }
+export type { StreamArticleBodiesOptions } from './article'

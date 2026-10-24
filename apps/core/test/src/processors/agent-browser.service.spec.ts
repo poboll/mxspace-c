@@ -153,4 +153,17 @@ describe('AgentBrowserService', () => {
     })
     await pool.shutdown()
   })
+  it('cancels queued probes without starting a browser command', async () => {
+    setExecFileBehavior(() => ({ stdout: '' }))
+    const { pool, service } = buildService()
+    const occupied = await pool.acquire()
+    const ac = new AbortController()
+    const probe = service.checkUrl('https://example.com', { signal: ac.signal })
+    ac.abort()
+    const result = await probe
+    expect(result.ok).toBe(false)
+    expect(execFileMock).not.toHaveBeenCalled()
+    pool.release(occupied)
+    await pool.shutdown()
+  })
 })

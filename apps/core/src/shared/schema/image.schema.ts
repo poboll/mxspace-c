@@ -1,4 +1,3 @@
-import { createZodDto } from 'nestjs-zod'
 import { z } from 'zod'
 
 import { zHexColor, zStrictUrl } from '~/common/zod'
@@ -6,15 +5,14 @@ import { zHexColor, zStrictUrl } from '~/common/zod'
 export const ImageSchema = z.object({
   width: z.number().optional(),
   height: z.number().optional(),
-  accent: zHexColor.optional(),
+  accent: z.preprocess(
+    (v) => (v === '' || v === null ? undefined : v),
+    zHexColor.optional(),
+  ),
   type: z.string().optional(),
   src: zStrictUrl.optional(),
   thumbhash: z.string().optional(),
 })
-
-export class ImageDto extends createZodDto(ImageSchema) {}
-
-export type ImageInput = z.infer<typeof ImageSchema>
 
 /**
  * Image array schema that tolerates null/undefined by collapsing to [].

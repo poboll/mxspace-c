@@ -1,4 +1,4 @@
-import { CollectionRefTypes } from '@core/constants/db.constant'
+import { CollectionRefTypes } from '@mx-space/db-schema'
 
 import type { CategoryModel } from './category'
 
@@ -59,7 +59,14 @@ export interface CommentRefSummary {
   category?: { name: string; slug: string } | null
 }
 
+export type CommentModerationStatus =
+  | { status: 'published' | 'rejected' }
+  | { status: 'pending'; reviewer: 'ai' | 'owner' }
+
 export interface CommentModel {
+  moderationStatus?: 'pending' | 'approved' | 'rejected' | 'manual' | null
+  /** Present only in submission responses; never put the receipt in a public cache. */
+  moderation?: CommentModerationStatus & { receipt?: string }
   id: string
   createdAt: string
   refType: CollectionRefTypes

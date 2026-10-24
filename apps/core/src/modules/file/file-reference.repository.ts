@@ -1,8 +1,19 @@
 import { Inject, Injectable } from '@nestjs/common'
-import { and, desc, eq, gte, inArray, lt, ne, or, sql } from 'drizzle-orm'
+import {
+  and,
+  desc,
+  eq,
+  gte,
+  inArray,
+  lt,
+  ne,
+  notExists,
+  or,
+  sql,
+} from 'drizzle-orm'
 
 import { PG_DB_TOKEN } from '~/constants/system.constant'
-import { fileReferences } from '~/database/schema'
+import { aiTtsBlocks, fileReferences, fileUsages } from '~/database/schema'
 import {
   BaseRepository,
   type PaginationResult,
@@ -42,6 +53,37 @@ export class FileReferenceRepository extends BaseRepository {
     private readonly snowflake: SnowflakeService,
   ) {
     super(db)
+  }
+
+  private ownerOrphanWhere() {
+    return and(
+      or(
+        ne(fileReferences.uploadedBy, FileUploadedBy.Reader),
+        sql`${fileReferences.uploadedBy} IS NULL`,
+      ),
+      notExists(
+        this.db
+          .select({ id: fileUsages.id })
+          .from(fileUsages)
+          .where(
+            and(
+              eq(fileUsages.fileReferenceId, fileReferences.id),
+              // TTS usage is checked against its live block row below. A
+              // reconciled usage row can otherwise outlive a deleted block.
+              ne(fileUsages.sourceType, 'ai_tts'),
+            ),
+          ),
+      ),
+      // TTS blocks are written before the general reconciliation pass. Keep
+      // newly generated narration out of the orphan list immediately, using
+      // an exact URL match rather than the previous cross-table regex scan.
+      notExists(
+        this.db
+          .select({ id: aiTtsBlocks.id })
+          .from(aiTtsBlocks)
+          .where(eq(aiTtsBlocks.url, fileReferences.fileUrl)),
+      ),
+    )!
   }
 
   async findById(id: EntityId | string): Promise<FileReferenceRow | null> {
@@ -117,6 +159,35 @@ export class FileReferenceRepository extends BaseRepository {
       })
       .returning()
     return mapRow(row)
+  }
+
+  async createOwnerPendingMany(
+    files: Array<{ fileName: string; fileUrl: string }>,
+  ): Promise<FileReferenceRow[]> {
+    const created: FileReferenceRow[] = []
+    const uniqueFiles = [
+      ...new Map(files.map((file) => [file.fileUrl, file])).values(),
+    ]
+
+    for (let index = 0; index < uniqueFiles.length; index += 500) {
+      const batch = uniqueFiles.slice(index, index + 500)
+      if (batch.length === 0) continue
+      const rows = await this.db
+        .insert(fileReferences)
+        .values(
+          batch.map((file) => ({
+            id: this.snowflake.nextId(),
+            fileUrl: file.fileUrl,
+            fileName: file.fileName,
+            status: FileReferenceStatus.Pending,
+            uploadedBy: FileUploadedBy.Owner,
+          })),
+        )
+        .returning()
+      created.push(...rows.map(mapRow))
+    }
+
+    return created
   }
 
   async setStatus(
@@ -447,10 +518,7 @@ export class FileReferenceRepository extends BaseRepository {
     page = Math.max(1, page)
     size = Math.min(100, Math.max(1, size))
     const offset = (page - 1) * size
-    const where = inArray(fileReferences.status, [
-      FileReferenceStatus.Pending,
-      FileReferenceStatus.Detached,
-    ])
+    const where = this.ownerOrphanWhere()
     const [rows, [{ count }]] = await Promise.all([
       this.db
         .select()
@@ -470,6 +538,14 @@ export class FileReferenceRepository extends BaseRepository {
     }
   }
 
+  async countOrphans(): Promise<number> {
+    const [{ count }] = await this.db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(fileReferences)
+      .where(this.ownerOrphanWhere())
+    return Number(count ?? 0)
+  }
+
   async findOwnerPendingOlderThan(
     threshold: Date,
   ): Promise<FileReferenceRow[]> {
@@ -486,6 +562,39 @@ export class FileReferenceRepository extends BaseRepository {
           lt(fileReferences.createdAt, threshold),
         )!,
       )
+    return rows.map(mapRow)
+  }
+
+  async findOwnerReferences(): Promise<FileReferenceRow[]> {
+    const rows = await this.db
+      .select()
+      .from(fileReferences)
+      .where(
+        or(
+          ne(fileReferences.uploadedBy, FileUploadedBy.Reader),
+          sql`${fileReferences.uploadedBy} IS NULL`,
+        )!,
+      )
+      .orderBy(desc(fileReferences.createdAt))
+    return rows.map(mapRow)
+  }
+
+  async findOwnerReferencesOlderThan(
+    threshold: Date,
+  ): Promise<FileReferenceRow[]> {
+    const rows = await this.db
+      .select()
+      .from(fileReferences)
+      .where(
+        and(
+          or(
+            ne(fileReferences.uploadedBy, FileUploadedBy.Reader),
+            sql`${fileReferences.uploadedBy} IS NULL`,
+          )!,
+          lt(fileReferences.createdAt, threshold),
+        )!,
+      )
+      .orderBy(desc(fileReferences.createdAt))
     return rows.map(mapRow)
   }
 

@@ -11,6 +11,7 @@ import { Scroll } from '~/ui/primitives/scroll'
 import { cn } from '~/utils/cn'
 
 import { AccountSettings } from './account/AccountSettings'
+import { MaintenanceSettings } from './maintenance/MaintenanceSettings'
 import { MetaPresetSettings } from './meta/MetaPresetSettings'
 import { OwnerSettings } from './OwnerSettings'
 import { useSettingsRouteContext } from './settings-route-context'
@@ -115,7 +116,7 @@ export function SettingsDetailRoute() {
           </div>
         </div>
 
-        <Scroll className="flex-1" innerClassName="p-4">
+        <Scroll className="flex-1" innerClassName="px-5 py-4">
           {activeGroup.type === 'user' ? (
             <OwnerSettings
               onSaved={async () => {
@@ -125,6 +126,7 @@ export function SettingsDetailRoute() {
           ) : null}
           {activeGroup.type === 'account' ? <AccountSettings /> : null}
           {activeGroup.type === 'meta-preset' ? <MetaPresetSettings /> : null}
+          {activeGroup.type === 'maintenance' ? <MaintenanceSettings /> : null}
           {activeGroup.type === 'system' && activeGroup.systemGroup ? (
             <SystemSettings
               activeGroup={activeGroup.systemGroup}

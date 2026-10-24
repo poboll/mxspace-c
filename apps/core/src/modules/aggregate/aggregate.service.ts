@@ -11,6 +11,10 @@ import {
 } from '~/constants/injection.constant'
 import { WebEventsGateway } from '~/processors/gateway/web/events.gateway'
 import { UrlBuilderService } from '~/processors/helper/helper.url-builder.service'
+import {
+  getPublicContent,
+  getPublicText,
+} from '~/processors/helper/lexical-truncate.util'
 import { RedisService } from '~/processors/redis/redis.service'
 import { getRedisKey } from '~/utils/redis.util'
 import { getShortDate } from '~/utils/time.util'
@@ -28,7 +32,12 @@ import { PageService } from '../page/page.service'
 import type { PostService } from '../post/post.service'
 import { RecentlyService } from '../recently/recently.service'
 import { SayService } from '../say/say.service'
-import type { RSSProps } from './aggregate.interface'
+import type {
+  DeskSummary,
+  HeatmapDay,
+  OnThisDayEntry,
+  RSSProps,
+} from './aggregate.interface'
 import { ReadAndLikeCountDocumentType, TimelineType } from './aggregate.schema'
 
 dayjs.extend(utc)
@@ -110,9 +119,14 @@ export class AggregateService {
         ? this.noteService.findRecent(limit, { visibleOnly: true })
         : undefined,
     ])
+    const publicPosts = posts?.map((post) => ({
+      ...post,
+      text: getPublicText(post),
+      content: getPublicContent(post),
+    }))
     if (combined) {
       return [
-        ...(posts ?? []).map((item) => ({ ...item, type: 'post' })),
+        ...(publicPosts ?? []).map((item) => ({ ...item, type: 'post' })),
         ...(notes ?? []).map((item) => ({ ...item, type: 'note' })),
       ]
         .sort(
@@ -122,7 +136,7 @@ export class AggregateService {
         .slice(0, limit)
     }
     return {
-      ...(posts ? { posts } : {}),
+      ...(publicPosts ? { posts: publicPosts } : {}),
       ...(notes ? { notes } : {}),
     }
   }
@@ -204,7 +218,7 @@ export class AggregateService {
     const baseURL = urlConfig.webUrl?.replace(/\/$/, '') ?? ''
     const items = latest as Array<Record<string, any>>
     return {
-      title: seo.title || owner.name || 'Mx Space',
+      title: seo.title || owner.name || 'Mix Space',
       url: urlConfig.webUrl ?? '',
       author: owner.name || '',
       description: seo.description || '',
@@ -217,7 +231,7 @@ export class AggregateService {
         id: item.id,
         images: item.images ?? [],
         contentFormat: item.contentFormat,
-        content: item.content,
+        content: item.content ?? undefined,
       })),
     }
   }
@@ -290,6 +304,99 @@ export class AggregateService {
       todayMaxOnline: todayMaxOnline ?? '0',
       todayOnlineTotal: todayOnlineTotal ?? '0',
     }
+  }
+
+  async getDesk(): Promise<DeskSummary> {
+    const [
+      unreadCommentCount,
+      unreadCommentRows,
+      linkApplicationCount,
+      linkApplicationPage,
+      scheduledNotes,
+    ] = await Promise.all([
+      this.commentService.countByState(CommentState.Unread),
+      this.commentService.findRecent(1, { state: CommentState.Unread }),
+      this.linkService.countByState(LinkState.Audit),
+      this.linkService.list(1, 1, LinkState.Audit),
+      this.noteService.repository.findScheduled(5),
+    ])
+
+    const [latestUnreadComment] =
+      await this.commentService.attachRef(unreadCommentRows)
+    const latestLinkApplication = linkApplicationPage.data[0]
+
+    return {
+      unreadComments: {
+        count: unreadCommentCount,
+        latest: latestUnreadComment
+          ? {
+              id: String(latestUnreadComment.id),
+              author: latestUnreadComment.author ?? '',
+              text: latestUnreadComment.text,
+              refTitle: latestUnreadComment.ref?.title ?? null,
+            }
+          : null,
+      },
+      linkApplications: {
+        count: linkApplicationCount,
+        latest: latestLinkApplication
+          ? {
+              id: String(latestLinkApplication.id),
+              name: latestLinkApplication.name,
+              url: latestLinkApplication.url,
+            }
+          : null,
+      },
+      scheduledNotes: scheduledNotes.map((note) => ({
+        id: String(note.id),
+        nid: note.nid,
+        title: note.title,
+        publicAt: note.publicAt.toISOString(),
+      })),
+    }
+  }
+
+  async getOnThisDay(): Promise<OnThisDayEntry[]> {
+    const now = new Date()
+    const month = now.getMonth() + 1
+    const day = now.getDate()
+    const year = now.getFullYear()
+    const limit = 5
+    const [posts, notes] = await Promise.all([
+      this.postService.repository.findOnThisDay(month, day, year, limit),
+      this.noteService.repository.findOnThisDay(month, day, year, limit),
+    ])
+    const entries = [
+      ...posts.map((row) => ({ ...row, type: 'post' as const })),
+      ...notes.map((row) => ({ ...row, type: 'note' as const })),
+    ]
+    entries.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+    return entries.slice(0, limit).map((entry) => ({
+      id: String(entry.id),
+      type: entry.type,
+      title: entry.title,
+      created: entry.createdAt.toISOString(),
+      excerpt: (entry.text ?? '').slice(0, 80),
+    }))
+  }
+
+  async getPublishHeatmap(): Promise<HeatmapDay[]> {
+    const since = new Date()
+    since.setDate(since.getDate() - 365)
+    const [postDays, noteDays] = await Promise.all([
+      this.postService.repository.countPublishedByDay(since),
+      this.noteService.repository.countPublishedByDay(since),
+    ])
+    const merged = new Map<string, HeatmapDay>()
+    const bump = (date: string, key: 'notes' | 'posts', count: number) => {
+      const day = merged.get(date) ?? { date, count: 0, posts: 0, notes: 0 }
+      day[key] += count
+      day.count += count
+      merged.set(date, day)
+    }
+    for (const { date, count } of postDays) bump(date, 'posts', count)
+    for (const { date, count } of noteDays) bump(date, 'notes', count)
+    return [...merged.values()].sort((a, b) => a.date.localeCompare(b.date))
   }
 
   async getAllReadAndLikeCount(type: ReadAndLikeCountDocumentType) {
@@ -435,6 +542,9 @@ export class AggregateService {
 
   @OnEvent(EventBusEvents.CleanAggregateCache)
   async cleanCache() {
-    await this.redisService.getClient().del(CacheKeys.Aggregate)
+    await Promise.all([
+      this.redisService.getClient().del(CacheKeys.RSS, CacheKeys.RSSXml),
+      this.redisService.deleteKeysByPattern(`${CacheKeys.Aggregate}*`),
+    ])
   }
 }

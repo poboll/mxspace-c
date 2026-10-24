@@ -1,8 +1,8 @@
 import { Inject, Injectable, Logger } from '@nestjs/common'
-import { and, eq, gt, inArray, or, sql } from 'drizzle-orm'
+import { and, eq, gt, inArray, isNull, lte, or, sql } from 'drizzle-orm'
 
 import { PG_DB_TOKEN } from '~/constants/system.constant'
-import { enrichmentCache } from '~/database/schema'
+import { enrichmentCache, enrichmentFetchState } from '~/database/schema'
 import { BaseRepository } from '~/processors/database/base.repository'
 import type { AppDatabase } from '~/processors/database/postgres.provider'
 import { SnowflakeService } from '~/shared/id/snowflake.service'
@@ -196,25 +196,201 @@ export class EnrichmentRepository extends BaseRepository {
       .where(eq(enrichmentCache.id, id))
   }
 
+  private fetchRef(provider: string, externalId: string, locale: string) {
+    return and(
+      eq(enrichmentFetchState.provider, provider),
+      eq(enrichmentFetchState.externalId, externalId),
+      eq(enrichmentFetchState.locale, locale),
+    )
+  }
+
+  async findFetchStates(
+    refs: readonly { provider: string; externalId: string; locale: string }[],
+  ) {
+    if (!refs.length) return []
+    return this.db
+      .select()
+      .from(enrichmentFetchState)
+      .where(
+        or(
+          ...refs.map((ref) =>
+            this.fetchRef(ref.provider, ref.externalId, ref.locale),
+          ),
+        ),
+      )
+  }
+
+  async claimFetch(
+    provider: string,
+    externalId: string,
+    locale: string,
+    token: string,
+    force = false,
+  ): Promise<boolean> {
+    const now = sql`now()`
+    const leaseExpiresAt = sql`now() + interval '2 minutes'`
+    const rows = await this.db
+      .insert(enrichmentFetchState)
+      .values({
+        provider,
+        externalId,
+        locale,
+        leaseToken: token,
+        leaseExpiresAt,
+        lastAttemptAt: now,
+      })
+      .onConflictDoUpdate({
+        target: [
+          enrichmentFetchState.provider,
+          enrichmentFetchState.externalId,
+          enrichmentFetchState.locale,
+        ],
+        set: { leaseToken: token, leaseExpiresAt, lastAttemptAt: now },
+        setWhere: and(
+          or(
+            isNull(enrichmentFetchState.leaseExpiresAt),
+            lte(enrichmentFetchState.leaseExpiresAt, now),
+          ),
+          force
+            ? undefined
+            : or(
+                isNull(enrichmentFetchState.nextRetryAt),
+                lte(enrichmentFetchState.nextRetryAt, now),
+              ),
+        ),
+      })
+      .returning({ token: enrichmentFetchState.leaseToken })
+    return rows.length === 1
+  }
+
+  async renewFetch(
+    provider: string,
+    externalId: string,
+    locale: string,
+    token: string,
+  ): Promise<boolean> {
+    const rows = await this.db
+      .update(enrichmentFetchState)
+      .set({ leaseExpiresAt: sql`now() + interval '2 minutes'` })
+      .where(
+        and(
+          this.fetchRef(provider, externalId, locale),
+          eq(enrichmentFetchState.leaseToken, token),
+          gt(enrichmentFetchState.leaseExpiresAt, sql`now()`),
+        ),
+      )
+      .returning({ token: enrichmentFetchState.leaseToken })
+    return rows.length === 1
+  }
+
+  async releaseFetch(
+    provider: string,
+    externalId: string,
+    locale: string,
+    token: string,
+  ): Promise<void> {
+    await this.db
+      .update(enrichmentFetchState)
+      .set({ leaseToken: null, leaseExpiresAt: null })
+      .where(
+        and(
+          this.fetchRef(provider, externalId, locale),
+          eq(enrichmentFetchState.leaseToken, token),
+        ),
+      )
+  }
+
+  async completeFetch(input: {
+    provider: string
+    externalId: string
+    locale: string
+    token: string
+    url: string
+    result: EnrichmentResult
+    expiresAt: Date
+    persist: boolean
+  }): Promise<EnrichmentRow | null> {
+    return this.db.transaction(async (tx) => {
+      // Update the lease row first: it serializes completion with a new owner.
+      // A worker whose lease expired cannot overwrite the new owner's result.
+      const owned = await tx
+        .update(enrichmentFetchState)
+        .set({
+          leaseToken: null,
+          leaseExpiresAt: null,
+          failureCount: 0,
+          lastError: null,
+          nextRetryAt: null,
+        })
+        .where(
+          and(
+            this.fetchRef(input.provider, input.externalId, input.locale),
+            eq(enrichmentFetchState.leaseToken, input.token),
+            gt(enrichmentFetchState.leaseExpiresAt, sql`now()`),
+          ),
+        )
+        .returning({ token: enrichmentFetchState.leaseToken })
+      if (!owned.length)
+        throw new Error('Enrichment fetch lease expired before completion')
+      if (!input.persist) return null
+      const repository = new EnrichmentRepository(
+        tx as unknown as AppDatabase,
+        this.snowflake,
+      )
+      return repository.upsert(
+        input.provider,
+        input.externalId,
+        input.url,
+        input.result,
+        null,
+        input.expiresAt,
+        input.locale,
+      )
+    })
+  }
+
   async recordFailure(
     provider: string,
     externalId: string,
     error: string,
-    locale = '',
+    locale: string,
+    token: string,
   ): Promise<void> {
-    await this.db
-      .update(enrichmentCache)
-      .set({
-        failureCount: sql`${enrichmentCache.failureCount} + 1`,
-        lastError: error,
-      })
-      .where(
-        and(
-          eq(enrichmentCache.provider, provider),
-          eq(enrichmentCache.externalId, externalId),
-          eq(enrichmentCache.locale, locale),
-        ),
-      )
+    await this.db.transaction(async (tx) => {
+      const [state] = await tx
+        .update(enrichmentFetchState)
+        .set({
+          failureCount: sql`${enrichmentFetchState.failureCount} + 1`,
+          lastError: error.slice(0, 2000),
+          nextRetryAt: sql`now() + make_interval(secs => least(86400, 60 * power(2, least(${enrichmentFetchState.failureCount} + 1, 11)))::double precision)`,
+          leaseToken: null,
+          leaseExpiresAt: null,
+        })
+        .where(
+          and(
+            this.fetchRef(provider, externalId, locale),
+            eq(enrichmentFetchState.leaseToken, token),
+            gt(enrichmentFetchState.leaseExpiresAt, sql`now()`),
+          ),
+        )
+        .returning({ failureCount: enrichmentFetchState.failureCount })
+      if (!state) return
+      // Retain the existing admin counters without inventing a successful
+      // preview for a URL that has never been fetched successfully.
+      await tx
+        .update(enrichmentCache)
+        .set({
+          failureCount: state.failureCount,
+          lastError: error.slice(0, 2000),
+        })
+        .where(
+          and(
+            eq(enrichmentCache.provider, provider),
+            eq(enrichmentCache.externalId, externalId),
+            eq(enrichmentCache.locale, locale),
+          ),
+        )
+    })
   }
 
   /**

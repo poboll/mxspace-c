@@ -1,11 +1,10 @@
 import { readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 
+import { AI_PROMPTS, SIGNAL_GEOMETRY_PRESET } from '@mx-space/ai/prompts'
 import { Value } from 'typebox/value'
 import { describe, expect, it } from 'vitest'
 import { z } from 'zod'
-
-import { AI_PROMPTS } from '~/modules/ai/ai.prompts'
 
 const FIXTURE_DIR = resolve(__dirname, '../../../fixtures/ai-prompts')
 
@@ -60,7 +59,6 @@ const zodCommentSpam = z
 
 const zodTranslationReviewer = z
   .object({
-    score: z.number().int().min(0).max(100),
     issues: z.array(
       z
         .object({
@@ -80,6 +78,40 @@ const zodTranslationEditor = z
   })
   .strict()
 
+const zodCoverSignalGeometryRecipe = z
+  .object({
+    format: z.literal('16:9'),
+    polarity: z.enum(['light', 'dark']),
+    family: z.enum(['orbital', 'flow', 'signal', 'topology', 'layered']),
+    transformation: z.string(),
+    geometry: z.enum([
+      'radial',
+      'bilateral',
+      'directional',
+      'paired',
+      'distributed',
+      'vertically staged',
+    ]),
+    scaffold: z.enum(['open field', 'faint grid', 'framed region', 'baseline']),
+    anchor: z.enum([
+      'off-white endpoint',
+      'central node',
+      'contrast line',
+      'structural void',
+      'none',
+    ]),
+    accent: z.enum(['none', 'coral', 'orange-red', 'cobalt']),
+    text: z.literal('none'),
+  })
+  .strict()
+
+const zodCoverSignalGeometry = z
+  .object({
+    recipe: zodCoverSignalGeometryRecipe,
+    prompt: z.string(),
+  })
+  .strict()
+
 const zodFieldTranslation = z
   .object({
     translations: z.record(z.string(), z.string()),
@@ -89,7 +121,7 @@ const zodFieldTranslation = z
 const buildZodTranslationChunkSchema = (
   textEntries: Record<string, unknown>,
 ) => {
-  const shape: Record<string, z.ZodTypeAny> = {}
+  const shape: Record<string, z.ZodType> = {}
   for (const [key, value] of Object.entries(textEntries)) {
     if (
       value &&
@@ -192,7 +224,7 @@ describe('ai-prompts schema regression (zod -> typebox parity)', () => {
     const fixtures = loadFixtures('translation-reviewer.json')
     const tb = AI_PROMPTS.translationReviewer('zh', {
       allowedIds: ['x'],
-      fullTranslations: { x: 'y' },
+      segments: { x: { source: 'y', target: 'z' } },
     }).schema
 
     for (const fx of fixtures) {
@@ -229,6 +261,23 @@ describe('ai-prompts schema regression (zod -> typebox parity)', () => {
     for (const fx of fixtures) {
       it(`${fx.name}: zod ⇔ typebox agree`, () => {
         const zOk = zodFieldTranslation.safeParse(fx.value).success
+        const tOk = Value.Check(tb, fx.value)
+        expect(zOk).toBe(fx.expected)
+        expect(tOk).toBe(zOk)
+      })
+    }
+  })
+
+  describe('cover.compile (signal-geometry)', () => {
+    const fixtures = loadFixtures('cover-signal-geometry.json')
+    const tb = AI_PROMPTS.cover.compile(SIGNAL_GEOMETRY_PRESET, {
+      title: 'title',
+      summary: 'summary',
+    }).schema
+
+    for (const fx of fixtures) {
+      it(`${fx.name}: zod ⇔ typebox agree`, () => {
+        const zOk = zodCoverSignalGeometry.safeParse(fx.value).success
         const tOk = Value.Check(tb, fx.value)
         expect(zOk).toBe(fx.expected)
         expect(tOk).toBe(zOk)

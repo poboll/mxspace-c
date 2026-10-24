@@ -65,3 +65,26 @@
   --color-accent-hover: #2563eb;
   --color-accent-soft: rgba(59, 130, 246, 0.12);
 }
+
+/* Mirrors the light @theme values so auth screens stay light under .dark. */
+.auth-light {
+  color-scheme: light;
+
+  --color-background: #ffffff;
+
+  --color-surface-page: #faf9f7;
+  --color-surface-card: #ffffff;
+  --color-surface-inset: #f5f4f1;
+  --color-surface-overlay: #ffffff;
+
+  --color-fg: #1c1917;
+  --color-fg-muted: #57534e;
+  --color-fg-subtle: #78716c;
+
+  --color-border: rgba(0, 0, 0, 0.06);
+  --color-border-strong: rgba(0, 0, 0, 0.12);
+
+  --color-accent: #2563eb;
+  --color-accent-hover: #1d4ed8;
+  --color-accent-soft: #eaf0ff;
+}

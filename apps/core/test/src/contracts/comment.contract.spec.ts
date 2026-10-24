@@ -5,6 +5,7 @@ import { CommentController } from '~/modules/comment/comment.controller'
 import { CommentLifecycleService } from '~/modules/comment/comment.lifecycle.service'
 import { CommentService } from '~/modules/comment/comment.service'
 import { ConfigsService } from '~/modules/configs/configs.service'
+import { EntitlementService } from '~/modules/membership/entitlement.service'
 import { ReaderService } from '~/modules/reader/reader.service'
 
 import {
@@ -16,6 +17,7 @@ import {
 } from '../../helper/api-shape'
 import { createE2EApp } from '../../helper/create-e2e-app'
 import { authPassHeader } from '../../mock/guard/auth.guard'
+import { authProvider } from '../../mock/modules/auth.mock'
 import { eventEmitterProvider } from '../../mock/processors/event.mock'
 
 /**
@@ -197,6 +199,15 @@ const readerServiceProvider = {
   },
 }
 
+const entitlementServiceProvider = {
+  provide: EntitlementService,
+  useValue: {
+    async getActiveMemberIds() {
+      return new Set<string>()
+    },
+  },
+}
+
 const getResponseData = (body: any) =>
   Array.isArray(body.data) ? body.data : body.data?.data
 
@@ -204,10 +215,12 @@ describe('CommentController contract (e2e)', () => {
   const proxy = createE2EApp({
     controllers: [CommentController],
     providers: [
+      authProvider,
       commentServiceProvider,
       lifecycleProvider,
       configsProvider,
       readerServiceProvider,
+      entitlementServiceProvider,
       ...eventEmitterProvider,
     ],
   })

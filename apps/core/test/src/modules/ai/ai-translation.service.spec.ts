@@ -1,14 +1,20 @@
 import { describe, expect, it, vi } from 'vitest'
 
+import { createAiGenerationMetricsMock } from '@/helper/ai-generation-metrics-mock'
 import { createPgRepositoryMock, now } from '@/helper/pg-repository-mock'
 import { AppException } from '~/common/errors/exception.types'
 import { CollectionRefTypes } from '~/constants/db.constant'
+import type { AiService } from '~/modules/ai/ai.service'
+import type { AiInFlightService } from '~/modules/ai/ai-inflight/ai-inflight.service'
 import { AITaskType } from '~/modules/ai/ai-task/ai-task.types'
 import type {
   AiTranslationRepository,
   AiTranslationRow,
 } from '~/modules/ai/ai-translation/ai-translation.repository'
+import { UpdateTranslationSchema } from '~/modules/ai/ai-translation/ai-translation.schema'
 import { AiTranslationService } from '~/modules/ai/ai-translation/ai-translation.service'
+import type { ITranslationStrategy } from '~/modules/ai/ai-translation/translation-strategy.interface'
+import { TaskStatus } from '~/processors/task-queue'
 import { ContentFormat } from '~/shared/types/content-format.type'
 
 const row = (overrides: Partial<AiTranslationRow> = {}): AiTranslationRow => ({
@@ -56,6 +62,7 @@ const createService = () => {
     findGlobalById: vi.fn(),
     getRefArticleMap: vi.fn().mockResolvedValue({}),
     findAllArticlesForTranslation: vi.fn(),
+    findArticleIdsByTitle: vi.fn().mockResolvedValue([]),
   }
   const translationConsistencyService = {
     evaluateTranslationFreshness: vi.fn(() => 'valid'),
@@ -65,12 +72,11 @@ const createService = () => {
   const partialBuilder = { build: vi.fn() }
   const configService = {
     get: vi.fn(() => ({
-      enableAutoGenerateTranslation: true,
       enableTranslation: true,
     })),
   }
-  const aiService = {}
-  const aiInFlightService = {}
+  const aiService = createPgRepositoryMock<AiService>()
+  const aiInFlightService = createPgRepositoryMock<AiInFlightService>()
   const eventManager = { emit: vi.fn() }
   const taskProcessor = { registerHandler: vi.fn() }
   const taskQueueService = {
@@ -82,8 +88,9 @@ const createService = () => {
   const aiTaskService = {
     createTranslationTask: vi.fn(),
   }
-  const lexicalStrategy = {}
-  const markdownStrategy = {}
+  const generationMetrics = createAiGenerationMetricsMock()
+  const lexicalStrategy = createPgRepositoryMock<ITranslationStrategy>()
+  const markdownStrategy = createPgRepositoryMock<ITranslationStrategy>()
   const service = new AiTranslationService(
     repository as any,
     databaseService as any,
@@ -97,14 +104,20 @@ const createService = () => {
     taskQueueService as any,
     lexicalService as any,
     aiTaskService as any,
+    generationMetrics as any,
     lexicalStrategy as any,
     markdownStrategy as any,
   )
   return {
+    aiInFlightService,
+    aiService,
     aiTaskService,
     configService,
     databaseService,
+    generationMetrics,
     lexicalService,
+    lexicalStrategy,
+    markdownStrategy,
     partialBuilder,
     repository,
     service,
@@ -163,6 +176,88 @@ describe('AiTranslationService', () => {
     )
   })
 
+  it('folds a region-suffixed target language into its base before generating', async () => {
+    const { configService, service, taskProcessor } = createService()
+    configService.get.mockResolvedValue({
+      enableTranslation: true,
+      translationTargetLanguages: [],
+    })
+
+    service.onModuleInit()
+    const handler = taskProcessor.registerHandler.mock.calls
+      .map(([registered]) => registered)
+      .find(
+        (registered: any) => registered.type === AITaskType.Translation,
+      ) as any
+
+    const context = {
+      taskId: 'task-1',
+      isAborted: () => false,
+      signal: new AbortController().signal,
+      appendLog: vi.fn(),
+      updateProgress: vi.fn(),
+      setResult: vi.fn(),
+      setStatus: vi.fn(),
+      incrementTokens: vi.fn(),
+      incrementCost: vi.fn(),
+      streamPusher: vi.fn(),
+    }
+
+    await handler.execute(
+      { refId: 'post-1', targetLanguages: ['zh-CN', 'zh'] },
+      context as any,
+    )
+
+    expect(context.updateProgress).toHaveBeenCalledWith(
+      0,
+      'Starting translation',
+      0,
+      1,
+    )
+  })
+
+  it('includes orphan articles with zero translations in the grouped list', async () => {
+    const { databaseService, repository, service } = createService()
+    repository.groupByRefIdPaginated.mockResolvedValue({
+      data: [{ refId: 'post-1' }],
+      pagination: { total: 1, currentPage: 1, totalPage: 1, size: 10 },
+    } as any)
+    repository.findDistinctRefIds.mockResolvedValue(['post-1'])
+    repository.listByRefIds.mockResolvedValue([row()])
+    databaseService.findAllArticlesForTranslation.mockResolvedValue({
+      posts: [
+        { id: 'post-1', title: 'Has Translation' },
+        { id: 'post-2', title: 'Orphan Post' },
+      ],
+      notes: [],
+      pages: [{ id: 'page-1', title: 'Orphan Page' }],
+    })
+    databaseService.getRefArticleMap.mockResolvedValue({
+      'post-1': {
+        id: 'post-1',
+        title: 'Has Translation',
+        type: CollectionRefTypes.Post,
+      },
+    })
+
+    const result = await service.getAllTranslationsGrouped({
+      page: 1,
+      size: 10,
+    })
+
+    expect(result.pagination).toMatchObject({ total: 3, currentPage: 1 })
+    expect(result.data.map((row) => row.article.id)).toEqual([
+      'post-1',
+      'post-2',
+      'page-1',
+    ])
+    expect(result.data[0].translations).toEqual([
+      { ...row(), generationMetrics: null },
+    ])
+    expect(result.data[1].translations).toEqual([])
+    expect(result.data[2].translations).toEqual([])
+  })
+
   it('loads translations with their source article from PG-backed services', async () => {
     const { databaseService, repository, service } = createService()
     databaseService.findGlobalById.mockResolvedValue({ id: 'post-1' })
@@ -170,7 +265,7 @@ describe('AiTranslationService', () => {
 
     await expect(service.getTranslationsByRefId('post-1')).resolves.toEqual({
       article: { id: 'post-1' },
-      translations: [row()],
+      translations: [{ ...row(), generationMetrics: null }],
     })
   })
 
@@ -212,6 +307,63 @@ describe('AiTranslationService', () => {
     )
   })
 
+  it('treats null content as omitted when updating markdown text', async () => {
+    const { lexicalService, repository, service } = createService()
+    repository.findById.mockResolvedValue(row())
+    repository.updateById.mockResolvedValue(row({ text: 'Edited text' }))
+
+    const input = UpdateTranslationSchema.parse({
+      content: null,
+      text: 'Edited text',
+    })
+    await service.updateTranslation('translation-1', input)
+
+    expect(lexicalService.lexicalToMarkdown).not.toHaveBeenCalled()
+    expect(repository.updateById).toHaveBeenCalledWith('translation-1', {
+      text: 'Edited text',
+    })
+  })
+
+  it('blocks the public article-translation read for a premium post', async () => {
+    const { databaseService, service } = createService()
+    databaseService.findGlobalById.mockResolvedValue({
+      document: articleDocument({ isPremium: true }),
+      type: CollectionRefTypes.Post,
+    })
+
+    await expect(
+      service.getTranslationForArticle('post-1', 'en'),
+    ).rejects.toThrow(AppException)
+  })
+
+  it('does not block the owner-authenticated translation lookup for a premium post', async () => {
+    const { databaseService, repository, service } = createService()
+    const validTranslation = row({ lang: 'en' })
+    databaseService.findGlobalById.mockResolvedValue({
+      document: articleDocument({ isPremium: true }),
+      type: CollectionRefTypes.Post,
+    })
+    repository.listByRefId.mockResolvedValue([validTranslation])
+
+    await expect(
+      service.getTranslationAndAvailableLanguages('post-1', 'en', {
+        ignoreVisibility: true,
+      }),
+    ).resolves.toMatchObject({ translation: validTranslation })
+  })
+
+  it('blocks the public streamed translation for a premium post', async () => {
+    const { databaseService, service } = createService()
+    databaseService.findGlobalById.mockResolvedValue({
+      document: articleDocument({ isPremium: true }),
+      type: CollectionRefTypes.Post,
+    })
+
+    await expect(
+      service.streamTranslationForArticle('post-1', 'en'),
+    ).rejects.toThrow(AppException)
+  })
+
   it('throws when deleting a missing translation row', async () => {
     const { repository, service } = createService()
     repository.deleteById.mockResolvedValue(0)
@@ -230,10 +382,6 @@ describe('AiTranslationService', () => {
       translationConsistencyService,
     } = createService()
     const validTranslation = row()
-    const scheduleSpy = vi.spyOn(
-      service,
-      'scheduleRegenerationForStaleTranslations',
-    )
 
     databaseService.findGlobalById.mockResolvedValue({
       document: articleDocument(),
@@ -248,7 +396,6 @@ describe('AiTranslationService', () => {
       service.getTranslationForArticle('post-1', 'en'),
     ).resolves.toBe(validTranslation)
 
-    expect(scheduleSpy).not.toHaveBeenCalled()
     expect(partialBuilder.build).not.toHaveBeenCalled()
   })
 
@@ -260,10 +407,6 @@ describe('AiTranslationService', () => {
       service,
       translationConsistencyService,
     } = createService()
-    const scheduleSpy = vi.spyOn(
-      service,
-      'scheduleRegenerationForStaleTranslations',
-    )
 
     databaseService.findGlobalById.mockResolvedValue({
       document: articleDocument(),
@@ -278,7 +421,6 @@ describe('AiTranslationService', () => {
     expect(
       translationConsistencyService.evaluateTranslationFreshness,
     ).not.toHaveBeenCalled()
-    expect(scheduleSpy).not.toHaveBeenCalled()
     expect(partialBuilder.build).not.toHaveBeenCalled()
   })
 
@@ -294,10 +436,6 @@ describe('AiTranslationService', () => {
       contentFormat: ContentFormat.Lexical,
       content: '{"root":{"children":[]}}',
     })
-    const scheduleSpy = vi.spyOn(
-      service,
-      'scheduleRegenerationForStaleTranslations',
-    )
 
     databaseService.findGlobalById.mockResolvedValue({
       document: articleDocument(),
@@ -312,7 +450,6 @@ describe('AiTranslationService', () => {
       service.getTranslationForArticle('post-1', 'en'),
     ).resolves.toBeNull()
 
-    expect(scheduleSpy).not.toHaveBeenCalled()
     expect(partialBuilder.build).not.toHaveBeenCalled()
   })
 
@@ -335,9 +472,6 @@ describe('AiTranslationService', () => {
       contentFormat: ContentFormat.Lexical,
       content: '{"root":{"children":[]}}',
     })
-    const scheduleSpy = vi
-      .spyOn(service, 'scheduleRegenerationForStaleTranslations')
-      .mockResolvedValue(undefined)
 
     databaseService.findGlobalById.mockResolvedValue({
       document: articleDocument(),
@@ -370,7 +504,6 @@ describe('AiTranslationService', () => {
       }),
       staleTranslation,
     )
-    expect(scheduleSpy).toHaveBeenCalledWith(['post-1'], 'en')
     expect(repository.updateById).not.toHaveBeenCalled()
     expect(repository.upsert).not.toHaveBeenCalled()
   })
@@ -387,9 +520,6 @@ describe('AiTranslationService', () => {
       contentFormat: ContentFormat.Lexical,
       content: '{"root":{"children":[]}}',
     })
-    const scheduleSpy = vi
-      .spyOn(service, 'scheduleRegenerationForStaleTranslations')
-      .mockResolvedValue(undefined)
 
     databaseService.findGlobalById.mockResolvedValue({
       document: articleDocument(),
@@ -411,7 +541,6 @@ describe('AiTranslationService', () => {
       }),
       staleTranslation,
     )
-    expect(scheduleSpy).toHaveBeenCalledWith(['post-1'], 'en')
   })
 
   it('returns a partial requested stale translation without listing it as available', async () => {
@@ -436,9 +565,6 @@ describe('AiTranslationService', () => {
       contentFormat: ContentFormat.Lexical,
       content: '{"root":{"children":[]}}',
     })
-    const scheduleSpy = vi
-      .spyOn(service, 'scheduleRegenerationForStaleTranslations')
-      .mockResolvedValue(undefined)
 
     databaseService.findGlobalById.mockResolvedValue({
       document: articleDocument(),
@@ -477,6 +603,194 @@ describe('AiTranslationService', () => {
       }),
       staleTranslation,
     )
-    expect(scheduleSpy).toHaveBeenCalledWith(['post-1'], 'ja')
+  })
+})
+
+describe('AiTranslationService — force regeneration', () => {
+  function stubLeaderRun(aiInFlightService: {
+    runWithStream: ReturnType<typeof vi.fn>
+  }) {
+    aiInFlightService.runWithStream.mockImplementation(async (opts: any) => {
+      const leaderResult = await opts.onLeader({ push: vi.fn() })
+      return {
+        role: 'leader' as const,
+        events: (async function* () {})(),
+        result: Promise.resolve(leaderResult.result),
+      }
+    })
+  }
+
+  const translatedResult = {
+    sourceLang: 'zh',
+    title: 'Translated title',
+    text: 'Translated text',
+    subtitle: null,
+    summary: null,
+    tags: null,
+    aiModel: 'model-x',
+    aiProvider: 'provider-x',
+  }
+
+  it('drops the existing translation from translateContentStream when force is true', async () => {
+    const {
+      aiInFlightService,
+      aiService,
+      databaseService,
+      lexicalStrategy,
+      repository,
+      service,
+    } = createService()
+
+    databaseService.findGlobalById.mockResolvedValue({
+      document: articleDocument({ content: null }),
+      type: CollectionRefTypes.Post,
+    })
+    repository.findByRef.mockResolvedValue(row({ lang: 'en' }))
+    repository.upsert.mockResolvedValue(row({ lang: 'en' }))
+    aiService.getTranslationModelWithInfo.mockResolvedValue({
+      runtime: {},
+      info: { model: 'model-x', provider: 'provider-x' },
+    } as any)
+    lexicalStrategy.translate.mockResolvedValue(translatedResult as any)
+    stubLeaderRun(aiInFlightService)
+
+    await service.generateTranslation(
+      'post-1',
+      'en',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      true,
+    )
+
+    expect(repository.findByRef).toHaveBeenCalled()
+    expect(lexicalStrategy.translate).toHaveBeenCalledWith(
+      expect.anything(),
+      'en',
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ existing: undefined }),
+    )
+    expect(aiInFlightService.runWithStream).toHaveBeenCalledWith(
+      expect.objectContaining({ bypassResultCache: true }),
+    )
+  })
+
+  it('keeps the existing translation for translateContentStream on an incremental (non-force) run', async () => {
+    const {
+      aiInFlightService,
+      aiService,
+      databaseService,
+      lexicalStrategy,
+      repository,
+      service,
+    } = createService()
+
+    const existing = row({ lang: 'en' })
+    databaseService.findGlobalById.mockResolvedValue({
+      document: articleDocument({ content: null }),
+      type: CollectionRefTypes.Post,
+    })
+    repository.findByRef.mockResolvedValue(existing)
+    repository.upsert.mockResolvedValue(row({ lang: 'en' }))
+    aiService.getTranslationModelWithInfo.mockResolvedValue({
+      runtime: {},
+      info: { model: 'model-x', provider: 'provider-x' },
+    } as any)
+    lexicalStrategy.translate.mockResolvedValue(translatedResult as any)
+    stubLeaderRun(aiInFlightService)
+
+    await service.generateTranslation('post-1', 'en')
+
+    expect(lexicalStrategy.translate).toHaveBeenCalledWith(
+      expect.anything(),
+      'en',
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ existing }),
+    )
+    expect(aiInFlightService.runWithStream).toHaveBeenCalledWith(
+      expect.objectContaining({ bypassResultCache: undefined }),
+    )
+  })
+
+  it('carries force forward into the PartialFailed retry payload', () => {
+    const { service, taskProcessor } = createService()
+    service.onModuleInit()
+    const handler = taskProcessor.registerHandler.mock.calls
+      .map(([registered]) => registered)
+      .find(
+        (registered: any) => registered.type === AITaskType.Translation,
+      ) as any
+
+    const task = {
+      status: TaskStatus.PartialFailed,
+      groupId: 'group-1',
+      payload: {
+        refId: 'post-1',
+        targetLanguages: ['en', 'ja'],
+        force: true,
+        title: 'T',
+        refType: CollectionRefTypes.Post,
+      },
+      result: { translations: [{ lang: 'en' }] },
+    }
+
+    const retryOptions = handler.buildRetryTask(task)
+
+    expect(retryOptions.payload).toMatchObject({
+      refId: 'post-1',
+      targetLanguages: ['ja'],
+      force: true,
+    })
+  })
+
+  it('normalizes payload target languages before diffing, so zh-CN matches a successful zh', () => {
+    const { service, taskProcessor } = createService()
+    service.onModuleInit()
+    const handler = taskProcessor.registerHandler.mock.calls
+      .map(([registered]) => registered)
+      .find(
+        (registered: any) => registered.type === AITaskType.Translation,
+      ) as any
+
+    const task = {
+      status: TaskStatus.PartialFailed,
+      groupId: 'group-1',
+      payload: {
+        refId: 'post-1',
+        targetLanguages: ['zh-CN', 'en'],
+        title: 'T',
+        refType: CollectionRefTypes.Post,
+      },
+      // executeTranslationTask generates against the normalized language
+      // list, so a successful zh-CN run is recorded as lang: 'zh'
+      result: { translations: [{ lang: 'zh' }] },
+    }
+
+    const retryOptions = handler.buildRetryTask(task)
+
+    expect(retryOptions.payload).toMatchObject({
+      refId: 'post-1',
+      targetLanguages: ['en'],
+    })
+  })
+})
+
+describe('AiTranslationService.buildTranslationKey (in-flight key)', () => {
+  const buildKey = (service: AiTranslationService) => {
+    const content = (service as any).toArticleContent(articleDocument())
+    return (service as any).buildTranslationKey('post-1', 'en', content)
+  }
+
+  // force no longer folds into the key hash: a force request must land on
+  // the same in-flight lock as a plain one instead of spawning a second
+  // writer (see AiInFlightService.waitForForceLock).
+  it('gives repeated requests for the same content the same in-flight key', () => {
+    const { service } = createService()
+
+    expect(buildKey(service)).toBe(buildKey(service))
   })
 })

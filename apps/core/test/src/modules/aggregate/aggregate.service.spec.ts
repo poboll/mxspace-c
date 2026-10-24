@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 
+import { API_CACHE_PREFIX, CacheKeys } from '~/constants/cache.constant'
 import { AggregateService } from '~/modules/aggregate/aggregate.service'
 
 const noteRow = {
@@ -87,5 +88,221 @@ describe('AggregateService.topActivity', () => {
       summary: 'sum',
       category: { slug: 'tech' },
     })
+  })
+})
+
+describe('AggregateService.getLatest', () => {
+  const premiumContent = JSON.stringify({
+    root: {
+      children: [
+        {
+          type: 'paragraph',
+          children: [],
+          direction: null,
+          format: '',
+          indent: 0,
+          version: 1,
+        },
+        {
+          type: 'paragraph',
+          children: [],
+          direction: null,
+          format: '',
+          indent: 0,
+          version: 1,
+        },
+        {
+          type: 'paragraph',
+          children: [],
+          direction: null,
+          format: '',
+          indent: 0,
+          version: 1,
+        },
+      ],
+      direction: 'ltr',
+      format: '',
+      indent: 0,
+      type: 'root',
+      version: 1,
+    },
+  })
+  const premiumPost = {
+    ...postRow,
+    isPremium: true,
+    text: 'full premium body',
+    content: premiumContent,
+  }
+
+  const createServiceWithPremiumPost = () => {
+    const postService = { findRecent: vi.fn(async () => [premiumPost]) }
+    const noteService = { findRecent: vi.fn(async () => [noteRow]) }
+
+    const service = new AggregateService(
+      postService as any,
+      noteService as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+    )
+    return { service }
+  }
+
+  it('teasers a premium post in the { posts, notes } branch', async () => {
+    const { service } = createServiceWithPremiumPost()
+    const result = await service.getLatest(5)
+
+    expect(result.posts![0].text).not.toContain('full premium body')
+    expect(JSON.parse(result.posts![0].content!).root.children).toHaveLength(2)
+  })
+
+  it('teasers a premium post in the combined branch', async () => {
+    const { service } = createServiceWithPremiumPost()
+    const result = await service.getLatest(5, undefined, true)
+
+    const post = result.find((item: any) => item.type === 'post')!
+    expect((post as any).text).not.toContain('full premium body')
+    expect(JSON.parse((post as any).content).root.children).toHaveLength(2)
+  })
+})
+
+describe('AggregateService.buildRssStructure', () => {
+  const premiumContent = JSON.stringify({
+    root: {
+      children: [
+        {
+          type: 'paragraph',
+          children: [],
+          direction: null,
+          format: '',
+          indent: 0,
+          version: 1,
+        },
+        {
+          type: 'paragraph',
+          children: [],
+          direction: null,
+          format: '',
+          indent: 0,
+          version: 1,
+        },
+        {
+          type: 'paragraph',
+          children: [],
+          direction: null,
+          format: '',
+          indent: 0,
+          version: 1,
+        },
+      ],
+      direction: 'ltr',
+      format: '',
+      indent: 0,
+      type: 'root',
+      version: 1,
+    },
+  })
+
+  it('emits a teaser, not the full body, for a premium post', async () => {
+    const premiumPost = {
+      ...postRow,
+      isPremium: true,
+      text: 'full premium body',
+      content: premiumContent,
+    }
+    const postService = { findRecent: vi.fn(async () => [premiumPost]) }
+    const noteService = { findRecent: vi.fn(async () => []) }
+    const ownerService = { getOwner: vi.fn(async () => ({ name: 'Owner' })) }
+    const configs = {
+      get: vi.fn(async (key: string) =>
+        key === 'seo'
+          ? { title: 'Blog', description: 'desc' }
+          : { webUrl: 'https://example.com' },
+      ),
+    }
+    const urlBuilder = { build: vi.fn(() => '/tech/a-post') }
+
+    const service = new AggregateService(
+      postService as any,
+      noteService as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      ownerService as any,
+      configs as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      urlBuilder as any,
+    )
+
+    const { data } = await service.buildRssStructure()
+
+    expect(data).toHaveLength(1)
+    expect(data[0].text).not.toContain('full premium body')
+    expect(JSON.parse(data[0].content!).root.children).toHaveLength(2)
+  })
+})
+
+describe('AggregateService.cleanCache', () => {
+  it('invalidates RSS and aggregate-derived caches without flushing unrelated API caches', async () => {
+    const del = vi.fn(async () => 2)
+    const deleteKeysByPattern = vi.fn(async () => 5)
+    const redisService = {
+      getClient: vi.fn(() => ({ del })),
+      deleteKeysByPattern,
+    }
+
+    const service = new AggregateService(
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      redisService as any,
+      {} as any,
+      {} as any,
+      {} as any,
+    )
+
+    await service.cleanCache()
+
+    expect(del).toHaveBeenCalledOnce()
+    expect(del).toHaveBeenCalledWith(CacheKeys.RSS, CacheKeys.RSSXml)
+    expect(deleteKeysByPattern).toHaveBeenCalledOnce()
+    expect(deleteKeysByPattern).toHaveBeenCalledWith(`${CacheKeys.Aggregate}*`)
+    expect(`${CacheKeys.Aggregate}*`).not.toBe(`${API_CACHE_PREFIX}*`)
+  })
+
+  it('keeps every aggregate-derived cache under the invalidated prefix', () => {
+    const aggregateKeys = [
+      CacheKeys.Aggregate,
+      CacheKeys.AggregateSite,
+      CacheKeys.SiteMap,
+      CacheKeys.SiteMapXml,
+    ]
+
+    for (const key of aggregateKeys) {
+      expect(key.startsWith(CacheKeys.Aggregate)).toBe(true)
+    }
+    expect(CacheKeys.RSS.startsWith(CacheKeys.Aggregate)).toBe(false)
+    expect(CacheKeys.RSSXml.startsWith(CacheKeys.Aggregate)).toBe(false)
   })
 })

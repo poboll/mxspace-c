@@ -5,21 +5,21 @@ import {
 } from '@nestjs/common'
 import { omit } from 'es-toolkit/compat'
 import { dump } from 'js-yaml'
-import JSZip from 'jszip'
 import { escapeHtml } from 'xss'
 
 import { AppErrorCode, createAppException } from '~/common/errors'
 import { CollectionRefTypes } from '~/constants/db.constant'
 import { DatabaseService } from '~/processors/database/database.service'
 import { AssetService } from '~/processors/helper/helper.asset.service'
+import { getPublicText } from '~/processors/helper/lexical-truncate.util'
 import { ContentFormat } from '~/shared/types/content-format.type'
 
 import { CategoryService } from '../category/category.service'
 import { NoteService } from '../note/note.service'
-import { NoteModel } from '../note/note.types'
+import { type NoteModel } from '../note/note.types'
 import { PageService } from '../page/page.service'
 import { PostService } from '../post/post.service'
-import { PostModel } from '../post/post.types'
+import { type PostModel } from '../post/post.types'
 import type { MarkdownYAMLProperty } from './markdown.interface'
 import type { DatatypeDto } from './markdown.schema'
 import { markdownToHtml } from './markdown.util'
@@ -166,6 +166,7 @@ export class MarkdownService {
     documents: MarkdownYAMLProperty[]
     options: { slug?: boolean }
   }) {
+    const JSZip = (await import('jszip')).default
     const zip = new JSZip()
 
     for (const document of documents) {
@@ -212,14 +213,18 @@ ${text.trim()}
    * @param id
    * @returns
    */
-  async renderArticle(id: string) {
+  async renderArticle(id: string, options: { asOwner?: boolean } = {}) {
     const result = await this.databaseService.findGlobalById(id)
 
     if (!result || result.type === CollectionRefTypes.Recently)
       throw createAppException(AppErrorCode.DOCUMENT_NOT_FOUND, { id })
 
+    const text = options.asOwner
+      ? result.document.text
+      : getPublicText(result.document)
+
     return {
-      html: this.renderMarkdownContent(result.document.text),
+      html: this.renderMarkdownContent(text),
       ...result,
       document: result.document,
     }

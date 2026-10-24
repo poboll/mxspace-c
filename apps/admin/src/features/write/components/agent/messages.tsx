@@ -3,8 +3,9 @@ import type {
   ReviewBatch,
   ToolCallGroupItem,
 } from '@haklex/rich-agent-core'
+import { Streamdown } from '@lobehub/streamdown'
 import { Check, X } from 'lucide-react'
-import { Streamdown } from 'streamdown'
+import remarkGfm from 'remark-gfm'
 
 import { useI18n } from '~/i18n'
 import { Button } from '~/ui/primitives/button'
@@ -12,6 +13,8 @@ import { Button } from '~/ui/primitives/button'
 import { ThinkingBlock } from './ThinkingBlock'
 import { ToolCallGroupView } from './ToolCallView'
 import type { UserChatBubble } from './types'
+
+const remarkPlugins = [remarkGfm]
 
 interface AgentMessageItemProps {
   actionsLocked: boolean
@@ -54,16 +57,10 @@ export function AgentMessageItem(props: AgentMessageItemProps) {
       return (
         <div className="prose prose-sm max-w-none text-sm leading-relaxed text-fg dark:prose-invert">
           <Streamdown
-            animated={{
-              animation: 'fadeIn',
-              duration: 220,
-              easing: 'ease-out',
-              sep: 'char',
-            }}
-            isAnimating={Boolean(bubble.streaming)}
-          >
-            {bubble.content}
-          </Streamdown>
+            content={bubble.content}
+            granularity="char"
+            remarkPlugins={remarkPlugins}
+          />
         </div>
       )
     }

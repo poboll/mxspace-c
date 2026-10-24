@@ -6,6 +6,7 @@ import { promisify } from 'node:util'
 
 import { Injectable, Logger } from '@nestjs/common'
 
+import { describeAgentBrowserError } from '~/processors/agent-browser/agent-browser.constants'
 import {
   AgentBrowserSessionPool,
   type PoolSlot,
@@ -54,10 +55,10 @@ interface NavigationPayload {
 }
 
 type CaptureScreenshotDecision =
-  | boolean
-  | ((html: SafeFetchResult) => boolean | Promise<boolean>)
+  boolean | ((html: SafeFetchResult) => boolean | Promise<boolean>)
 
 type BrowserFetchOptions = SafeFetchOptions & {
+  signal?: AbortSignal
   executable?: string
   captureScreenshot?: CaptureScreenshotDecision
 }
@@ -80,7 +81,7 @@ export class BrowserFetchService {
 
   async fetchHtml(
     rawUrl: string,
-    opts: SafeFetchOptions & { executable?: string },
+    opts: BrowserFetchOptions,
   ): Promise<SafeFetchResult> {
     const { html } = await this.runSession(rawUrl, opts, false)
     return html
@@ -105,137 +106,150 @@ export class BrowserFetchService {
 
   private async runSession(
     rawUrl: string,
-    opts: SafeFetchOptions & { executable?: string },
+    opts: BrowserFetchOptions,
     captureScreenshot: CaptureScreenshotDecision,
   ): Promise<FetchPageResult> {
     const url = parseAndValidateUrl(rawUrl)
     await assertHostnameSafe(url.hostname)
 
-    const slot: PoolSlot = await this.pool.acquire()
+    let slot: PoolSlot | undefined
     const executable = opts.executable || DEFAULT_EXECUTABLE
 
     const started = Date.now()
     const ac = new AbortController()
     const timer = setTimeout(() => ac.abort(), opts.timeoutMs)
+    const abort = () => ac.abort()
+    opts.signal?.addEventListener('abort', abort, { once: true })
+    if (opts.signal?.aborted) ac.abort()
 
-    let html: SafeFetchResult
     try {
-      let payload = await this.runNavigationBatch(
-        executable,
+      let html: SafeFetchResult
+      try {
+        slot = await this.pool.acquire({ signal: ac.signal })
+        this.pool.markLive(slot)
+        let payload = await this.runNavigationBatch(
+          executable,
+          slot,
+          url,
+          ac,
+          opts,
+        )
+        let safeUrl = await this.assertBrowserFinalUrlSafe(payload.href)
+
+        const statusFailure = await this.fetchDocumentStatus(
+          executable,
+          slot,
+          url,
+          ac,
+        )
+        if (statusFailure) {
+          throw new Error(
+            `agent-browser navigation returned HTTP ${statusFailure.status} for ${statusFailure.url}`,
+          )
+        }
+
+        let signature = this.detectChallenge(payload.html, payload.title)
+        let retries = 0
+        while (signature && retries < OG_CHALLENGE_RETRY_MAX) {
+          retries += 1
+          payload = await this.reloadAndExtract(executable, slot, ac, opts)
+          safeUrl = await this.assertBrowserFinalUrlSafe(payload.href)
+          signature = this.detectChallenge(payload.html, payload.title)
+        }
+        if (signature) {
+          throw new ChallengeBlockedError(url.toString(), signature)
+        }
+
+        const truncated = payload.html.length > opts.maxBodyBytes
+        const body = truncated
+          ? payload.html.slice(0, opts.maxBodyBytes)
+          : payload.html
+        html = {
+          finalUrl: safeUrl.toString(),
+          contentType: 'text/html',
+          body,
+          truncated,
+        }
+      } catch (error) {
+        const err = error as NodeJS.ErrnoException & { stderr?: string }
+        if (ac.signal.aborted) {
+          if (slot) this.pool.release(slot, { discard: true })
+          throw new Error(
+            `agent-browser timed out after ${opts.timeoutMs}ms for ${url.toString()}`,
+            { cause: error },
+          )
+        }
+        if (
+          error instanceof UnsafeUrlError ||
+          error instanceof ChallengeBlockedError
+        ) {
+          if (slot) this.pool.release(slot)
+          throw error
+        }
+        // Surface HTTP-status throw from fetchDocumentStatus without discarding
+        // the slot — chromium is still healthy.
+        if (
+          err instanceof Error &&
+          err.message.startsWith('agent-browser navigation returned HTTP')
+        ) {
+          if (slot) this.pool.release(slot)
+          throw err
+        }
+        // Non-timeout CLI failure: discard the slot so a wedged chromium does
+        // not poison the next caller.
+        if (slot) this.pool.release(slot, { discard: true })
+        if (err.code === 'ENOENT') {
+          throw new Error(
+            `agent-browser executable not found at "${executable}". Install it or set thirdPartyServiceIntegration.openGraph.fetchMode = "fetch".`,
+            { cause: error },
+          )
+        }
+        const detail = ` (${describeAgentBrowserError(error)})`
+        throw new Error(`agent-browser failed for ${url.toString()}${detail}`, {
+          cause: error,
+        })
+      }
+
+      let discard = false
+      let screenshotBytes: Buffer | undefined
+      let shouldCapture: boolean
+      if (typeof captureScreenshot === 'function') {
+        try {
+          shouldCapture = await captureScreenshot(html)
+        } catch (predicateErr) {
+          this.logger.debug(
+            `screenshot decision predicate failed for ${url.toString()}: ${(predicateErr as Error).message}`,
+          )
+          shouldCapture = false
+        }
+      } else {
+        shouldCapture = captureScreenshot
+      }
+      if (shouldCapture) {
+        const remaining = Math.max(500, opts.timeoutMs - (Date.now() - started))
+        screenshotBytes = await this.captureScreenshot(
+          executable,
+          slot,
+          remaining,
+          ac.signal,
+        ).catch((screenshotErr) => {
+          discard = true
+          this.logger.debug(
+            `screenshot capture failed for ${url.toString()}: ${describeAgentBrowserError(screenshotErr)}`,
+          )
+          return undefined
+        })
+      }
+
+      this.pool.release(
         slot,
-        url,
-        ac,
-        opts,
+        discard || ac.signal.aborted ? { discard: true } : undefined,
       )
-      this.pool.markLive(slot)
-      let safeUrl = await this.assertBrowserFinalUrlSafe(payload.href)
-
-      const statusFailure = await this.fetchDocumentStatus(
-        executable,
-        slot,
-        url,
-        ac,
-      )
-      if (statusFailure) {
-        throw new Error(
-          `agent-browser navigation returned HTTP ${statusFailure.status} for ${statusFailure.url}`,
-        )
-      }
-
-      let signature = this.detectChallenge(payload.html, payload.title)
-      let retries = 0
-      while (signature && retries < OG_CHALLENGE_RETRY_MAX) {
-        retries += 1
-        payload = await this.reloadAndExtract(executable, slot, ac, opts)
-        safeUrl = await this.assertBrowserFinalUrlSafe(payload.href)
-        signature = this.detectChallenge(payload.html, payload.title)
-      }
-      if (signature) {
-        throw new ChallengeBlockedError(url.toString(), signature)
-      }
-
-      const truncated = payload.html.length > opts.maxBodyBytes
-      const body = truncated
-        ? payload.html.slice(0, opts.maxBodyBytes)
-        : payload.html
-      html = {
-        finalUrl: safeUrl.toString(),
-        contentType: 'text/html',
-        body,
-        truncated,
-      }
-    } catch (error) {
-      const err = error as NodeJS.ErrnoException & { stderr?: string }
-      if (ac.signal.aborted) {
-        this.pool.release(slot)
-        throw new Error(
-          `agent-browser timed out after ${opts.timeoutMs}ms for ${url.toString()}`,
-          { cause: error },
-        )
-      }
-      if (
-        error instanceof UnsafeUrlError ||
-        error instanceof ChallengeBlockedError
-      ) {
-        this.pool.release(slot)
-        throw error
-      }
-      // Surface HTTP-status throw from fetchDocumentStatus without discarding
-      // the slot — chromium is still healthy.
-      if (
-        err instanceof Error &&
-        err.message.startsWith('agent-browser navigation returned HTTP')
-      ) {
-        this.pool.release(slot)
-        throw err
-      }
-      // Non-timeout CLI failure: discard the slot so a wedged chromium does
-      // not poison the next caller.
-      this.pool.release(slot, { discard: true })
-      if (err.code === 'ENOENT') {
-        throw new Error(
-          `agent-browser executable not found at "${executable}". Install it or set thirdPartyServiceIntegration.openGraph.fetchMode = "fetch".`,
-          { cause: error },
-        )
-      }
-      const detail = err.stderr ? `: ${truncate(err.stderr, 400)}` : ''
-      throw new Error(`agent-browser failed for ${url.toString()}${detail}`, {
-        cause: error,
-      })
+      return { html, screenshotBytes }
     } finally {
       clearTimeout(timer)
+      opts.signal?.removeEventListener('abort', abort)
     }
-
-    let screenshotBytes: Buffer | undefined
-    let shouldCapture: boolean
-    if (typeof captureScreenshot === 'function') {
-      try {
-        shouldCapture = await captureScreenshot(html)
-      } catch (predicateErr) {
-        this.logger.debug(
-          `screenshot decision predicate failed for ${url.toString()}: ${(predicateErr as Error).message}`,
-        )
-        shouldCapture = false
-      }
-    } else {
-      shouldCapture = captureScreenshot
-    }
-    if (shouldCapture) {
-      const remaining = Math.max(500, opts.timeoutMs - (Date.now() - started))
-      screenshotBytes = await this.captureScreenshot(
-        executable,
-        slot,
-        remaining,
-      ).catch((screenshotErr) => {
-        this.logger.debug(
-          `screenshot capture failed for ${url.toString()}: ${(screenshotErr as Error).message}`,
-        )
-        return undefined
-      })
-    }
-
-    this.pool.release(slot)
-    return { html, screenshotBytes }
   }
 
   private buildBaseArgs(slot: PoolSlot): string[] {
@@ -271,6 +285,7 @@ export class BrowserFetchService {
       ],
       {
         signal: ac.signal,
+        killSignal: 'SIGKILL',
         maxBuffer: Math.max(opts.maxBodyBytes * 2, 4_194_304),
         windowsHide: true,
         env: process.env,
@@ -298,6 +313,7 @@ export class BrowserFetchService {
       ],
       {
         signal: ac.signal,
+        killSignal: 'SIGKILL',
         maxBuffer: Math.max(opts.maxBodyBytes * 2, 4_194_304),
         windowsHide: true,
         env: process.env,
@@ -331,6 +347,7 @@ export class BrowserFetchService {
         ],
         {
           signal: ac.signal,
+          killSignal: 'SIGKILL',
           maxBuffer: 1_048_576,
           windowsHide: true,
           env: process.env,
@@ -338,11 +355,12 @@ export class BrowserFetchService {
       )
       stdout = res.stdout
     } catch (error) {
+      if (ac.signal.aborted) throw error
       // `network requests` is a diagnostic side channel — if the CLI does not
       // implement the filter shape we expect, swallow and let the main flow
       // proceed. The challenge detector covers the most common bad-page case.
       this.logger.debug(
-        `network requests inspection failed for ${url.toString()}: ${(error as Error).message}`,
+        `network requests inspection failed for ${url.toString()}: ${describeAgentBrowserError(error)}`,
       )
       return null
     }
@@ -357,8 +375,7 @@ export class BrowserFetchService {
     if (!Array.isArray(parsed) || parsed.length === 0) return null
     // Last entry is the final navigation after any redirect chain.
     const last = parsed.at(-1) as
-      | { status?: unknown; url?: unknown }
-      | undefined
+      { status?: unknown; url?: unknown } | undefined
     const status = typeof last?.status === 'number' ? last.status : NaN
     const reqUrl = typeof last?.url === 'string' ? last.url : url.toString()
     if (!Number.isFinite(status) || status < 400) return null
@@ -386,11 +403,15 @@ export class BrowserFetchService {
     executable: string,
     slot: PoolSlot,
     timeoutMs: number,
+    signal: AbortSignal,
   ): Promise<Buffer | undefined> {
     const dir = await mkdtemp(join(tmpdir(), 'mx-og-screenshot-'))
     try {
       const ac = new AbortController()
       const timer = setTimeout(() => ac.abort(), timeoutMs)
+      const abort = () => ac.abort()
+      signal.addEventListener('abort', abort, { once: true })
+      if (signal.aborted) ac.abort()
       try {
         await execFileAsync(
           executable,
@@ -403,6 +424,7 @@ export class BrowserFetchService {
           ],
           {
             signal: ac.signal,
+            killSignal: 'SIGKILL',
             maxBuffer: 1_048_576,
             windowsHide: true,
             env: process.env,
@@ -422,6 +444,7 @@ export class BrowserFetchService {
           ],
           {
             signal: ac.signal,
+            killSignal: 'SIGKILL',
             maxBuffer: 8_388_608,
             windowsHide: true,
             env: process.env,
@@ -429,6 +452,7 @@ export class BrowserFetchService {
         )
       } finally {
         clearTimeout(timer)
+        signal.removeEventListener('abort', abort)
       }
 
       const entries = await readdir(dir)
@@ -484,8 +508,4 @@ function extractStringFromBatchOutput(stdout: string): string {
   const last = parsed.at(-1) as { result?: { result?: unknown } } | undefined
   const value = last?.result?.result
   return typeof value === 'string' ? value : ''
-}
-
-function truncate(s: string, n: number): string {
-  return s.length > n ? `${s.slice(0, n)}…` : s
 }

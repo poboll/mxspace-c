@@ -8,6 +8,7 @@ import {
   flagToTag,
   listUnknownMetaKeys,
   parseEnvelope,
+  spliceEnvelopeContent,
   tagToFlag,
 } from '../../src/domain/envelope'
 
@@ -172,6 +173,55 @@ describe('envelope parser (src)', () => {
       'post',
     )
     expect(empty.contentXml).toBe('')
+  })
+
+  it('reports a content span that splices the body without touching meta bytes', () => {
+    const xml = `<mxpost>
+  <meta>
+    <title>Keep Me</title>
+    <tags>
+      <tag>foo</tag>
+    </tags>
+  </meta>
+  <content>
+<p>old</p>
+  </content>
+</mxpost>`
+    const parsed = parseEnvelope(xml, 'post')
+    expect(parsed.contentSpan).toEqual(
+      expect.objectContaining({ selfClosing: false }),
+    )
+    const span = parsed.contentSpan!
+    expect(xml.slice(span.start, span.end)).toContain('<p>old</p>')
+
+    const prefix = xml.slice(0, xml.indexOf('<content'))
+    const next = spliceEnvelopeContent(
+      xml,
+      span,
+      '<p>new</p>\n<h2>added</h2>',
+    )
+    expect(next.startsWith(prefix)).toBe(true)
+    const reparsed = parseEnvelope(next, 'post')
+    expect(reparsed.meta.title).toBe('Keep Me')
+    expect(reparsed.meta.tags).toEqual(['foo'])
+    expect(reparsed.contentXml).toContain('<p>new</p>')
+    expect(reparsed.contentXml).toContain('<h2>added</h2>')
+    expect(reparsed.contentXml).not.toContain('<p>old</p>')
+  })
+
+  it('splices a self-closing content tag into an open content element', () => {
+    const xml =
+      '<mxpost><meta><title>t</title></meta><content/></mxpost>'
+    const parsed = parseEnvelope(xml, 'post')
+    expect(parsed.contentSpan?.selfClosing).toBe(true)
+    expect(parsed.contentXml).toBe('')
+
+    const next = spliceEnvelopeContent(xml, parsed.contentSpan!, '<p>hello</p>')
+    expect(next).toContain('<title>t</title>')
+    expect(next).not.toContain('<content/>')
+    const reparsed = parseEnvelope(next, 'post')
+    expect(reparsed.meta.title).toBe('t')
+    expect(reparsed.contentXml).toContain('<p>hello</p>')
   })
 
   it('throws ValidationXml for malformed comments, CDATA, tags, root content, and unterminated sections', () => {

@@ -1,20 +1,10 @@
-import {
-  Body,
-  Delete,
-  Get,
-  Param,
-  Patch,
-  Post,
-  Put,
-  Query,
-} from '@nestjs/common'
+import { Body, Delete, Get, Param, Patch, Query } from '@nestjs/common'
 
 import { ApiController } from '~/common/decorators/api-controller.decorator'
 import { Auth } from '~/common/decorators/auth.decorator'
 import { BypassCaseTransform } from '~/common/decorators/bypass-case-transform.decorator'
-import { HTTPDecorators } from '~/common/decorators/http.decorator'
-import type { IpRecord } from '~/common/decorators/ip.decorator'
-import { IpLocation } from '~/common/decorators/ip.decorator'
+import { CurrentReaderId } from '~/common/decorators/current-user.decorator'
+import { IpLocation, type IpRecord } from '~/common/decorators/ip.decorator'
 import { Lang } from '~/common/decorators/lang.decorator'
 import { HasAdminAccess } from '~/common/decorators/role.decorator'
 import { AppErrorCode, createAppException } from '~/common/errors'
@@ -22,37 +12,54 @@ import { withMeta } from '~/common/response/envelope.types'
 import type {
   ArticleTranslation,
   EnrichmentEntry,
+  PaywallMeta,
 } from '~/common/response/meta.types'
 import { MetaObjectBuilder } from '~/common/response/meta-builder'
 import { TranslationEntryService } from '~/modules/ai/ai-translation/translation-entry.service'
+import {
+  type EntitledPost,
+  EntitlementService,
+} from '~/modules/membership/entitlement.service'
 import { CountingService } from '~/processors/helper/helper.counting.service'
 import {
   applyArticleTranslationInPlace,
   applyTranslationEntriesInPlace,
   type ArticleTranslationInput,
   buildArticleTranslationMeta,
+  buildTagGlossary,
   type EntryMaps,
   type EntryRule,
   TranslationService,
 } from '~/processors/helper/helper.translation.service'
-import { EntityIdDto } from '~/shared/dto/id.dto'
+import {
+  renderTeaserText,
+  resolveEffectivePreviewBlocks,
+  truncateLexicalContent,
+} from '~/processors/helper/lexical-truncate.util'
+import { type EntityIdDto, EntityIdSchema } from '~/shared/dto/id.dto'
 
 import { AiInsightsService } from '../ai/ai-insights/ai-insights.service'
 import { parseLanguageCode } from '../ai/ai-language.util'
 import { AiSummaryService } from '../ai/ai-summary/ai-summary.service'
+import { AiTtsQueryService } from '../ai/ai-tts/ai-tts-query.service'
 import { EnrichmentService } from '../enrichment/enrichment.service'
 import { SnippetService } from '../snippet/snippet.service'
 import {
-  CategoryAndSlugDto,
-  PartialPostDto,
-  PostDetailQueryDto,
-  PostDto,
-  PostPagerDto,
-  SetPostPublishStatusDto,
+  type CategoryAndSlugDto,
+  CategoryAndSlugSchema,
+  type PartialPostDto,
+  PartialPostSchema,
+  type PostDetailQueryDto,
+  PostDetailQuerySchema,
+  type PostPagerDto,
+  PostPagerSchema,
+  type SetPostPublishStatusDto,
+  SetPostPublishStatusSchema,
 } from './post.schema'
 import { PostService } from './post.service'
 import type { PostModel } from './post.types'
 import { PostMetaBuilder } from './post-meta-builder'
+import { readPaywallMeta } from './post-paywall.util'
 
 const CATEGORY_NAME_RULES: ReadonlyArray<EntryRule> = [
   {
@@ -63,6 +70,14 @@ const CATEGORY_NAME_RULES: ReadonlyArray<EntryRule> = [
   },
 ]
 
+const POST_LIST_TRANSLATION_FIELDS = [
+  'title',
+  'text',
+  'summary',
+  'content',
+  'contentFormat',
+] as const
+
 @ApiController('posts')
 export class PostController {
   constructor(
@@ -71,39 +86,107 @@ export class PostController {
     private readonly translationService: TranslationService,
     private readonly aiInsightsService: AiInsightsService,
     private readonly aiSummaryService: AiSummaryService,
+    private readonly aiTtsQueryService: AiTtsQueryService,
     private readonly enrichmentService: EnrichmentService,
     private readonly translationEntryService: TranslationEntryService,
     private readonly snippetService: SnippetService,
+    private readonly entitlementService: EntitlementService,
   ) {}
 
-  private async batchCategoryEntryTranslations(
+  private async applyPaywall(
+    doc: Record<string, any>,
+    isOwner: boolean,
+    readerId?: string,
+  ): Promise<PaywallMeta | null> {
+    const { reason, locked } =
+      await this.entitlementService.resolvePostEntitlement({
+        post: doc as EntitledPost,
+        isOwner,
+        readerId,
+      })
+    if (reason === 'public') return null
+
+    const { freeUntil } = readPaywallMeta(doc.meta)
+    const purchase = await this.entitlementService.resolveArticlePurchaseMeta(
+      doc.meta,
+    )
+    const previewBlocks = locked ? this.applyPaywallTeaser(doc) : undefined
+
+    return {
+      locked,
+      ...(previewBlocks === undefined ? {} : { previewBlocks }),
+      ...(freeUntil ? { freeUntil } : {}),
+      entitlement: { reason },
+      purchase,
+    }
+  }
+
+  private applyPaywallTeaser(doc: Record<string, any>): number {
+    const effectiveN = resolveEffectivePreviewBlocks(
+      doc.content,
+      (doc.meta as any)?.paywall?.previewBlocks,
+    )
+    doc.content = truncateLexicalContent(doc.content, effectiveN)
+    doc.text = renderTeaserText(doc.content)
+    return effectiveN
+  }
+
+  private async batchEntryTranslations(
     lang: string,
-    posts: Array<{ category?: { id: unknown } | null } | null | undefined>,
+    posts: Array<
+      | { category?: { id: unknown } | null; tags?: string[] | null }
+      | null
+      | undefined
+    >,
   ): Promise<EntryMaps> {
     const categoryIds = new Set<string>()
+    const tags = new Set<string>()
     for (const post of posts) {
       if (post?.category?.id) categoryIds.add(String(post.category.id))
+      for (const tag of post?.tags ?? []) tags.add(tag)
     }
     return this.translationEntryService.getTranslationsBatch(lang, {
       entityLookups: categoryIds.size
         ? [{ keyPath: 'category.name', lookupKeys: categoryIds }]
         : [],
+      dictLookups: tags.size
+        ? [{ keyPath: 'post.tag', sourceTexts: tags }]
+        : [],
     })
+  }
+
+  private applyTagGlossary(
+    metaBuilder: MetaObjectBuilder<any>,
+    entryMaps: EntryMaps,
+  ) {
+    const tags = buildTagGlossary(entryMaps)
+    if (tags.length) metaBuilder.glossary({ tags })
   }
 
   @Get('/')
   async getPaginate(
-    @Query() query: PostPagerDto,
+    @Query({ schema: PostPagerSchema }) query: PostPagerDto,
     @HasAdminAccess() isAuthenticated: boolean,
     @Lang() lang?: string,
+    @CurrentReaderId() readerId?: string,
   ) {
-    const { size, page, year, sortBy, sortOrder, truncate, categoryIds } = query
+    const {
+      size,
+      page,
+      year,
+      sortBy,
+      sortOrder,
+      truncate,
+      categoryIds,
+      excludeAiWritten,
+    } = query
 
     const res = await this.postService.listPaginated({
       size,
       page,
       year,
       categoryIds,
+      excludeAiWritten,
       publishedOnly: !isAuthenticated,
       sortBy: sortBy as any,
       sortOrder: sortOrder === 'asc' ? 1 : -1,
@@ -119,6 +202,7 @@ export class PostController {
         id: String(doc.id),
         title: doc.title,
         text: truncate ? '' : doc.text,
+        summary: doc.summary,
         meta: doc.meta as { lang?: string } | undefined,
         contentFormat: doc.contentFormat,
         content: truncate ? undefined : doc.content,
@@ -131,16 +215,16 @@ export class PostController {
         this.translationService.collectArticleTranslations({
           articles: articleInputs,
           targetLang: lang,
-          fields: ['title', 'text', 'content', 'contentFormat'],
+          fields: POST_LIST_TRANSLATION_FIELDS,
         }),
-        this.batchCategoryEntryTranslations(lang ?? '', res.data),
+        this.batchEntryTranslations(lang ?? '', res.data),
       ])
 
     for (const doc of res.data) {
       const tr = translationResults.get(String(doc.id))
       if (tr?.isTranslated) {
         applyArticleTranslationInPlace(doc as Record<string, any>, tr as any, {
-          fields: ['title', 'text', 'content', 'contentFormat'],
+          fields: POST_LIST_TRANSLATION_FIELDS,
         })
       }
     }
@@ -155,7 +239,21 @@ export class PostController {
       }
     }
 
+    const entitlements = await this.entitlementService.resolvePostEntitlements({
+      posts: res.data as EntitledPost[],
+      isOwner: isAuthenticated,
+      readerId,
+    })
     for (const doc of res.data) {
+      if (entitlements.get(String(doc.id))?.locked) {
+        if (typeof doc.content === 'string') {
+          this.applyPaywallTeaser(doc as Record<string, any>)
+        } else {
+          doc.text = ''
+        }
+        continue
+      }
+
       if (truncate) {
         doc.text = doc.text.slice(0, truncate)
         doc.content = null
@@ -172,6 +270,7 @@ export class PostController {
     if (translationMeta.size > 0) {
       metaBuilder.translation(translationMeta)
     }
+    if (lang) this.applyTagGlossary(metaBuilder, entryMaps)
 
     return withMeta(res.data, metaBuilder.build())
   }
@@ -196,6 +295,7 @@ export class PostController {
     @IpLocation() ip: IpRecord,
     @HasAdminAccess() isAuthenticated: boolean,
     @Lang() lang?: string,
+    @CurrentReaderId() readerId?: string,
   ) {
     const [last] = await this.postService.findRecent(1, {
       publishedOnly: !isAuthenticated,
@@ -211,15 +311,17 @@ export class PostController {
       ip,
       isAuthenticated,
       lang,
+      readerId,
     )
   }
 
   @Get('/:id')
   @BypassCaseTransform(['meta'])
   async getById(
-    @Param() params: EntityIdDto,
+    @Param({ schema: EntityIdSchema }) params: EntityIdDto,
     @HasAdminAccess() isAuthenticated: boolean,
     @Lang() lang?: string,
+    @CurrentReaderId() readerId?: string,
   ) {
     const { id } = params
     const doc = await this.postService.findById(id)
@@ -243,7 +345,7 @@ export class PostController {
           tags: doc.tags,
         },
       }),
-      this.batchCategoryEntryTranslations(lang ?? '', [doc]),
+      this.batchEntryTranslations(lang ?? '', [doc]),
     ])
 
     applyArticleTranslationInPlace(
@@ -258,6 +360,12 @@ export class PostController {
         CATEGORY_NAME_RULES,
       )
     }
+
+    const paywall = await this.applyPaywall(
+      doc as Record<string, any>,
+      !!isAuthenticated,
+      readerId,
+    )
 
     const { enrichments, ...docData } =
       await this.enrichmentService.attachEnrichments(doc)
@@ -286,19 +394,24 @@ export class PostController {
       ],
     ])
     metaBuilder.translation(translationMap)
+    if (lang) this.applyTagGlossary(metaBuilder, entryMaps)
 
     if (skills.length > 0) metaBuilder.skills(skills)
+
+    if (paywall) metaBuilder.paywall(paywall)
+
     return withMeta(docData, metaBuilder.build())
   }
 
   @Get('/:category/:slug')
   @BypassCaseTransform(['meta'])
   async getByCateAndSlug(
-    @Param() params: CategoryAndSlugDto,
-    @Query() query: PostDetailQueryDto,
+    @Param({ schema: CategoryAndSlugSchema }) params: CategoryAndSlugDto,
+    @Query({ schema: PostDetailQuerySchema }) query: PostDetailQueryDto,
     @IpLocation() { ip }: IpRecord,
     @HasAdminAccess() isAuthenticated?: boolean,
     @Lang() lang?: string,
+    @CurrentReaderId() readerId?: string,
   ) {
     const { category, slug } = params
     const postDocument = await this.postService.getPostBySlug(
@@ -333,6 +446,7 @@ export class PostController {
       entryMaps,
       hasInsightsInLocale,
       summaryDoc,
+      ttsMeta,
     ] = await Promise.all([
       this.translationService.translateArticle({
         articleId: postDocument.id,
@@ -346,7 +460,7 @@ export class PostController {
         },
       }),
       this.translationService.getCachedTitles(relatedIds, lang),
-      this.batchCategoryEntryTranslations(lang ?? '', [postDocument]),
+      this.batchEntryTranslations(lang ?? '', [postDocument]),
       this.aiInsightsService
         .hasInsightsInLang(postDocument.id, insightsLang)
         .catch(() => false),
@@ -354,6 +468,13 @@ export class PostController {
         postDocument.id,
         insightsLang,
       ),
+      this.aiTtsQueryService
+        .getMetaForArticle(
+          postDocument.id,
+          insightsLang,
+          postDocument.modifiedAt,
+        )
+        .catch(() => ({ available: false as const })),
     ])
 
     applyArticleTranslationInPlace(
@@ -378,6 +499,11 @@ export class PostController {
       : relatedList
 
     const { related: _related, ...postEntity } = postDocument
+    const paywall = await this.applyPaywall(
+      postEntity as Record<string, any>,
+      !!isAuthenticated,
+      readerId,
+    )
     const { enrichments, ...postData } =
       await this.enrichmentService.attachEnrichments(postEntity)
 
@@ -395,6 +521,7 @@ export class PostController {
       .interaction({ isLiked: liked })
       .related(translatedRelated)
       .insights({ hasInLocale: hasInsightsInLocale })
+      .tts(paywall?.locked ? { available: false } : ttsMeta)
       .enrichments(enrichments as Record<string, EnrichmentEntry>)
 
     if (summaryDoc) {
@@ -418,36 +545,21 @@ export class PostController {
       ],
     ])
     metaBuilder.translation(translationMap)
+    if (lang) this.applyTagGlossary(metaBuilder, entryMaps)
 
     if (skills.length > 0) metaBuilder.skills(skills)
+
+    if (paywall) metaBuilder.paywall(paywall)
+
     return withMeta(postData, metaBuilder.build())
-  }
-
-  @Post('/')
-  @Auth()
-  @HTTPDecorators.Idempotence()
-  async create(@Body() body: PostDto) {
-    const created = await this.postService.create({
-      ...(body as unknown as PostModel),
-      modifiedAt: null,
-      slug: body.slug,
-    })
-    return created
-  }
-
-  @Put('/:id')
-  @Auth()
-  async update(@Param() params: EntityIdDto, @Body() body: PostDto) {
-    const updated = await this.postService.updateById(
-      params.id,
-      body as unknown as PostModel,
-    )
-    return updated
   }
 
   @Patch('/:id')
   @Auth()
-  async patch(@Param() params: EntityIdDto, @Body() body: PartialPostDto) {
+  async patch(
+    @Param({ schema: EntityIdSchema }) params: EntityIdDto,
+    @Body({ schema: PartialPostSchema }) body: PartialPostDto,
+  ) {
     await this.postService.updateById(
       params.id,
       body as unknown as Partial<PostModel>,
@@ -456,7 +568,7 @@ export class PostController {
 
   @Delete('/:id')
   @Auth()
-  async deletePost(@Param() params: EntityIdDto) {
+  async deletePost(@Param({ schema: EntityIdSchema }) params: EntityIdDto) {
     const { id } = params
     await this.postService.deletePost(id)
   }
@@ -464,8 +576,8 @@ export class PostController {
   @Patch('/:id/publish')
   @Auth()
   async setPublishStatus(
-    @Param() params: EntityIdDto,
-    @Body() body: SetPostPublishStatusDto,
+    @Param({ schema: EntityIdSchema }) params: EntityIdDto,
+    @Body({ schema: SetPostPublishStatusSchema }) body: SetPostPublishStatusDto,
   ) {
     await this.postService.updateById(params.id, {
       isPublished: body.isPublished,

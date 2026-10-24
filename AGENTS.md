@@ -1,0 +1,96 @@
+# AGENTS.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Project Overview
+
+Mix Space is a personal blog server application (AI-powered headless CMS) built with NestJS, PostgreSQL, and Redis. This is a monorepo containing the core server application and related packages. The main application is located in `apps/core/`; the admin dashboard SPA lives at `apps/admin/` and is built into the server release (see `apps/admin/CLAUDE.md`).
+
+## Related Projects
+
+- **Dashboard**: now an in-repo app at `apps/admin` (React 19 SPA, `@mx-admin/admin`). Built locally during the core build/release, served under `/proxy/qaqdmin`, and published to Cloudflare R2. See `apps/admin/CLAUDE.md` and `docs/admin-monorepo-migration.md`. (The former standalone `mx-space/mx-admin` repo is archived.)
+- **Frontend (Yohaku)**: `../Yohaku` — 主站前端 (Next.js)
+- **haklex**: `../haklex` (standalone) — Rich editor packages (`@haklex/*`)
+
+### Lexical Content Processing
+
+mx-core uses `@haklex/rich-headless` (zero-React, server-side only) for Lexical JSON processing:
+- `helper.lexical.service.ts` — `createHeadlessEditor()` + `allHeadlessNodes` + `$toMarkdown()` for JSON → Markdown conversion
+- `ai-translation/lexical-translation-parser.ts` — AI translation content parsing
+- After haklex releases, update the pinned version in `apps/core/package.json`
+
+## Architecture Overview
+
+### Key Architectural Patterns
+
+**API Route Prefix**: The `@ApiController()` decorator adds `/api/v{version}` prefix in production but no prefix in development. This allows direct access during development.
+
+**Processors**: Infrastructure services organized in `processors/`:
+- `database/` - PostgreSQL connection (Drizzle ORM), repository registry, base repository class
+- `redis/` - Redis caching and pub/sub
+- `gateway/` - WebSocket gateways for real-time features
+- `helper/` - Utility services (email, image, JWT, Lexical, etc.)
+
+**Database**: Uses PostgreSQL 16+ with Drizzle ORM. Schema definitions in `src/database/schema/`. Drizzle SQL migrations in `src/database/migrations/`. IDs are Snowflake `bigint` (serialized as strings at API boundaries). Repositories extend `BaseRepository` and are registered via `repository.tokens.ts`.
+
+**Authentication**: Better Auth-based session management with decorators `@Auth()` for route protection and `@CurrentUser()` for accessing the authenticated user. Supports password, OAuth, Passkey, and API key (`x-api-key` header).
+
+## API Response Rules
+
+Every successful JSON response has the shape `{ data, meta? }`. Every error has the shape `{ error: { code, message, details? } }`.
+
+**Success envelope** — `ResponseInterceptor` (global `APP_INTERCEPTOR`) wraps controller return values:
+- A bare value `T` → `{ data: T }`
+- A value produced via `withMeta(data, meta)` (from `~/common/response/envelope.types`) → emitted as `{ data, meta }`. Detection is by an internal `Symbol`, **not** by the presence of a `data` key — returning a literal `{ data, ... }` will be double-wrapped. CI enforces this via `scripts/check-controller-response-envelope.ts`.
+- `undefined` → `204 No Content`
+
+**Error envelope** — `AppExceptionFilter` (global `APP_FILTER`) maps every thrown error:
+- `AppException` (and subclasses) → `{ error: { code, message, details? } }` at the exception's HTTP status
+- `ZodError` → 400 `VALIDATION_FAILED` with `details.issues`
+- Other `HttpException` → `{ error: { code: 'HTTP_ERROR', message } }`
+- Unknown errors → 500 `INTERNAL_ERROR`
+
+**Exceptions** — extend `AppException` with a stable `SCREAMING_SNAKE` code:
+```ts
+throw new BizException(ErrorCodeEnum.PostNotFound)    // code: 'PostNotFound', 404
+throw new CannotFindException()                        // code: 'NOT_FOUND', 404
+throw new BanInDemoExcpetion()                         // code: 'DEMO_FORBIDDEN', 403
+throw new NoContentCanBeModifiedException()            // code: 'NO_CONTENT_MODIFIABLE', 400
+```
+
+**Meta** — use `MetaObjectBuilder` for cross-cutting per-request data (pagination, translation, enrichment, interaction). Located in `src/common/response/meta-builder.ts`.
+
+**Named views** — field selection uses `*.views.ts` Zod schemas (e.g. `PostViews.card`, `PostViews.detail`) instead of a `?select=` parameter. Views are parsed at the controller layer.
+
+**Case conversion** — code is camelCase end to end (Drizzle column TS props, Zod DTOs, services). The `RequestCaseNormalizationPipe` (global, runs before the Zod validation pipe) folds incoming request keys to camelCase: query and path params are camelized recursively; request bodies are camelized **only at the top level** so freeform JSON values (`meta`, `socialIds`, AI agent `messages`, snippet payloads) survive verbatim. Both `?sort_by=` and `?sortBy=` reach the controller as `sortBy`. `ResponseInterceptor` converts the response `data`/`meta` back to snake_case at the wire boundary (`transformResponseCase` in `src/common/response/case-transform.ts`); the wire format stays snake_case. DB column names are unchanged — each Drizzle column keeps its explicit snake_case name string. Never call a manual `snakeCaseKeys`-style helper in a controller.
+
+**`@BypassCaseTransform([paths])`** — opt a field subtree out of snake_case conversion (free-form JSON columns, snippet payloads). Paths root at `data`, dotted segments, `[]` marks an array level (e.g. `'items[].rawPayload'`). Located in `src/common/decorators/bypass-case-transform.decorator.ts`.
+
+**`@HTTPDecorators.RawResponse`** — opt out of the whole envelope + casing pipeline for non-JSON responses (streams, HTML, RSS, redirects). Located in `src/common/decorators/http.decorator.ts`.
+
+**Writing a new endpoint:**
+1. Return `<value>` for a bare envelope, or `withMeta(<value>, new MetaObjectBuilder()...build())` for `{ data, meta }`. Never return an object literal whose top-level keys include `data`.
+2. Throw `AppException` subclasses (or `BizException` with an `ErrorCodeEnum` code) for errors.
+3. Use `@HTTPDecorators.RawResponse` only if the response is not JSON.
+4. Define or reuse a view in `<resource>.views.ts` and parse through it before returning.
+
+## Testing
+
+Vitest with PostgreSQL testcontainers (`@testcontainers/postgresql`) and Redis memory server.
+
+For `createE2EApp` usage, the PostgreSQL testcontainer helpers, and the mock inventory, use the `create-e2e-test` skill.
+
+## Database Migrations
+
+Database migrations use Drizzle Kit. SQL migration files live in `src/database/migrations/` (e.g. `0000_initial.sql`). Historical data migrations from the MongoDB era are in `src/migration/postgres-data-migration/`.
+
+**Release-phase migration**: schema migrations run as a one-shot pre-deploy step, NOT on app startup. The app boot guard (`assertSchemaCurrent` in `processors/database/postgres.provider.ts`) refuses to start if the schema is behind. Run via `pnpm -C apps/core run migrate` locally or via the `mx-migrate` service in compose.
+
+When authoring or reviewing a migration, use the `mx-migration-author` skill — it enforces expand-contract for rolling deploys (Dokploy 2 replicas). CI runs `pnpm -C apps/core run lint:migrations` to flag dangerous patterns. Full design: `docs/superpowers/specs/2026-05-05-database-migration-release-phase-design.md`.
+
+## Configuration
+
+Configuration via `src/app.config.ts` supports:
+- Environment variables
+- Command line arguments
+- YAML configuration files

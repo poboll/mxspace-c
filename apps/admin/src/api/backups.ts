@@ -10,6 +10,7 @@ export interface BackupFile {
   createdAt: string
   filename: string
   size: string
+  encrypted?: boolean
 }
 
 export async function getBackups() {
@@ -28,18 +29,33 @@ export function deleteBackup(filename: string) {
   return deleteJson<void>(`/backups/${encodeURIComponent(filename)}`)
 }
 
-export function rollbackBackup(filename: string) {
-  return patchJson<void, Record<string, never>>(
+export function rollbackBackup({
+  filename,
+  decryptionKey,
+}: {
+  filename: string
+  decryptionKey?: string
+}) {
+  return patchJson<void, { decryptionKey?: string }>(
     `/backups/rollback/${encodeURIComponent(filename)}`,
-    {},
+    { decryptionKey },
   )
 }
 
-export async function uploadAndRestoreBackup(file: File) {
+export interface BackupRestoreInput {
+  file: File
+  decryptionKey?: string
+}
+
+export async function uploadAndRestoreBackup(
+  { file, decryptionKey }: BackupRestoreInput,
+  endpoint = '/backups/rollback',
+) {
   const formData = new FormData()
+  if (decryptionKey) formData.append('decryptionKey', decryptionKey)
   formData.append('file', file)
 
-  await requestJson<void>('/backups/rollback', {
+  await requestJson<void>(endpoint, {
     body: formData,
     method: 'POST',
   })

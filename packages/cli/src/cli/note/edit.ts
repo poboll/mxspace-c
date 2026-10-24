@@ -1,6 +1,7 @@
-import { Args, Command } from '@effect/cli'
 import { Effect } from 'effect'
+import { Argument, Command } from 'effect/cli'
 
+import { openAdminDraftEdit } from '../../domain/admin-link'
 import { coerceMeta, parseEnvelope } from '../../domain/envelope'
 import { ValidationXml } from '../../domain/errors'
 import { buildNotePayload } from '../../domain/payload'
@@ -9,9 +10,14 @@ import { Editor } from '../../services/Editor'
 import { Lexical } from '../../services/Lexical'
 import { Renderer } from '../../services/Renderer'
 import { Resolver } from '../../services/Resolver'
+import {
+  normalizeData,
+  publishSavedDraft,
+  saveDraftPayload,
+} from '../draft/_shared'
 import { noteWriteOptions, resolveTopicRefs, toNoteFlagInputs } from './_flags'
 
-const slugOrId = Args.text({ name: 'slugOrId' })
+const slugOrId = Argument.String('slugOrId')
 
 const esc = (s: string): string =>
   s.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
@@ -33,9 +39,9 @@ const materializeForEditor = (slugOrId: string) =>
     const resolver = yield* Resolver
     const lexical = yield* Lexical
     const id = yield* resolver.resolveNoteId(slugOrId)
-    const note = (yield* api.request(`/notes/${id}`, {
-      query: { prefer: 'lexical' },
-    })) as NoteForEditor
+    const note = normalizeData<NoteForEditor>(
+      yield* api.request(`/notes/${id}`, { query: { prefer: 'lexical' } }),
+    )
     let inner: string
     if (note.contentFormat === 'lexical' && note.content) {
       const state = JSON.parse(note.content)
@@ -87,6 +93,10 @@ export const edit = Command.make(
       const editor = yield* Editor
       const renderer = yield* Renderer
       const resolver = yield* Resolver
+      const id = yield* resolver.resolveNoteId(slugOrId)
+      const current = normalizeData<NoteForEditor>(
+        yield* api.request(`/notes/${id}`),
+      )
 
       if (!flags.file && flags.content === undefined) {
         const xml = yield* materializeForEditor(slugOrId)
@@ -112,22 +122,36 @@ export const edit = Command.make(
         })
         const payload = applyNoteEnvelopeMeta(built.payload, parsed.meta)
         const resolved = yield* resolveTopicRefs(payload)
-        const id = yield* resolver.resolveNoteId(slugOrId)
-        const res = yield* api.request(`/notes/${id}`, {
-          method: 'PUT',
-          body: resolved,
-        })
-        yield* renderer.emitSuccess(res)
+        const shouldPublish =
+          typeof resolved.isPublished === 'boolean'
+            ? resolved.isPublished
+            : current.isPublished !== false
+        delete resolved.isPublished
+        const saved = yield* saveDraftPayload(api, 'note', resolved, id)
+        const response = shouldPublish
+          ? yield* publishSavedDraft(api, saved.draft)
+          : saved.response
+        yield* renderer.emitSuccess(response)
+        if (rest.open && saved.draft.id) {
+          yield* openAdminDraftEdit('notes', saved.draft.id, id)
+        }
         return
       }
 
       const built = yield* buildNotePayload(flags)
       const resolved = yield* resolveTopicRefs(built.payload)
-      const id = yield* resolver.resolveNoteId(slugOrId)
-      const res = yield* api.request(`/notes/${id}`, {
-        method: 'PUT',
-        body: resolved,
-      })
-      yield* renderer.emitSuccess(res)
+      const shouldPublish =
+        typeof resolved.isPublished === 'boolean'
+          ? resolved.isPublished
+          : current.isPublished !== false
+      delete resolved.isPublished
+      const saved = yield* saveDraftPayload(api, 'note', resolved, id)
+      const response = shouldPublish
+        ? yield* publishSavedDraft(api, saved.draft)
+        : saved.response
+      yield* renderer.emitSuccess(response)
+      if (rest.open && saved.draft.id) {
+        yield* openAdminDraftEdit('notes', saved.draft.id, id)
+      }
     }),
 ).pipe(Command.withDescription('edit a note via $EDITOR or flags'))

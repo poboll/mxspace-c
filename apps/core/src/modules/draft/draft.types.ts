@@ -1,100 +1,139 @@
 import type { EntityId } from '~/shared/id/entity-id'
-import type { ContentFormat } from '~/shared/types/content-format.type'
-import type { BaseModel, ImageModel } from '~/shared/types/legacy-model.type'
 
+import type { PublishAiResourceRequest } from '../publish/publish.types'
 import type { DraftRefType } from './draft.enum'
 
 export type { DraftRefType }
 
-export interface DraftHistoryModel {
-  version: number
-  title: string
-  text?: string
-  contentFormat: ContentFormat
-  content?: string
-  typeSpecificData?: string
-  savedAt: Date
-  isFullSnapshot: boolean
-  refVersion?: number
-  baseVersion?: number
-}
+export type DraftBranchStatus = 'active' | 'archived'
+export type DraftShareMode = 'pinned' | 'follow'
+export type RevisionRelation = 'same' | 'ancestor' | 'descendant' | 'diverged'
 
-export interface DraftModel extends BaseModel {
-  refType: DraftRefType
-  refId?: any
-  title: string
-  text: string
-  contentFormat: ContentFormat
-  content?: string
-  images?: ImageModel[]
-  meta?: Record<string, any>
-  typeSpecificData?: string
-  version: number
-  publishedVersion?: number
-  updated?: Date
-  history: DraftHistoryModel[]
-}
-
-export const DRAFT_PROTECTED_KEYS = [
-  'version',
-  'history',
-  'updated',
-  'publishedVersion',
-  'createdAt',
-  'id',
-]
-
-export interface DraftHistoryEntry {
-  version: number
-  title: string
-  text?: string
-  contentFormat: string
-  content?: string
-  typeSpecificData?: string
-  savedAt: string
-  isFullSnapshot: boolean
-  refVersion?: number
-  baseVersion?: number
-}
-
-export interface DraftRow {
-  id: EntityId
-  refType: DraftRefType
-  refId: EntityId | null
-  title: string
-  text: string
+export interface RevisionSnapshot {
   content: string | null
   contentFormat: string
   images: unknown[] | null
   meta: Record<string, unknown> | null
+  text: string
+  title: string
   typeSpecificData: Record<string, unknown> | null
-  history: DraftHistoryEntry[]
-  version: number
-  publishedVersion: number | null
+}
+
+export interface ContentDocumentRow {
   createdAt: Date
+  id: EntityId
+  publishAiResources: PublishAiResourceRequest[] | null
+  publishedRevisionId: EntityId | null
+  refId: EntityId | null
+  refType: DraftRefType
   updatedAt: Date | null
 }
 
-export interface DraftCreateInput {
-  refType: DraftRefType
-  refId?: EntityId | string | null
-  contentFormat: string
-  title?: string
-  text?: string
-  content?: string | null
-  images?: unknown[] | null
-  meta?: Record<string, unknown> | null
-  typeSpecificData?: Record<string, unknown> | null
+export interface ContentRevisionRow extends RevisionSnapshot {
+  createdAt: Date
+  documentId: EntityId
+  id: EntityId
+  parentRevisionId: EntityId | null
 }
 
-export type DraftPatchInput = Partial<DraftCreateInput> & {
-  version?: number
-  publishedVersion?: number | null
-  history?: DraftHistoryEntry[]
+export interface ContentPublicationEventRow {
+  createdAt: Date
+  documentId: EntityId
+  id: EntityId
+  previousRevisionId: EntityId | null
+  revisionId: EntityId
+}
+
+export interface DraftBranchRow {
+  baseRevisionId: EntityId
+  createdAt: Date
+  documentId: EntityId
+  headRevisionId: EntityId
+  id: EntityId
+  status: DraftBranchStatus
+  updatedAt: Date | null
+}
+
+export interface RevisionComparison {
+  commonAncestorRevisionId: EntityId | null
+  left: ContentRevisionRow
+  relation: RevisionRelation
+  right: ContentRevisionRow
+}
+
+export interface DraftBranchView extends DraftBranchRow {
+  baseRevision: ContentRevisionRow
+  commonAncestorRevisionId: EntityId | null
+  document: ContentDocumentRow
+  headRevision: ContentRevisionRow
+  publishedRevision: ContentRevisionRow | null
+  relationToPublished: RevisionRelation | null
+}
+
+export interface VersionContext {
+  branches: DraftBranchView[]
+  document: ContentDocumentRow
+  publishedRevision: ContentRevisionRow | null
+  versionTree: VersionTreeNode[]
+}
+
+export interface VersionTreeNode {
+  branchBaseIds: EntityId[]
+  branchHeadIds: EntityId[]
+  collapsedRevisionCount: number
+  parentNodeId: EntityId | null
+  publishedAt: Date | null
+  revision: ContentRevisionRow
+}
+
+export interface CreateDraftBranchInput extends RevisionSnapshot {
+  baseRevisionId?: EntityId | string | null
+  refId?: EntityId | string | null
+  refType: DraftRefType
+}
+
+export type SaveDraftBranchInput = RevisionSnapshot & {
+  expectedHeadRevisionId: EntityId | string
 }
 
 export interface DraftListFilter {
+  hasRef?: boolean
   refType?: DraftRefType
   search?: string
-  hasRef?: boolean
+  status?: DraftBranchStatus
+}
+
+export interface DocumentShareRow {
+  createdAt: Date
+  documentId: EntityId
+  draftId: EntityId | null
+  id: EntityId
+  mode: DraftShareMode
+  revisionId: EntityId | null
+  token: string
+  updatedAt: Date | null
+}
+
+export interface SharedRevisionSnapshot {
+  content: string | null
+  contentFormat: string
+  createdAt: Date
+  images: unknown[] | null
+  refType: DraftRefType
+  text: string
+  title: string
+}
+
+/**
+ * Payload of the `draft.update` admin broadcast. Carries only identity and the
+ * new head: the editor that receives it already has the content, and comparing
+ * one revision id is enough to decide whether its view is stale. Clients must
+ * not treat receipt as authoritative content — re-read the draft instead.
+ */
+export interface DraftUpdateEventPayload {
+  branchId: EntityId
+  documentId: EntityId
+  headRevisionId: EntityId
+  refId: EntityId | null
+  refType: DraftRefType
 }

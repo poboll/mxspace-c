@@ -1,4 +1,3 @@
-import { createZodDto } from 'nestjs-zod'
 import { z } from 'zod'
 
 import { zCoerceDate, zNonEmptyString } from '~/common/zod'
@@ -68,12 +67,4 @@ export const WriteBaseSchemaWithRefine = WriteBaseSchema.superRefine(
   validateLexicalCreateContentPair,
 )
 
-export class WriteBaseDto extends createZodDto(WriteBaseSchema) {}
-
-export type WriteBaseInput = z.infer<typeof WriteBaseSchema>
-
 export const PartialWriteBaseSchema = WriteBaseSchema.partial()
-
-export class PartialWriteBaseDto extends createZodDto(PartialWriteBaseSchema) {}
-
-export type PartialWriteBaseInput = z.infer<typeof PartialWriteBaseSchema>

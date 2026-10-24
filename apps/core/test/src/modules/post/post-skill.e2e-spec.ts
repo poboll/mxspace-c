@@ -5,7 +5,9 @@ import { describe, expect, it, vi } from 'vitest'
 import { AiInsightsService } from '~/modules/ai/ai-insights/ai-insights.service'
 import { AiSummaryService } from '~/modules/ai/ai-summary/ai-summary.service'
 import { TranslationEntryService } from '~/modules/ai/ai-translation/translation-entry.service'
+import { AiTtsQueryService } from '~/modules/ai/ai-tts/ai-tts-query.service'
 import { EnrichmentService } from '~/modules/enrichment/enrichment.service'
+import { EntitlementService } from '~/modules/membership/entitlement.service'
 import { PostController } from '~/modules/post/post.controller'
 import { PostService } from '~/modules/post/post.service'
 import { SnippetService } from '~/modules/snippet/snippet.service'
@@ -87,6 +89,12 @@ const proxy = createE2EApp({
       useValue: { getSummaryForPublicMeta: vi.fn(async () => null) },
     },
     {
+      provide: AiTtsQueryService,
+      useValue: {
+        getMetaForArticle: vi.fn(async () => ({ available: false })),
+      },
+    },
+    {
       provide: EnrichmentService,
       useValue: {
         attachEnrichments: vi.fn(async (doc: Record<string, unknown>) => ({
@@ -105,6 +113,16 @@ const proxy = createE2EApp({
       },
     },
     { provide: SnippetService, useValue: snippetService },
+    {
+      provide: EntitlementService,
+      useValue: {
+        isActiveMember: vi.fn(async () => false),
+        resolvePostEntitlement: vi.fn(async () => ({
+          reason: 'public',
+          locked: false,
+        })),
+      },
+    },
   ],
 })
 

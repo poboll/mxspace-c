@@ -2,9 +2,12 @@ import { sql } from 'drizzle-orm'
 import type { AnyPgColumn } from 'drizzle-orm/pg-core'
 import {
   boolean,
+  doublePrecision,
   index,
+  integer,
   jsonb,
   pgTable,
+  real,
   text,
   uniqueIndex,
 } from 'drizzle-orm/pg-core'
@@ -16,6 +19,7 @@ export const aiTranslations = pgTable(
   {
     id: pkText(),
     createdAt: createdAt(),
+    updatedAt: updatedAt(),
     hash: text('hash').notNull(),
     refId: refText('ref_id').notNull(),
     refType: text('ref_type').notNull(),
@@ -81,8 +85,17 @@ export const aiSummaries = pgTable(
     summary: text('summary').notNull(),
     refId: refText('ref_id').notNull(),
     lang: text('lang'),
+    isTranslation: boolean('is_translation').notNull().default(false),
+    sourceSummaryId: refText('source_summary_id').references(
+      (): AnyPgColumn => aiSummaries.id,
+      { onDelete: 'set null' },
+    ),
+    sourceLang: text('source_lang'),
   },
-  (table) => [index('ai_summaries_ref_id_idx').on(table.refId)],
+  (table) => [
+    index('ai_summaries_ref_id_idx').on(table.refId),
+    uniqueIndex('ai_summaries_ref_lang_uniq').on(table.refId, table.lang),
+  ],
 )
 
 export const aiInsights = pgTable(
@@ -123,4 +136,93 @@ export const aiAgentConversations = pgTable(
     updatedAt: updatedAt(),
   },
   (table) => [index('ai_agent_conversation_session_idx').on(table.sessionId)],
+)
+
+export const aiTts = pgTable(
+  'ai_tts',
+  {
+    id: pkText(),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+    refId: refText('ref_id').notNull(),
+    lang: text('lang').notNull(),
+    isTranslation: boolean('is_translation').notNull().default(false),
+    sourceLang: text('source_lang'),
+    model: text('model').notNull(),
+    voice: text('voice').notNull(),
+    speed: real('speed').notNull().default(1),
+    format: text('format').notNull().default('mp3'),
+    blockOrder: jsonb('block_order')
+      .$type<string[]>()
+      .notNull()
+      .default(sql`'[]'::jsonb`),
+    charCount: integer('char_count').notNull().default(0),
+    totalDurationMs: integer('total_duration_ms'),
+    sourceModifiedAt: tsCol('source_modified_at'),
+  },
+  (table) => [
+    uniqueIndex('ai_tts_ref_lang_uniq').on(table.refId, table.lang),
+    index('ai_tts_ref_id_idx').on(table.refId),
+  ],
+)
+
+export const aiTtsBlocks = pgTable(
+  'ai_tts_blocks',
+  {
+    id: pkText(),
+    createdAt: createdAt(),
+    ttsId: refText('tts_id')
+      .notNull()
+      .references((): AnyPgColumn => aiTts.id, { onDelete: 'cascade' }),
+    blockId: text('block_id').notNull(),
+    fingerprint: text('fingerprint').notNull(),
+    chunkIndex: integer('chunk_index').notNull().default(0),
+    text: text('text').notNull(),
+    url: text('url').notNull(),
+    storageBackend: text('storage_backend').notNull(),
+    storageKey: text('storage_key').notNull(),
+    byteSize: integer('byte_size'),
+    durationMs: integer('duration_ms'),
+  },
+  (table) => [
+    uniqueIndex('ai_tts_blocks_key_uniq').on(
+      table.ttsId,
+      table.blockId,
+      table.chunkIndex,
+    ),
+    index('ai_tts_blocks_tts_id_idx').on(table.ttsId),
+  ],
+)
+
+export const aiGenerationMetrics = pgTable(
+  'ai_generation_metrics',
+  {
+    id: pkText(),
+    createdAt: createdAt(),
+    resourceType: text('resource_type').notNull(),
+    resourceId: refText('resource_id').notNull(),
+    refId: refText('ref_id').notNull(),
+    lang: text('lang'),
+    taskId: text('task_id'),
+    providerId: text('provider_id'),
+    model: text('model'),
+    inputTokens: integer('input_tokens'),
+    outputTokens: integer('output_tokens'),
+    cacheReadTokens: integer('cache_read_tokens'),
+    cacheWriteTokens: integer('cache_write_tokens'),
+    totalTokens: integer('total_tokens'),
+    costInputUsd: doublePrecision('cost_input_usd'),
+    costOutputUsd: doublePrecision('cost_output_usd'),
+    costCacheReadUsd: doublePrecision('cost_cache_read_usd'),
+    costCacheWriteUsd: doublePrecision('cost_cache_write_usd'),
+    costTotalUsd: doublePrecision('cost_total_usd'),
+  },
+  (table) => [
+    index('ai_generation_metrics_resource_idx').on(
+      table.resourceType,
+      table.resourceId,
+      table.createdAt,
+    ),
+    index('ai_generation_metrics_ref_id_idx').on(table.refId, table.createdAt),
+  ],
 )

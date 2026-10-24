@@ -1,10 +1,10 @@
 ---
 name: api-conventions
-description: MX Space API design conventions. Apply when writing controllers, API endpoints, or handling HTTP requests.
+description: Mix Space API design conventions. Apply when writing controllers, API endpoints, or handling HTTP requests.
 user-invocable: false
 ---
 
-# MX Space API Design Conventions
+# Mix Space API Design Conventions
 
 ## Controller Decorators
 
@@ -31,35 +31,51 @@ async get(@CurrentUser() user: UserModel) {}
 
 ## Response Transformation
 
-ResponseInterceptor automatically handles response format:
+`ResponseInterceptor` (global `APP_INTERCEPTOR`) wraps every controller return value:
 
-| Return Type | Transformed Result |
-|-------------|-------------------|
-| `Array` | `{ data: [...] }` |
-| `Object` | Returned directly |
-| `undefined` | 204 No Content |
-| `@Bypass` | Returned as-is, skips transformation |
+| Return value                  | Emitted                                        |
+| ----------------------------- | ---------------------------------------------- |
+| bare value `T`                | `{ data: T }`                                  |
+| `withMeta(data, meta)`        | `{ data, meta }`                               |
+| `undefined`                   | 204 No Content                                 |
+| `@HTTPDecorators.RawResponse` | untouched — skips envelope and case conversion |
 
-JSONTransformInterceptor converts all fields to snake_case:
+`withMeta` (from `~/common/response/envelope.types`) is detected by an internal `Symbol`,
+**not** by the presence of a `data` key — returning an object literal whose top-level keys
+include `data` gets double-wrapped. CI enforces this via
+`scripts/check-controller-response-envelope.ts`.
+
+`transformResponseCase` (`~/common/response/case-transform.ts`) converts the response
+`data`/`meta` to snake_case at the wire boundary:
+
 - `createdAt` → `created_at`
 - `categoryId` → `category_id`
 
+Opt a field subtree out with `@BypassCaseTransform(['items[].rawPayload'])`.
+
 ## Pagination
 
+Pagination belongs in `meta`, never merged into `data`. Build it with `MetaObjectBuilder`:
+
 ```typescript
-// Controller: return PaginationResult<T> from the repository
 @Get('/')
-async list(@Query() query: PagerDto) {
-  return this.postRepository.list({
+async list(@Query({ schema: BasicPagerSchema }) query: BasicPagerInput) {
+  const result = await this.postRepository.list({
     page: query.page,
     size: query.size,
     sortBy: query.sortBy,
     sortOrder: query.sortOrder,
   })
-}
 
-// Repository returns { data: T[], pagination: {...} } directly
-// The ResponseInterceptor auto-wraps this as { data: [...], pagination: {...} }
+  const metaBuilder = new MetaObjectBuilder().view('card').pagination({
+    page: result.pagination.currentPage,
+    size: result.pagination.size,
+    total: result.pagination.total,
+    totalPages: result.pagination.totalPage,
+  })
+
+  return withMeta(result.data, metaBuilder.build())
+}
 ```
 
 For CRUD boilerplate, use `BasePgCrudFactory`:
@@ -70,7 +86,7 @@ export class LinkControllerCrud extends BasePgCrudFactory({
   repository: LinkRepository,
 }) {
   @Get('/')
-  async gets(@Query() pager: PagerDto) {
+  async gets(@Query({ schema: BasicPagerSchema }) pager: BasicPagerInput) {
     const { size = 10, page = 1 } = pager
     return this.repository.list(page, size)
   }
@@ -80,34 +96,34 @@ export class LinkControllerCrud extends BasePgCrudFactory({
 ## Parameter Validation
 
 ```typescript
-// Path parameters — use EntityIdDto for Snowflake entity IDs
+// Path parameters — attach EntityIdSchema for Snowflake entity IDs
 @Get('/:id')
-async get(@Param() params: EntityIdDto) {
+async get(@Param({ schema: EntityIdSchema }) params: EntityIdInput) {
   return this.service.findById(params.id)
 }
 
 // For integer IDs or entity IDs (e.g. notes with nid)
 @Get('/:id')
-async get(@Param() params: IntIdOrEntityIdDto) {}
+async get(@Param({ schema: IntIdOrEntityIdSchema }) params: IntIdOrEntityIdInput) {}
 
 // Query parameters
 @Get('/')
-async list(@Query() query: PagerDto) {}
+async list(@Query({ schema: BasicPagerSchema }) query: BasicPagerInput) {}
 
 // Request body
 @Post('/')
-async create(@Body() body: CreateDto) {}
+async create(@Body({ schema: CreateSchema }) body: CreateInput) {}
 ```
 
 ## HTTP Methods
 
-| Method | Purpose | Status Code |
-|--------|---------|-------------|
-| GET | Retrieve resource | 200 |
-| POST | Create resource | 201 |
-| PUT | Full update | 200 |
-| PATCH | Partial update | 200 |
-| DELETE | Delete resource | 204 |
+| Method | Purpose           | Status Code |
+| ------ | ----------------- | ----------- |
+| GET    | Retrieve resource | 200         |
+| POST   | Create resource   | 201         |
+| PUT    | Full update       | 200         |
+| PATCH  | Partial update    | 200         |
+| DELETE | Delete resource   | 204         |
 
 ## Error Handling
 

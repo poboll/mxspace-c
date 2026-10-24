@@ -1,43 +1,44 @@
 import type { AITask, AITaskLog } from '~/api/tasks'
 
 export enum EventTypes {
-  GATEWAY_CONNECT = 'GATEWAY_CONNECT',
-  GATEWAY_DISCONNECT = 'GATEWAY_DISCONNECT',
+  GATEWAY_CONNECT = 'gateway.connect',
+  GATEWAY_DISCONNECT = 'gateway.disconnect',
 
-  VISITOR_ONLINE = 'VISITOR_ONLINE',
-  VISITOR_OFFLINE = 'VISITOR_OFFLINE',
+  VISITOR_ONLINE = 'visitor.online',
+  VISITOR_OFFLINE = 'visitor.offline',
 
-  AUTH_FAILED = 'AUTH_FAILED',
+  AUTH_FAILED = 'auth.failed',
 
-  COMMENT_CREATE = 'COMMENT_CREATE',
+  COMMENT_CREATE = 'comment.create',
 
-  POST_CREATE = 'POST_CREATE',
-  POST_UPDATE = 'POST_UPDATE',
-  POST_DELETE = 'POST_DELETE',
+  POST_CREATE = 'post.create',
+  POST_UPDATE = 'post.update',
+  POST_DELETE = 'post.delete',
 
-  NOTE_CREATE = 'NOTE_CREATE',
-  NOTE_UPDATE = 'NOTE_UPDATE',
-  NOTE_DELETE = 'NOTE_DELETE',
+  NOTE_CREATE = 'note.create',
+  NOTE_UPDATE = 'note.update',
+  NOTE_DELETE = 'note.delete',
 
-  PAGE_UPDATED = 'PAGE_UPDATED',
+  SAY_CREATE = 'say.create',
+  SAY_DELETE = 'say.delete',
+  SAY_UPDATE = 'say.update',
 
-  SAY_CREATE = 'SAY_CREATE',
-  SAY_DELETE = 'SAY_DELETE',
-  SAY_UPDATE = 'SAY_UPDATE',
+  LINK_APPLY = 'link.apply',
 
-  LINK_APPLY = 'LINK_APPLY',
+  CONTENT_REFRESH = 'content.refresh',
 
-  DANMAKU_CREATE = 'DANMAKU_CREATE',
-  CONTENT_REFRESH = 'CONTENT_REFRESH',
+  IMAGE_REFRESH = 'image.refresh',
+  IMAGE_FETCH = 'image.fetch',
 
-  IMAGE_REFRESH = 'IMAGE_REFRESH',
-  IMAGE_FETCH = 'IMAGE_FETCH',
-
-  ADMIN_NOTIFICATION = 'ADMIN_NOTIFICATION',
+  ADMIN_NOTIFICATION = 'admin.notification',
 
   // Unified Task Queue realtime fan-out. Hand-duplicated from
   // apps/core/src/constants/business-event.constant.ts — no monorepo import.
-  TASK_UPDATE = 'TASK_UPDATE',
+  TASK_UPDATE = 'task.update',
+
+  // Draft head moved (revision created/updated). Hand-duplicated from
+  // apps/core/src/constants/business-event.constant.ts — no monorepo import.
+  DRAFT_UPDATE = 'draft.update',
 }
 
 /**
@@ -87,3 +88,22 @@ export type TaskUpdatePayload =
     })
 
 export type NotificationTypes = 'error' | 'info' | 'success' | 'warn'
+
+/**
+ * Payload of the DRAFT_UPDATE broadcast — verbatim mirror of the server-side
+ * DraftUpdateEventPayload declared in
+ * apps/core/src/modules/draft/draft.types.ts. Keep in sync by hand; there is
+ * intentionally no cross-package import.
+ *
+ * It carries only identity and the new head: the editor already holds the
+ * content, and comparing one revision id is enough to know whether its view
+ * is stale. Never treat receipt as authoritative content — re-read the draft.
+ */
+export interface DraftUpdatePayload {
+  /** The draft id used in the write page URL (`draftId` query param). */
+  branchId: string
+  documentId: string
+  headRevisionId: string
+  refId: null | string
+  refType: 'note' | 'page' | 'post'
+}

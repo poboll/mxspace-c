@@ -15,14 +15,29 @@ export const adminQueryKeys = {
   aggregate: {
     root: ['aggregate'] as const,
   },
+  auth: {
+    loggedStatus: () => ['auth', 'check-logged'] as const,
+  },
   ai: {
+    defaultLangs: (optionKey: string) =>
+      ['ai', 'default-langs', optionKey] as const,
     grouped: (params: { group: string; search: string }) =>
       ['ai', params.group, 'grouped', params.search] as const,
     groupedByRef: (params: { group: string; id: string }) =>
       ['ai', params.group, 'by-ref', params.id] as const,
     groupedRoot: (group: string) => ['ai', group] as const,
     groupedListRoot: (group: string) => ['ai', group, 'grouped'] as const,
+    imageGenerationOptions: () => ['ai', 'image', 'options'] as const,
+    imageModels: () => ['ai', 'image', 'models'] as const,
+    imagePresets: () => ['ai', 'image', 'presets'] as const,
     models: (context: string) => ['ai', 'models', context] as const,
+    overviewArticle: (refId: string) =>
+      ['ai', 'overview', 'article', refId] as const,
+    overviewList: (params: { search: string; type: string }) =>
+      ['ai', 'overview', 'grouped', params] as const,
+    overviewListRoot: ['ai', 'overview', 'grouped'] as const,
+    overviewRoot: ['ai', 'overview'] as const,
+    publishOptions: () => ['ai', 'publish-options'] as const,
     root: ['ai'] as const,
     translationEntriesRoot: ['ai', 'translation-entries'] as const,
     translationEntries: (params: {
@@ -31,6 +46,12 @@ export const adminQueryKeys = {
       page: number
       size: number
     }) => ['ai', 'translation-entries', params] as const,
+    ttsByRef: (refId: string) => ['ai', 'tts', 'by-ref', refId] as const,
+    ttsOptions: () => ['ai', 'tts', 'options'] as const,
+    ttsRoot: ['ai', 'tts'] as const,
+    ttsVoices: (providerId: string, model: string) =>
+      ['ai', 'tts', 'voices', providerId, model] as const,
+    ttsVoicesRoot: ['ai', 'tts', 'voices'] as const,
   },
   analyze: {
     activity: (params: { page: number; size: number; type: number }) =>
@@ -75,9 +96,16 @@ export const adminQueryKeys = {
     root: ['comments'] as const,
     sourceCandidates: (params: { refType?: string; search?: string }) =>
       ['comments', 'source-candidates', params] as const,
+    tabCountsRoot: ['comments', 'tab-counts'] as const,
     tabCounts: (filter: { refType?: string; refId?: string } = {}) =>
       ['comments', 'tab-counts', filter] as const,
     thread: (id: string) => ['comments', 'thread', id] as const,
+  },
+  companion: {
+    capabilities: () => ['companion', 'capabilities'] as const,
+    devices: () => ['companion', 'devices'] as const,
+    publicPresence: () => ['companion', 'public-presence'] as const,
+    root: ['companion'] as const,
   },
   cron: {
     definitionRoot: ['cron-task-definitions'] as const,
@@ -94,7 +122,7 @@ export const adminQueryKeys = {
     categoryDistribution: () => ['dashboard', 'category-distribution'] as const,
     commentActivity: () => ['dashboard', 'comment-activity'] as const,
     githubUpdate: () => ['dashboard', 'github-update'] as const,
-    owner: () => ['dashboard', 'owner'] as const,
+    home: () => ['dashboard', 'home'] as const,
     publicationTrend: () => ['dashboard', 'publication-trend'] as const,
     readLike: () => ['dashboard', 'read-like'] as const,
     releaseDetailRoot: ['dashboard', 'release-detail'] as const,
@@ -110,6 +138,11 @@ export const adminQueryKeys = {
     graph: () => ['dependencies', 'graph'] as const,
     npmLatest: (name: string) => ['npm-latest', name] as const,
     root: ['dependencies'] as const,
+  },
+  dynamicComponents: {
+    list: () => ['dynamic-components', 'list'] as const,
+    root: ['dynamic-components'] as const,
+    source: (url: string) => ['dynamic-components', 'source', url] as const,
   },
   enrichment: {
     cacheDetail: (id: string) => ['enrichment', 'cache', 'detail', id] as const,
@@ -143,6 +176,16 @@ export const adminQueryKeys = {
       ['links', 'list', params] as const,
     stateCount: () => ['links', 'state-count'] as const,
     root: ['links'] as const,
+  },
+  onboarding: {
+    ai: () => ['onboarding', 'ai'] as const,
+    info: () => ['onboarding', 'info'] as const,
+    models: (capability: string) =>
+      ['onboarding', 'models', capability] as const,
+    modelsRoot: ['onboarding', 'models'] as const,
+    owner: () => ['onboarding', 'owner'] as const,
+    seo: () => ['onboarding', 'seo'] as const,
+    url: () => ['onboarding', 'url'] as const,
   },
   notes: {
     list: (params: {
@@ -186,6 +229,7 @@ export const adminQueryKeys = {
     detail: (id: string) => ['readers', 'detail', id] as const,
     listRoot: ['readers', 'list'] as const,
     list: (params: {
+      membershipStatus: string
       page: number
       role: string
       search: string
@@ -214,6 +258,7 @@ export const adminQueryKeys = {
     recoveryVersion: (params: { id: string; version: number | null }) =>
       ['drafts', 'recovery-version', params.id, params.version] as const,
     root: ['drafts'] as const,
+    share: (documentId: string) => ['drafts', 'share', documentId] as const,
   },
   says: {
     list: (params: { page: number; size: number }) =>
@@ -245,10 +290,14 @@ export const adminQueryKeys = {
     accountRoot: ['settings', 'account'] as const,
     aiModels: () => ['settings', 'ai-models'] as const,
     authSecurity: () => ['settings', 'account', 'auth-security'] as const,
+    membershipConfigStatus: () =>
+      ['settings', 'membership-config-status'] as const,
+    membershipPlans: () => ['settings', 'membership-plans'] as const,
     oauth: () => ['settings', 'account', 'oauth'] as const,
     options: () => ['settings', 'options'] as const,
     owner: () => ['settings', 'owner'] as const,
     passkeys: () => ['settings', 'account', 'passkeys'] as const,
+    reviewDemo: () => ['settings', 'account', 'review-demo'] as const,
     root: ['settings'] as const,
     schema: () => ['settings', 'schema'] as const,
     sessions: () => ['settings', 'account', 'sessions'] as const,

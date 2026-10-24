@@ -1,5 +1,11 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { Loader2, RefreshCw, Trash2 } from 'lucide-react'
+import {
+  Loader2,
+  MoreHorizontal,
+  RefreshCw,
+  ScanSearch,
+  Trash2,
+} from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router'
 import { toast } from 'sonner'
@@ -8,7 +14,7 @@ import type { OrphanFile } from '~/api/files'
 import {
   batchDeleteOrphanFiles,
   cleanupOrphanFiles,
-  deleteFileByTypeAndName,
+  reconcileFileReferences,
 } from '~/api/files'
 import { APP_SHELL_HEADER_HEIGHT_CLASS } from '~/constants/layout'
 import { useI18n } from '~/i18n'
@@ -19,6 +25,7 @@ import { MasterDetailShell } from '~/ui/layout/master-detail-shell'
 import { MobileHeaderAffordance } from '~/ui/layout/mobile-header-affordance'
 import type { ListAction } from '~/ui/list-actions'
 import { useListKeyboard } from '~/ui/list-actions'
+import { DropdownMenu } from '~/ui/overlay/dropdown-menu'
 import { Button } from '~/ui/primitives/button'
 import { Checkbox } from '~/ui/primitives/checkbox'
 import { Scroll } from '~/ui/primitives/scroll'
@@ -36,6 +43,10 @@ import { FileListRow } from './FileListRow'
 import { FileListSkeleton } from './FileListSkeleton'
 import { FilePreviewLightbox } from './FilePreviewLightbox'
 import { OrphanFilesRouteContext } from './orphan-files-route-context'
+import {
+  ReferenceReconcilePreview,
+  runReferenceReconcileFlow,
+} from './ReferenceReconcilePreview'
 import { SearchRow } from './SearchRow'
 
 const FOCUS_SCOPE_ID = 'orphan-files-list'
@@ -53,6 +64,7 @@ export function OrphanFilesPage() {
     null,
   )
   const [selectAllAcross, setSelectAllAcross] = useState(false)
+  const [reconcileFlowActive, setReconcileFlowActive] = useState(false)
   const selectionClearRef = useRef<(() => void) | null>(null)
 
   const adapted = useMemo(
@@ -91,7 +103,7 @@ export function OrphanFilesPage() {
 
   const deleteMutation = useMutation({
     mutationFn: (item: OrphanFile) =>
-      deleteFileByTypeAndName('image', item.fileName),
+      batchDeleteOrphanFiles({ ids: [item.id] }),
     onError: (error: unknown) =>
       toast.error(getErrorMessage(error, t('files.toast.deleteFailed'))),
     onSuccess: async () => {
@@ -129,6 +141,10 @@ export function OrphanFilesPage() {
     },
   })
 
+  const reconcileMutation = useMutation({
+    mutationFn: (apply: boolean) => reconcileFileReferences(apply),
+  })
+
   const confirmAndDelete = useCallback(
     async (item: FileRowItem<OrphanFile>) => {
       const ok = await confirmDialog({
@@ -145,7 +161,7 @@ export function OrphanFilesPage() {
     () => [
       {
         key: 'open',
-        label: t('files.action.previewImage'),
+        label: t('files.action.open'),
         run: (targets) => openItem(targets[0]),
         shortcut: 'Enter',
         shortcutLabel: '↵',
@@ -207,18 +223,77 @@ export function OrphanFilesPage() {
     cleanupMutation.mutate()
   }
 
+  const reconcileReferences = async () => {
+    if (reconcileFlowActive) return
+    setReconcileFlowActive(true)
+    try {
+      const appliedResult = await runReferenceReconcileFlow({
+        confirm: (previewResult) =>
+          confirmDialog({
+            confirmText: t('files.orphans.reconcileApply'),
+            description: <ReferenceReconcilePreview result={previewResult} />,
+            title: t('files.orphans.reconcileConfirm'),
+          }),
+        onUpToDate: async () => {
+          toast.success(t('files.toast.referencesUpToDate'))
+          setPage(1)
+          await queryClient.invalidateQueries({ queryKey: filesQueryKey })
+        },
+        scan: async (apply) => {
+          const toastId = toast.loading(
+            t(
+              apply
+                ? 'files.toast.referencesApplying'
+                : 'files.toast.referencesScanning',
+            ),
+          )
+          try {
+            return await reconcileMutation.mutateAsync(apply)
+          } finally {
+            toast.dismiss(toastId)
+          }
+        },
+      })
+      if (!appliedResult) return
+      toast.success(
+        t('files.toast.referencesReconciled', {
+          active: appliedResult.referencedFiles,
+          isolated: appliedResult.isolatedFiles,
+          usages: appliedResult.usages,
+        }),
+      )
+      setPage(1)
+      await queryClient.invalidateQueries({ queryKey: filesQueryKey })
+    } catch (error) {
+      toast.error(
+        getErrorMessage(error, t('files.toast.referencesReconcileFailed')),
+      )
+    } finally {
+      setReconcileFlowActive(false)
+    }
+  }
+
   const refreshing = orphansQuery.isFetching
+  const maintenanceRunning = reconcileFlowActive || cleanupMutation.isPending
+  const maintenanceBusy = maintenanceRunning || refreshing
   const hasSelection = selectedCount > 0 || selectAllAcross
 
   const ctxValue = useMemo(
     () => ({
       page,
+      listUpdatedAt: orphansQuery.dataUpdatedAt,
       deleteDisabled: deleteMutation.isPending,
       onBack: closeDetail,
       onDelete: (item: FileRowItem<OrphanFile>) => void confirmAndDelete(item),
       onOpenPreview: (next: { name: string; url: string }) => setPreview(next),
     }),
-    [page, deleteMutation.isPending, closeDetail, confirmAndDelete],
+    [
+      page,
+      orphansQuery.dataUpdatedAt,
+      deleteMutation.isPending,
+      closeDetail,
+      confirmAndDelete,
+    ],
   )
 
   return (
@@ -248,35 +323,68 @@ export function OrphanFilesPage() {
               </div>
               <div className="flex shrink-0 items-center gap-1">
                 <Button
-                  aria-label={t('files.orphans.cleanup')}
-                  disabled={cleanupMutation.isPending}
-                  onClick={() => void confirmCleanup()}
-                  type="button"
-                  variant="subtle"
-                >
-                  {cleanupMutation.isPending ? (
-                    <Loader2
-                      aria-hidden="true"
-                      className="size-4 animate-spin"
-                    />
-                  ) : (
-                    <Trash2 aria-hidden="true" className="size-4" />
-                  )}
-                  <span>{t('files.orphans.cleanup')}</span>
-                </Button>
-                <Button
                   aria-label={t('files.action.refresh')}
-                  disabled={refreshing}
+                  disabled={maintenanceBusy}
                   iconOnly
                   onClick={() => void orphansQuery.refetch()}
+                  title={t('files.action.refresh')}
                   type="button"
-                  variant="subtle"
+                  variant="ghost"
                 >
                   <RefreshCw
                     aria-hidden="true"
                     className={cn('size-4', refreshing && 'animate-spin')}
                   />
                 </Button>
+                <DropdownMenu>
+                  <DropdownMenu.Trigger
+                    aria-label={t('files.orphans.maintenance')}
+                    className="inline-flex size-8 items-center justify-center rounded-sm text-fg-muted outline-hidden transition-colors hover:bg-surface-inset hover:text-fg focus-visible:ring-[3px] focus-visible:ring-accent/15 data-[popup-open]:bg-surface-inset"
+                    title={t('files.orphans.maintenance')}
+                    type="button"
+                  >
+                    {maintenanceRunning ? (
+                      <Loader2
+                        aria-hidden="true"
+                        className="size-4 animate-spin"
+                      />
+                    ) : (
+                      <MoreHorizontal aria-hidden="true" className="size-4" />
+                    )}
+                  </DropdownMenu.Trigger>
+                  <DropdownMenu.Content align="end" className="w-56">
+                    <DropdownMenu.Item
+                      disabled={maintenanceBusy}
+                      onClick={() => void reconcileReferences()}
+                    >
+                      {reconcileFlowActive ? (
+                        <Loader2
+                          aria-hidden="true"
+                          className="size-4 animate-spin"
+                        />
+                      ) : (
+                        <ScanSearch aria-hidden="true" className="size-4" />
+                      )}
+                      <span>{t('files.orphans.reconcile')}</span>
+                    </DropdownMenu.Item>
+                    <DropdownMenu.Separator />
+                    <DropdownMenu.Item
+                      danger
+                      disabled={maintenanceBusy}
+                      onClick={() => void confirmCleanup()}
+                    >
+                      {cleanupMutation.isPending ? (
+                        <Loader2
+                          aria-hidden="true"
+                          className="size-4 animate-spin"
+                        />
+                      ) : (
+                        <Trash2 aria-hidden="true" className="size-4" />
+                      )}
+                      <span>{t('files.orphans.cleanup')}</span>
+                    </DropdownMenu.Item>
+                  </DropdownMenu.Content>
+                </DropdownMenu>
               </div>
             </header>
 
@@ -287,18 +395,27 @@ export function OrphanFilesPage() {
             />
 
             {filtered.length > 0 ? (
-              <div className="flex h-9 shrink-0 items-center gap-3 border-b border-border bg-surface-inset px-4 text-xs">
-                <Checkbox
+              <div
+                className="grid min-h-12 shrink-0 grid-cols-[2.5rem_minmax(0,1fr)_auto] items-center gap-x-1 border-b border-border bg-surface-inset px-2 py-1 text-xs"
+                data-testid="orphan-files-selection-bar"
+              >
+                <label
                   aria-label={t('files.orphans.selectCurrentPage')}
-                  checked={allVisibleSelected || selectAllAcross}
-                  indeterminate={indeterminate}
-                  onCheckedChange={(checked) => {
-                    setSelectAllAcross(false)
-                    if (checked) selection.selectAll()
-                    else selection.clear()
-                  }}
-                />
-                <span className="text-fg-muted">
+                  className="inline-flex size-10 cursor-pointer items-center justify-center"
+                  title={t('files.orphans.selectCurrentPage')}
+                >
+                  <Checkbox
+                    aria-label={t('files.orphans.selectCurrentPage')}
+                    checked={allVisibleSelected || selectAllAcross}
+                    indeterminate={indeterminate}
+                    onCheckedChange={(checked) => {
+                      setSelectAllAcross(false)
+                      if (checked) selection.selectAll()
+                      else selection.clear()
+                    }}
+                  />
+                </label>
+                <span className="min-w-0 truncate whitespace-nowrap tabular-nums text-fg-muted">
                   {selectAllAcross
                     ? t('files.orphans.allSelected', { count: total })
                     : selectedCount > 0
@@ -307,9 +424,29 @@ export function OrphanFilesPage() {
                         })
                       : t('files.orphans.selectCurrentPage')}
                 </span>
+                <button
+                  aria-hidden={!hasSelection}
+                  className={cn(
+                    'inline-flex h-10 shrink-0 items-center gap-1 rounded px-2 text-xs text-red-600 transition-colors hover:bg-red-50 disabled:pointer-events-none disabled:opacity-50 dark:text-red-400 dark:hover:bg-red-950/40',
+                    !hasSelection && 'pointer-events-none invisible',
+                  )}
+                  disabled={!hasSelection || batchDeleteMutation.isPending}
+                  onClick={() => void confirmBatchDelete()}
+                  tabIndex={hasSelection ? undefined : -1}
+                  type="button"
+                >
+                  <Trash2 aria-hidden="true" className="size-3.5" />
+                  <span className="whitespace-nowrap tabular-nums">
+                    {selectAllAcross
+                      ? t('files.orphans.deleteAll', { count: total })
+                      : t('files.orphans.deleteSelected', {
+                          count: selectedCount,
+                        })}
+                  </span>
+                </button>
                 {allVisibleSelected && pageCount > 1 && !selectAllAcross ? (
                   <button
-                    className="text-fg underline-offset-2 hover:underline"
+                    className="col-start-2 col-end-4 inline-flex min-h-10 min-w-0 items-center self-stretch text-left leading-tight text-fg underline-offset-2 hover:underline"
                     onClick={() => setSelectAllAcross(true)}
                     type="button"
                   >
@@ -318,7 +455,7 @@ export function OrphanFilesPage() {
                 ) : null}
                 {selectAllAcross ? (
                   <button
-                    className="text-fg underline-offset-2 hover:underline"
+                    className="col-start-2 col-end-4 inline-flex min-h-10 min-w-0 items-center self-stretch text-left leading-tight text-fg underline-offset-2 hover:underline"
                     onClick={() => {
                       setSelectAllAcross(false)
                       selection.clear()
@@ -328,22 +465,6 @@ export function OrphanFilesPage() {
                     {t('files.orphans.deselectAll')}
                   </button>
                 ) : null}
-                <button
-                  className={cn(
-                    'ml-auto inline-flex h-6 items-center gap-1 rounded px-2 text-xs text-red-600 transition-colors hover:bg-red-50 disabled:pointer-events-none disabled:opacity-50 dark:text-red-400 dark:hover:bg-red-950/40',
-                    !hasSelection && 'pointer-events-none invisible',
-                  )}
-                  disabled={!hasSelection || batchDeleteMutation.isPending}
-                  onClick={() => void confirmBatchDelete()}
-                  type="button"
-                >
-                  <Trash2 aria-hidden="true" className="size-3.5" />
-                  {selectAllAcross
-                    ? t('files.orphans.deleteAll', { count: total })
-                    : t('files.orphans.deleteSelected', {
-                        count: selectedCount,
-                      })}
-                </button>
               </div>
             ) : null}
 
@@ -352,6 +473,26 @@ export function OrphanFilesPage() {
                 <FileListSkeleton />
               ) : filtered.length === 0 ? (
                 <FileListEmpty
+                  action={
+                    searchQuery ? undefined : (
+                      <Button
+                        disabled={maintenanceBusy}
+                        onClick={() => void reconcileReferences()}
+                        type="button"
+                        variant="secondary"
+                      >
+                        {reconcileFlowActive ? (
+                          <Loader2
+                            aria-hidden="true"
+                            className="size-4 animate-spin"
+                          />
+                        ) : (
+                          <ScanSearch aria-hidden="true" className="size-4" />
+                        )}
+                        {t('files.orphans.reconcile')}
+                      </Button>
+                    )
+                  }
                   hint={t('files.orphans.cleanupNote')}
                   label={
                     searchQuery

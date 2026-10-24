@@ -1,3 +1,5 @@
+import { createHash, randomBytes } from 'node:crypto'
+
 import { forwardRef, Inject, Injectable, Logger } from '@nestjs/common'
 import { OnEvent } from '@nestjs/event-emitter'
 
@@ -10,19 +12,22 @@ import { EventManagerService } from '~/processors/helper/helper.event.service'
 import { RedisService } from '~/processors/redis/redis.service'
 import { getAvatar } from '~/utils/tool.util'
 
+import { ConfigsService } from '../configs/configs.service'
 import { FileReferenceService } from '../file/file-reference.service'
 import { FileDeletionReason } from '../file/file-reference.types'
 import { OwnerService } from '../owner/owner.service'
 import { ReaderService } from '../reader/reader.service'
-import { ReaderModel } from '../reader/reader.types'
+import { type ReaderModel } from '../reader/reader.types'
 import { CommentState } from './comment.enum'
 import { CommentRepository } from './comment.repository'
+import { CommentSpamFilterService } from './comment.spam-filter'
 import type {
   AuthorActivity,
   AuthorActivityFilter,
   AuthorThreatLevel,
   CommentFindFilter,
   CommentModel,
+  CommentPublicFilterOptions,
   CommentRefType,
   CommentRow,
   CommentTab,
@@ -30,6 +35,7 @@ import type {
   CommentTabCountsFilter,
 } from './comment.types'
 import { CommentCountryService } from './comment-country.service'
+import { commentModeration, commentSubmissionStatus } from './comment-decision'
 
 /**
  * Minimal hydrated reference attached to a comment when its `refType`/`refId`
@@ -73,6 +79,8 @@ const TAB_COUNTS_KEY_PREFIX = 'comment:tab-counts:'
 const TAB_COUNTS_TTL_SECONDS = 30
 const AUTHOR_ACTIVITY_KEY_PREFIX = 'comment:author-activity:'
 const AUTHOR_ACTIVITY_TTL_SECONDS = 300
+const COMMENT_REPORT_KEY_PREFIX = 'comment:report:'
+const COMMENT_REPORT_TTL_SECONDS = 60 * 60 * 24 * 90
 
 const DEFAULT_STATE_TO_TAB: Record<number, CommentTab> = {
   0: 'unread',
@@ -96,6 +104,8 @@ export class CommentService {
     private readonly fileReferenceService: FileReferenceService,
     private readonly commentCountryService: CommentCountryService,
     private readonly redisService: RedisService,
+    private readonly spamFilterService: CommentSpamFilterService,
+    private readonly configsService: ConfigsService,
   ) {}
 
   /**
@@ -164,9 +174,19 @@ export class CommentService {
     return this.commentRepository.findById(id)
   }
 
-  async findByIdWithRelations(id: string) {
+  async findByIdWithRelations(id: string, publicOnly = false) {
     const comment = await this.commentRepository.findByIdWithRelations(id)
     if (!comment) return comment
+    if (publicOnly) {
+      const options = await this.configsService.get('commentOptions')
+      const visible = (row: CommentRow) =>
+        !row.isWhispers &&
+        commentSubmissionStatus(row, !!options.commentShouldAudit) ===
+          'published'
+      if (!visible(comment)) return null
+      comment.children = comment.children.filter(visible)
+      if (comment.parent && !visible(comment.parent)) comment.parent = null
+    }
     const [withRef] = await this.attachRef([comment])
     const parentRow = withRef.parent ?? null
     let parent: CommentParentPreview | null = null
@@ -325,7 +345,11 @@ export class CommentService {
 
   async findRecent(
     size: number,
-    options: { state?: number; rootOnly?: boolean } = {},
+    options: {
+      state?: number
+      rootOnly?: boolean
+      publicFilter?: CommentPublicFilterOptions
+    } = {},
   ) {
     return this.commentRepository.findRecent(size, options)
   }
@@ -348,6 +372,14 @@ export class CommentService {
     }
     if (!refType) throw createAppException(AppErrorCode.COMMENT_POST_NOT_EXISTS)
 
+    const moderationStatus = await this.spamFilterService.initialReview(
+      doc,
+      RequestContext.hasAdminAccess() || !!reader,
+    )
+    const receipt = randomBytes(32).toString('hex')
+    const moderationReceiptHash = createHash('sha256')
+      .update(receipt)
+      .digest('hex')
     const countryCode = await this.commentCountryService.lookupCountryCode(
       doc.ip,
       { cfHint: this.currentCfIpCountryHint() },
@@ -355,6 +387,8 @@ export class CommentService {
 
     const comment = await this.commentRepository.create({
       text: doc.text!,
+      moderationStatus,
+      moderationReceiptHash,
       author: doc.author,
       mail: doc.mail,
       url: doc.url,
@@ -367,9 +401,12 @@ export class CommentService {
       location: doc.location,
       isWhispers: doc.isWhispers,
       countryCode,
-      state: RequestContext.hasAdminAccess()
-        ? CommentState.Read
-        : CommentState.Unread,
+      state:
+        moderationStatus === 'rejected'
+          ? CommentState.Junk
+          : RequestContext.hasAdminAccess()
+            ? CommentState.Read
+            : CommentState.Unread,
       refId: id,
       refType: refType as CommentRefType,
       parentCommentId: null,
@@ -378,7 +415,24 @@ export class CommentService {
     })
 
     await this.invalidateTabCountsCache()
-    return comment
+    const options = await this.configsService.get('commentOptions')
+    return {
+      ...comment,
+      moderation: {
+        ...commentModeration(comment, !!options.commentShouldAudit),
+        receipt,
+      },
+    }
+  }
+
+  async getModerationStatus(id: string, receipt: string) {
+    const comment = await this.commentRepository.findByReceipt(
+      id,
+      createHash('sha256').update(receipt).digest('hex'),
+    )
+    if (!comment) throw createAppException(AppErrorCode.NOT_FOUND)
+    const options = await this.configsService.get('commentOptions')
+    return commentModeration(comment, !!options.commentShouldAudit)
   }
 
   async validAuthorName(author: string): Promise<void> {
@@ -394,6 +448,15 @@ export class CommentService {
   async replyComment(id: string, doc: Partial<CommentModel>) {
     const parent = await this.commentRepository.findById(id)
     if (!parent) throw createAppException(AppErrorCode.NOT_FOUND)
+    if (!RequestContext.hasAdminAccess()) {
+      const options = await this.configsService.get('commentOptions')
+      if (
+        parent.isWhispers ||
+        commentSubmissionStatus(parent, !!options.commentShouldAudit) !==
+          'published'
+      )
+        throw createAppException(AppErrorCode.NOT_FOUND)
+    }
 
     const reader = await this.assignReaderToComment()
     if (reader) {
@@ -417,6 +480,14 @@ export class CommentService {
       }
     }
 
+    const moderationStatus = await this.spamFilterService.initialReview(
+      doc,
+      RequestContext.hasAdminAccess() || !!reader,
+    )
+    const receipt = randomBytes(32).toString('hex')
+    const moderationReceiptHash = createHash('sha256')
+      .update(receipt)
+      .digest('hex')
     const countryCode = await this.commentCountryService.lookupCountryCode(
       doc.ip,
       { cfHint: this.currentCfIpCountryHint() },
@@ -424,6 +495,8 @@ export class CommentService {
 
     const comment = await this.commentRepository.createReply({
       text: doc.text!,
+      moderationStatus,
+      moderationReceiptHash,
       author: doc.author,
       mail: doc.mail,
       url: doc.url,
@@ -439,10 +512,12 @@ export class CommentService {
       // an owner reply. Drives the §6.1 awaiting predicate.
       isOwnerReply: RequestContext.hasAdminAccess(),
       state:
-        doc.state ??
-        (RequestContext.hasAdminAccess()
-          ? CommentState.Read
-          : CommentState.Unread),
+        moderationStatus === 'rejected'
+          ? CommentState.Junk
+          : (doc.state ??
+            (RequestContext.hasAdminAccess()
+              ? CommentState.Read
+              : CommentState.Unread)),
       refId: parent.refId,
       refType: parent.refType,
       parentCommentId: parent.id,
@@ -451,7 +526,14 @@ export class CommentService {
       readerId: reader ? reader.id : undefined,
     })
     await this.invalidateTabCountsCache()
-    return comment
+    const options = await this.configsService.get('commentOptions')
+    return {
+      ...comment,
+      moderation: {
+        ...commentModeration(comment, !!options.commentShouldAudit),
+        receipt,
+      },
+    }
   }
 
   async softDeleteComment(id: string) {
@@ -513,6 +595,88 @@ export class CommentService {
     const dataWithParent = await this.attachParentPreview(dataWithRef)
     const dataWithCountry = await this.enrichCommentsWithCountry(dataWithParent)
     return { ...queryList, data: dataWithCountry }
+  }
+
+  async getReaderComments(readerId: string, page: number, size: number) {
+    return this.getComments({
+      page,
+      size,
+      filter: {
+        excludeJunk: true,
+        isDeleted: false,
+        readerId,
+      },
+    })
+  }
+
+  projectReaderComment(doc: CommentModel & { ref?: CommentRefSummary | null }) {
+    return {
+      createdAt: doc.createdAt,
+      id: String(doc.id),
+      refId: String(doc.refId),
+      refType: doc.refType,
+      source: doc.ref
+        ? {
+            categorySlug: doc.ref.category?.slug ?? null,
+            nid: doc.ref.nid ?? null,
+            slug: doc.ref.slug ?? null,
+          }
+        : null,
+      sourceTitle: doc.ref?.title ?? null,
+      text: doc.text,
+    }
+  }
+
+  async reportComment(
+    id: string,
+    reporter: { ip?: string; readerId?: string | null },
+  ): Promise<{ notified: boolean }> {
+    const comment = await this.commentRepository.findById(id)
+    if (!comment) {
+      throw createAppException(AppErrorCode.COMMENT_NOT_FOUND, { id })
+    }
+    const reporterKey = reporter.readerId || reporter.ip || 'anon'
+    const key = `${COMMENT_REPORT_KEY_PREFIX}${id}:${reporterKey}`
+    let acquired = true
+    try {
+      const stored = await this.redisService
+        .getClient()
+        .set(key, '1', 'EX', COMMENT_REPORT_TTL_SECONDS, 'NX')
+      acquired = stored === 'OK'
+    } catch (err) {
+      this.logger.debug(
+        `report dedupe write failed for ${key}: ${err instanceof Error ? err.message : err}`,
+      )
+    }
+    if (!acquired) return { notified: false }
+    await this.eventManager.broadcast(
+      BusinessEvents.COMMENT_UPDATE,
+      { id, reported: true },
+      { scope: EventScope.TO_SYSTEM_ADMIN },
+    )
+    return { notified: true }
+  }
+
+  async reportAndBlockComment(
+    id: string,
+    reporter: { ip?: string; readerId: string },
+  ): Promise<{ blockedReaderId: string; notified: boolean }> {
+    const comment = await this.commentRepository.findById(id)
+    if (!comment) {
+      throw createAppException(AppErrorCode.COMMENT_NOT_FOUND, { id })
+    }
+    if (!comment.readerId || comment.readerId === reporter.readerId) {
+      throw createAppException(AppErrorCode.INVALID_PARAMETER, {
+        message: 'This comment author cannot be blocked.',
+      })
+    }
+
+    const { notified } = await this.reportComment(id, reporter)
+    await this.commentRepository.blockReader(
+      reporter.readerId,
+      comment.readerId,
+    )
+    return { blockedReaderId: comment.readerId, notified }
   }
 
   /**
@@ -796,6 +960,7 @@ export class CommentService {
       hasAnchor = false,
       sort = 'pinned',
       around,
+      readerId,
     }: {
       page: number
       size: number
@@ -804,9 +969,14 @@ export class CommentService {
       hasAnchor?: boolean
       sort?: 'pinned' | 'newest' | 'oldest'
       around?: string
+      readerId?: string | null
     },
   ) {
+    const blockedReaderIds = readerId
+      ? await this.commentRepository.findBlockedReaderIds(readerId)
+      : []
     const result = await this.commentRepository.findRootThreadsByRef(refId, {
+      blockedReaderIds,
       page,
       size,
       isAuthenticated,
@@ -820,6 +990,7 @@ export class CommentService {
     const replies = await this.commentRepository.findVisibleRepliesForRoots(
       rootIds,
       {
+        blockedReaderIds,
         isAuthenticated,
         commentShouldAudit,
       },
@@ -863,16 +1034,22 @@ export class CommentService {
       size = COMMENT_THREAD_BATCH_SIZE,
       isAuthenticated,
       commentShouldAudit,
+      readerId,
     }: {
       cursor?: string
       size?: number
       isAuthenticated: boolean
       commentShouldAudit: boolean
+      readerId?: string | null
     },
   ) {
+    const blockedReaderIds = readerId
+      ? await this.commentRepository.findBlockedReaderIds(readerId)
+      : []
     const replies = await this.commentRepository.findVisibleRepliesForRoot(
       rootCommentId,
       {
+        blockedReaderIds,
         isAuthenticated,
         commentShouldAudit,
       },
@@ -1093,11 +1270,18 @@ export class CommentService {
     if (comment.isDeleted)
       throw createAppException(AppErrorCode.NO_CONTENT_MODIFIABLE)
     await this.commentRepository.update(id, { text, editedAt: new Date() })
+    const options = await this.configsService.get('commentOptions')
+    const published =
+      commentSubmissionStatus(comment, !!options.commentShouldAudit) ===
+      'published'
     await this.eventManager.broadcast(
       BusinessEvents.COMMENT_UPDATE,
       { id, text },
       {
-        scope: comment.isWhispers ? EventScope.TO_SYSTEM_ADMIN : EventScope.ALL,
+        scope:
+          comment.isWhispers || !published
+            ? EventScope.TO_SYSTEM_ADMIN
+            : EventScope.ALL,
       },
     )
   }

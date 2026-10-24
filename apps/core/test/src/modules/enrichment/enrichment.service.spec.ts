@@ -37,6 +37,7 @@ function makeRow(overrides: Partial<EnrichmentRow> = {}): EnrichmentRow {
 }
 
 interface ServiceStubs {
+  fetchStates?: any[]
   dbRow?: EnrichmentRow | null
   redisHit?: EnrichmentResult | null
   fetchResult?: EnrichmentResult | Error
@@ -53,8 +54,26 @@ interface ServiceStubs {
 
 function makeService(stubs: ServiceStubs = {}) {
   const repository = {
+    findFetchStates: vi.fn(async () => stubs.fetchStates ?? []),
     findByProviderAndExternalId: vi.fn(async () => stubs.dbRow ?? null),
-    upsert: vi.fn(async () => makeRow()),
+    upsert: vi.fn(async (..._args: any[]) => makeRow()),
+    claimFetch: vi.fn(async () => true),
+    renewFetch: vi.fn(async () => true),
+    releaseFetch: vi.fn(async () => undefined),
+    recordFailure: vi.fn(async () => undefined),
+    completeFetch: vi.fn(async (input: any) =>
+      input.persist
+        ? repository.upsert(
+            input.provider,
+            input.externalId,
+            input.url,
+            input.result,
+            null,
+            input.expiresAt,
+            input.locale,
+          )
+        : null,
+    ),
   }
   const provider = {
     name: 'tmdb',
@@ -155,6 +174,7 @@ function makeService(stubs: ServiceStubs = {}) {
     imageService,
     taskQueueService,
     taskQueueProcessor,
+    configsService,
   }
 }
 
@@ -195,9 +215,14 @@ describe('EnrichmentService.resolve (SWR)', () => {
     const dbRow = makeRow({
       expiresAt: new Date(Date.now() - 1000),
       failureCount: 1,
-      fetchedAt: new Date(Date.now() - 1000), // 60 * 2^1 = 120s backoff still active
+      fetchedAt: new Date(Date.now() - 8 * 86400_000), // Last success must not anchor backoff
     })
-    const { service, taskQueueService } = makeService({ dbRow })
+    const { service, taskQueueService } = makeService({
+      dbRow,
+      fetchStates: [
+        { nextRetryAt: new Date(Date.now() + 120_000), leaseExpiresAt: null },
+      ],
+    })
     const out = await service.resolve(url)
     expect(out.result).toBe(dbRow.normalized)
     expect(out.stale).toBe(true)
@@ -277,6 +302,46 @@ describe('EnrichmentService.resolveCacheLocale', () => {
   })
 })
 
+describe('EnrichmentService.search', () => {
+  it('checks provider readiness and delegates with the normalized locale', async () => {
+    const { service, provider, configsService } = makeService()
+    const searchResults = [makeResult({ title: 'Dune' })]
+    Object.assign(provider, {
+      featureGateConfigKey: 'tmdb',
+      requiredConfigKeys: ['apiKey'],
+      localeAware: true,
+      supportedLocales: ['zh', 'en'],
+      search: vi.fn(async () => searchResults),
+    })
+    configsService.get.mockResolvedValue({
+      tmdb: { enabled: true, apiKey: 'configured' },
+    })
+
+    await expect(service.search('tmdb', 'Dune', 'zh-CN', 6)).resolves.toBe(
+      searchResults,
+    )
+    expect((provider as any).search).toHaveBeenCalledWith('Dune', 'zh', 6)
+  })
+
+  it('rejects search when the provider credential is missing', async () => {
+    const { service, provider, configsService } = makeService()
+    Object.assign(provider, {
+      featureGateConfigKey: 'tmdb',
+      requiredConfigKeys: ['apiKey'],
+      search: vi.fn(),
+    })
+    configsService.get.mockResolvedValue({
+      tmdb: { enabled: true, apiKey: '' },
+    })
+
+    await expect(service.search('tmdb', 'Dune')).rejects.toMatchObject({
+      name: 'TokenMissingError',
+      providerName: 'tmdb',
+    })
+    expect((provider as any).search).not.toHaveBeenCalled()
+  })
+})
+
 describe('EnrichmentService.refresh', () => {
   it('threads explicit URL context into provider fetch', async () => {
     const url = 'https://example.com/post'
@@ -319,6 +384,7 @@ describe('EnrichmentService.resolve (locale)', () => {
       expiresAt: new Date(Date.now() + 3600_000),
     })
     const repository = {
+      findFetchStates: vi.fn(async () => [] as any[]),
       findByProviderAndExternalId: vi
         .fn()
         // first call: zh row missing
@@ -437,4 +503,42 @@ describe('EnrichmentService.enrichWithImageMeta', () => {
     expect(result.color).toBeUndefined()
     expect((service as any).logger.warn).toHaveBeenCalled()
   })
+})
+
+describe('EnrichmentService execution lease cancellation', () => {
+  it.each(['expired', 'unavailable'])(
+    'cancels browser work when renewal is %s',
+    async (failure) => {
+      vi.useFakeTimers()
+      try {
+        const { service, provider, repository } = makeService()
+        Object.assign(provider, { requiresUrlContext: true })
+        repository.renewFetch.mockImplementation(async () => {
+          if (failure === 'unavailable') throw new Error('database unavailable')
+          return false
+        })
+        let signal: AbortSignal | undefined
+        provider.fetch.mockImplementation(async (...args: unknown[]) => {
+          signal = (args[2] as { signal: AbortSignal }).signal
+          return new Promise<EnrichmentResult>((_resolve, reject) => {
+            signal!.addEventListener('abort', () => reject(signal!.reason), {
+              once: true,
+            })
+          })
+        })
+        const result = expect(
+          service.refresh('tmdb', 'movie/1', undefined, {
+            url: 'https://example.com',
+          }),
+        ).rejects.toThrow('Enrichment fetch lease lost')
+        await vi.advanceTimersByTimeAsync(20_000)
+        await result
+        expect(signal?.aborted).toBe(true)
+        expect(repository.completeFetch).not.toHaveBeenCalled()
+        expect(repository.releaseFetch).toHaveBeenCalledTimes(1)
+      } finally {
+        vi.useRealTimers()
+      }
+    },
+  )
 })

@@ -9,6 +9,10 @@ import type { AiTranslationRow } from '~/modules/ai/ai-translation/ai-translatio
 import type { SearchDto } from '~/modules/search/search.schema'
 import type { PaginationResult } from '~/processors/database/base.repository'
 import { paginationOf } from '~/processors/database/base.repository'
+import {
+  getPublicContent,
+  getPublicText,
+} from '~/processors/helper/lexical-truncate.util'
 import { AsyncQueue } from '~/utils/queue.util'
 
 import { NoteService } from '../note/note.service'
@@ -27,7 +31,7 @@ import {
 } from './search.constants'
 import { SearchRepository } from './search.repository'
 import {
-  SearchDocumentModel,
+  type SearchDocumentModel,
   type SearchDocumentRefType,
   type SearchDocumentRow,
 } from './search-document.types'
@@ -113,6 +117,15 @@ export class SearchService {
     @Inject(forwardRef(() => AiTranslationRepository))
     private readonly aiTranslationRepository: AiTranslationRepository,
   ) {}
+
+  private toPublicArticleFields<T extends Record<string, any>>(article: T): T {
+    if (!article?.isPremium) return article
+    return {
+      ...article,
+      text: getPublicText(article),
+      content: getPublicContent(article),
+    }
+  }
 
   async search(searchOption: SearchDto) {
     return this.searchIndex(searchOption, undefined)
@@ -236,7 +249,13 @@ export class SearchService {
       for (const article of articles) {
         const lang =
           sourceLangs.get(article.id) ?? SEARCH_DOCUMENT_DEFAULT_SOURCE_LANG
-        docs.push(buildSearchDocument(refType, article as any, lang))
+        docs.push(
+          buildSearchDocument(
+            refType,
+            this.toPublicArticleFields(article as any),
+            lang,
+          ),
+        )
         articleCache.set(`${refType}:${article.id}`, { article, refType })
       }
     }
@@ -291,6 +310,7 @@ export class SearchService {
   // ───────────────────────────────────────────────────── upsert / delete ──
 
   @OnEvent(BusinessEvents.POST_CREATE)
+  @OnEvent(BusinessEvents.POST_REPUBLISH)
   @OnEvent(BusinessEvents.POST_UPDATE)
   async onPostCreate(post: { id: string }) {
     this.sourceLangCache.delete(post.id)
@@ -298,6 +318,7 @@ export class SearchService {
   }
 
   @OnEvent(BusinessEvents.NOTE_CREATE)
+  @OnEvent(BusinessEvents.NOTE_REPUBLISH)
   @OnEvent(BusinessEvents.NOTE_UPDATE)
   async onNoteCreate(note: { id: string }) {
     this.sourceLangCache.delete(note.id)
@@ -311,12 +332,14 @@ export class SearchService {
     await this.upsertSearchDocument('page', page.id)
   }
 
+  @OnEvent(BusinessEvents.POST_UNPUBLISH)
   @OnEvent(BusinessEvents.POST_DELETE)
   async onPostDelete({ id }: { id: string }) {
     this.sourceLangCache.delete(id)
     await this.searchRepository.deleteByRef('post', id)
   }
 
+  @OnEvent(BusinessEvents.NOTE_UNPUBLISH)
   @OnEvent(BusinessEvents.NOTE_DELETE)
   async onNoteDelete({ id }: { id: string }) {
     this.sourceLangCache.delete(id)
@@ -385,7 +408,11 @@ export class SearchService {
     let rebuilt = 0
     const sourceLang = await this.resolveSourceLang(refType, refId)
     await this.searchRepository.upsert(
-      buildSearchDocument(refType, article as any, sourceLang) as any,
+      buildSearchDocument(
+        refType,
+        this.toPublicArticleFields(article as any),
+        sourceLang,
+      ) as any,
     )
     rebuilt++
 
@@ -413,8 +440,22 @@ export class SearchService {
 
     const sourceLang = await this.resolveSourceLang(refType, id)
     await this.searchRepository.upsert(
-      buildSearchDocument(refType, sourceDocument as any, sourceLang) as any,
+      buildSearchDocument(
+        refType,
+        this.toPublicArticleFields(sourceDocument as any),
+        sourceLang,
+      ) as any,
     )
+
+    // Translated documents embed the article's paywall projection, so an
+    // article update (e.g. premium toggle) must refresh them too.
+    const translations = await this.aiTranslationRepository.listByRefId(id)
+    for (const t of translations) {
+      if (t.refType !== refType) continue
+      await this.searchRepository.upsert(
+        this.buildTranslationSearchDocument(refType, sourceDocument, t) as any,
+      )
+    }
   }
 
   private async upsertTranslationSearchDocument(translation: AiTranslationRow) {
@@ -451,6 +492,8 @@ export class SearchService {
       text: translation.text,
       contentFormat: translation.contentFormat,
       content: translation.content,
+      isPremium: article.isPremium,
+      meta: article.meta,
       tags: translation.tags ?? [],
       slug: article.slug ?? null,
       nid: article.nid ?? null,
@@ -460,9 +503,13 @@ export class SearchService {
       hasPassword: article.hasPassword,
       createdAt: article.createdAt ?? new Date(),
       modifiedAt: article.modifiedAt ?? null,
-      sourceHash: computeTranslationSourceHash(translation),
+      sourceHash: computeTranslationSourceHash(translation, article),
     }
-    return buildSearchDocument(refType, merged, translation.lang)
+    return buildSearchDocument(
+      refType,
+      this.toPublicArticleFields(merged),
+      translation.lang,
+    )
   }
 
   // ───────────────────────────────────────────────── source lang resolve ──
@@ -640,8 +687,8 @@ export class SearchService {
         candidateLimit,
       ),
       this.searchByText(keyword, refType, lang, hasAdminAccess, candidateLimit),
-      this.searchByRegex(
-        keywordRegexes,
+      this.searchRepository.findByKeywordFragments(
+        keyword,
         refType,
         lang,
         hasAdminAccess,
@@ -712,25 +759,6 @@ export class SearchService {
       limit,
     )
     return docs.filter((doc) => this.isVisible(doc, hasAdminAccess))
-  }
-
-  private async searchByRegex(
-    keywordRegexes: RegExp[],
-    refType: SearchDocumentRefType | undefined,
-    lang: string,
-    hasAdminAccess: boolean,
-    limit: number,
-  ) {
-    if (!keywordRegexes.length) return []
-    const candidates = await this.searchRepository.findAll(refType, lang)
-    return candidates
-      .filter((doc) => this.isVisible(doc, hasAdminAccess))
-      .filter((doc) =>
-        keywordRegexes.some(
-          (regex) => regex.test(doc.title) || regex.test(doc.searchText),
-        ),
-      )
-      .slice(0, limit)
   }
 
   private async getTermDocumentFrequency(
@@ -804,27 +832,26 @@ export class SearchService {
     }
 
     const now = new Date()
-    const [posts, notes, pages] = await Promise.all([
-      idsByType.post.length
-        ? (await this.postService.findManyByIds(idsByType.post)).filter(
-            (post) => hasAdminAccess || post.isPublished !== false,
-          )
-        : [],
-      idsByType.note.length
-        ? (await this.noteService.findManyByIds(idsByType.note)).filter(
-            (note) =>
-              hasAdminAccess ||
-              (note.isPublished && (!note.publicAt || note.publicAt <= now)),
-          )
-        : [],
-      idsByType.page.length
-        ? this.pageService.findManyByIds(idsByType.page)
-        : [],
+    const [postRows, noteRows, pages] = await Promise.all([
+      this.postService.findManyByIds(idsByType.post),
+      this.noteService.findManyByIds(idsByType.note),
+      this.pageService.findManyByIds(idsByType.page),
     ])
+    const posts = postRows.filter(
+      (post) => hasAdminAccess || post.isPublished !== false,
+    )
+    const notes = noteRows.filter(
+      (note) =>
+        hasAdminAccess ||
+        (note.isPublished && (!note.publicAt || note.publicAt <= now)),
+    )
 
     const map = new Map<string, any>()
     for (const post of posts) {
-      map.set(`post:${post.id}`, { ...post, type: 'post' as const })
+      const publicPost = hasAdminAccess
+        ? post
+        : this.toPublicArticleFields(post as any)
+      map.set(`post:${post.id}`, { ...publicPost, type: 'post' as const })
     }
     for (const note of notes) {
       map.set(`note:${note.id}`, { ...note, type: 'note' as const })

@@ -5,6 +5,7 @@ import { toast } from 'sonner'
 
 import { getMetaPresets } from '~/api/meta-presets'
 import { useI18n } from '~/i18n'
+import type { TranslationKey } from '~/i18n/types'
 import type {
   MetaFieldOption,
   MetaPresetChild,
@@ -17,7 +18,7 @@ import { Checkbox } from '~/ui/primitives/checkbox'
 import { CodeEditor } from '~/ui/primitives/code-editor'
 import { Scroll } from '~/ui/primitives/scroll'
 import { SelectField } from '~/ui/primitives/select'
-import { Switch } from '~/ui/primitives/switch'
+import { FormSwitch } from '~/ui/primitives/switch'
 import { TextArea, TextInput } from '~/ui/primitives/text-field'
 import { cn } from '~/utils/cn'
 
@@ -72,6 +73,95 @@ function pairsToMeta(pairs: KeyValuePair[]): MetaRecord {
 
 function metaPresetsQueryKey(scope: MetaPresetScope) {
   return ['meta-presets', { scope, enabledOnly: true }] as const
+}
+
+type BuiltinPresetTranslation = {
+  children?: Record<
+    string,
+    { label: TranslationKey; placeholder?: TranslationKey }
+  >
+  description?: TranslationKey
+  label: TranslationKey
+  options?: Record<string, TranslationKey>
+  placeholder?: TranslationKey
+}
+
+const builtinPresetTranslations: Record<string, BuiltinPresetTranslation> = {
+  aiGen: {
+    description: 'write.meta.builtin.aiGen.description',
+    label: 'write.meta.builtin.aiGen.label',
+    options: {
+      '-1': 'write.meta.builtin.aiGen.option.noAi',
+      '0': 'write.meta.builtin.aiGen.option.writingAssistance',
+      '1': 'write.meta.builtin.aiGen.option.polishing',
+      '2': 'write.meta.builtin.aiGen.option.fullyGenerated',
+      '3': 'write.meta.builtin.aiGen.option.storyOrganization',
+      '4': 'write.meta.builtin.aiGen.option.titleGeneration',
+      '5': 'write.meta.builtin.aiGen.option.proofreading',
+      '6': 'write.meta.builtin.aiGen.option.inspirationSource',
+      '7': 'write.meta.builtin.aiGen.option.rewriting',
+      '8': 'write.meta.builtin.aiGen.option.generatedImagery',
+      '9': 'write.meta.builtin.aiGen.option.dictation',
+    },
+  },
+  banner: {
+    children: {
+      className: {
+        label: 'write.meta.builtin.banner.className.label',
+        placeholder: 'write.meta.builtin.banner.className.placeholder',
+      },
+      message: { label: 'write.meta.builtin.banner.message.label' },
+      type: { label: 'write.meta.builtin.banner.type.label' },
+    },
+    description: 'write.meta.builtin.banner.description',
+    label: 'write.meta.builtin.banner.label',
+  },
+  cover: { label: 'write.meta.builtin.cover.label' },
+  keywords: {
+    label: 'write.meta.builtin.keywords.label',
+    placeholder: 'write.meta.builtin.keywords.placeholder',
+  },
+  style: {
+    label: 'write.meta.builtin.style.label',
+    placeholder: 'write.meta.builtin.style.placeholder',
+  },
+}
+
+function localizeBuiltinPreset(
+  field: MetaPresetField,
+  t: ReturnType<typeof useI18n>['t'],
+): MetaPresetField {
+  const translation = field.isBuiltin
+    ? builtinPresetTranslations[field.key]
+    : undefined
+  if (!translation) return field
+
+  return {
+    ...field,
+    children: field.children?.map((child) => {
+      const childTranslation = translation.children?.[child.key]
+      return childTranslation
+        ? {
+            ...child,
+            label: t(childTranslation.label),
+            placeholder: childTranslation.placeholder
+              ? t(childTranslation.placeholder)
+              : child.placeholder,
+          }
+        : child
+    }),
+    description: translation.description
+      ? t(translation.description)
+      : undefined,
+    label: t(translation.label),
+    options: field.options?.map((option) => {
+      const optionKey = translation.options?.[String(option.value)]
+      return optionKey ? { ...option, label: t(optionKey) } : option
+    }),
+    placeholder: translation.placeholder
+      ? t(translation.placeholder)
+      : field.placeholder,
+  }
 }
 
 export interface MetaPresetSectionProps {
@@ -141,13 +231,14 @@ export function MetaPresetSection(props: MetaPresetSectionProps) {
             )}
           />
         </button>
-        <button
-          className="inline-flex h-7 shrink-0 items-center rounded px-2 text-xs font-medium text-[var(--color-primary)] transition-colors hover:bg-[var(--color-primary-shallow)]"
+        <Button
+          className="h-7 shrink-0 px-2 text-xs"
           onClick={() => setShowJsonModal(true)}
           type="button"
+          variant="ghost"
         >
           {t('write.meta.section.jsonEdit')}
-        </button>
+        </Button>
       </div>
 
       {expanded ? (
@@ -234,14 +325,17 @@ function PresetFieldList(props: {
   }
   return (
     <div className="grid gap-4">
-      {props.presets.map((field) => (
-        <PresetFieldRenderer
-          field={field}
-          key={field.id}
-          onChange={(value) => props.onUpdateField(field.key, value)}
-          value={props.meta[field.key]}
-        />
-      ))}
+      {props.presets.map((field) => {
+        const localizedField = localizeBuiltinPreset(field, t)
+        return (
+          <PresetFieldRenderer
+            field={localizedField}
+            key={field.id}
+            onChange={(value) => props.onUpdateField(field.key, value)}
+            value={props.meta[field.key]}
+          />
+        )
+      })}
     </div>
   )
 }
@@ -326,7 +420,7 @@ function FieldControl(props: {
     }
     case 'boolean': {
       return (
-        <Switch
+        <FormSwitch
           checked={value === true}
           label={field.label}
           onCheckedChange={onChange}
@@ -409,7 +503,7 @@ function ObjectFieldRenderer(props: {
 
   return (
     <div className="grid gap-2">
-      <Switch
+      <FormSwitch
         checked={isEnabled}
         description={props.field.description}
         label={props.field.label}
@@ -842,7 +936,7 @@ function JsonEditorDialog(props: {
     <Modal
       onClose={props.onClose}
       open={props.open}
-      popupStyle={{ height: 'min(80vh, 40rem)', width: 'min(92vw, 56rem)' }}
+      popupStyle={{ height: 'min(80svh, 40rem)', width: 'min(92vw, 56rem)' }}
     >
       <ModalHeader title={t('write.meta.json.dialogTitle')} />
       <div className="min-h-0 flex-1">

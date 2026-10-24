@@ -1,11 +1,15 @@
-import { Body, Get, Post } from '@nestjs/common'
+import { Body, Get, HttpCode, Post } from '@nestjs/common'
 
 import { ApiController } from '~/common/decorators/api-controller.decorator'
 import { Auth } from '~/common/decorators/auth.decorator'
 import { AppErrorCode, createAppException } from '~/common/errors'
 
 import { AiSlugBackfillService } from './ai-slug-backfill.service'
-import { AiQueryType, GenerateAiDto } from './ai-writer.schema'
+import {
+  AiQueryType,
+  type GenerateAiDto,
+  GenerateAiSchema,
+} from './ai-writer.schema'
 import { AiWriterService } from './ai-writer.service'
 
 @ApiController('ai/writer')
@@ -16,8 +20,9 @@ export class AiWriterController {
   ) {}
 
   @Post('generate')
+  @HttpCode(200)
   @Auth()
-  async generate(@Body() body: GenerateAiDto) {
+  async generate(@Body({ schema: GenerateAiSchema }) body: GenerateAiDto) {
     switch (body.type) {
       case AiQueryType.TitleSlug: {
         return this.aiWriterService.generateTitleAndSlugByOpenAI(body.text!)
@@ -42,6 +47,7 @@ export class AiWriterController {
   }
 
   @Post('backfill-slugs')
+  @HttpCode(200)
   @Auth()
   async backfillSlugs() {
     return this.aiSlugBackfillService.createBackfillTask()

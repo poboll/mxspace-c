@@ -33,8 +33,25 @@ export interface PaginationInfo {
   totalPage?: number
 }
 
+export interface GenerationMetrics {
+  cacheReadTokens: number | null
+  cacheWriteTokens: number | null
+  costCacheReadUsd: number | null
+  costCacheWriteUsd: number | null
+  costInputUsd: number | null
+  costOutputUsd: number | null
+  costTotalUsd: number | null
+  createdAt: string
+  inputTokens: number | null
+  model: string | null
+  outputTokens: number | null
+  providerId: string | null
+  totalTokens: number | null
+}
+
 export interface AISummary {
   createdAt: string
+  generationMetrics?: GenerationMetrics | null
   hash: string
   id: string
   lang: string
@@ -63,6 +80,7 @@ export interface SummaryByRefResponse {
 export interface AIInsights {
   content: string
   createdAt: string
+  generationMetrics?: GenerationMetrics | null
   hash: string
   id: string
   isTranslation: boolean
@@ -95,9 +113,10 @@ export type AIContentFormat = 'lexical' | 'markdown' | string
 export interface AITranslation {
   aiModel?: string
   aiProvider?: string
-  content?: string
+  content?: string | null
   contentFormat?: AIContentFormat
   createdAt: string
+  generationMetrics?: GenerationMetrics | null
   hash: string
   id: string
   lang: string
@@ -132,6 +151,14 @@ export interface TranslationByRefResponse {
 export interface ProviderModel {
   id: string
   name: string
+  pricing?: {
+    completion?: string
+    image?: string
+    prompt?: string
+    request?: string
+    unit: 'character' | 'token'
+  }
+  supportedVoices?: string[]
 }
 
 export interface RegistryModelCosts {
@@ -158,6 +185,7 @@ export interface ProviderModelsResponse {
 
 export interface AITestData {
   apiKey?: string
+  appendV1?: boolean
   endpoint?: string
   model?: string
   providerId: string
@@ -167,6 +195,7 @@ export interface AITestData {
 export interface AIModelListData {
   apiKey?: string
   endpoint?: string
+  modelListUrl?: string
   providerId: string
   type: string
 }
@@ -186,6 +215,8 @@ export type TranslationEntryKeyPath =
   | 'category.name'
   | 'note.mood'
   | 'note.weather'
+  | 'post.tag'
+  | 'topic.description'
   | 'topic.introduce'
   | 'topic.name'
 
@@ -251,9 +282,24 @@ export function updateSummary(id: string, data: { summary: string }) {
   return patchJson<AISummary, { summary: string }>(`/ai/summaries/${id}`, data)
 }
 
-export function createSummaryTask(data: { lang?: string; refId: string }) {
-  return postJson<CreateTaskResponse, { lang?: string; refId: string }>(
-    '/ai/summaries/task',
+export function createSummaryTask(data: {
+  force?: boolean
+  refId: string
+  targetLanguages?: string[]
+}) {
+  return postJson<
+    CreateTaskResponse,
+    { force?: boolean; refId: string; targetLanguages?: string[] }
+  >('/ai/summaries/task', data)
+}
+
+export function createSummaryTranslationTask(data: {
+  force?: boolean
+  refId: string
+  targetLang: string
+}) {
+  return postJson<CreateTaskResponse, typeof data>(
+    '/ai/summaries/task/translate',
     data,
   )
 }
@@ -278,25 +324,33 @@ export function updateInsights(id: string, data: { content: string }) {
   return patchJson<AIInsights, { content: string }>(`/ai/insights/${id}`, data)
 }
 
-export function createInsightsTask(data: { refId: string }) {
-  return postJson<CreateTaskResponse, { refId: string }>(
-    '/ai/insights/task',
-    data,
-  )
+export function createInsightsTask(data: {
+  force?: boolean
+  refId: string
+  targetLanguages?: string[]
+}) {
+  return postJson<CreateTaskResponse, typeof data>('/ai/insights/task', data)
 }
 
 export function createInsightsTranslationTask(data: {
+  force?: boolean
   refId: string
   targetLang: string
 }) {
-  return postJson<CreateTaskResponse, { refId: string; targetLang: string }>(
+  return postJson<CreateTaskResponse, typeof data>(
     '/ai/insights/task/translate',
     data,
   )
 }
 
 export function getModels() {
-  return getJson<ProviderModelsResponse[]>('/ai/models')
+  return getModelsByCapability('text')
+}
+
+export function getModelsByCapability(
+  capability: 'decision' | 'image' | 'speech' | 'text',
+) {
+  return getJson<ProviderModelsResponse[]>('/ai/models', { capability })
 }
 
 export function getRegistryModels(providerId: string) {
@@ -345,12 +399,13 @@ export function updateTranslation(
 }
 
 export function createTranslationTask(data: {
+  force?: boolean
   refId: string
   targetLanguages?: string[]
 }) {
   return postJson<
     CreateTaskResponse,
-    { refId: string; targetLanguages?: string[] }
+    { force?: boolean; refId: string; targetLanguages?: string[] }
   >('/ai/translations/task', data)
 }
 
@@ -382,12 +437,12 @@ export function getTranslationEntries(params?: {
 
 export function generateTranslationEntries(data?: {
   keyPaths?: TranslationEntryKeyPath[]
-  targetLanguages?: string[]
+  targetLangs?: string[]
 }) {
   return postJson<
     GenerateEntriesResponse,
-    { keyPaths?: TranslationEntryKeyPath[]; targetLanguages?: string[] } | null
-  >('/ai/translations/entries/generate', data ?? null)
+    { keyPaths?: TranslationEntryKeyPath[]; targetLangs?: string[] }
+  >('/ai/translations/entries/generate', data ?? {})
 }
 
 export function updateTranslationEntry(
@@ -402,4 +457,89 @@ export function updateTranslationEntry(
 
 export function deleteTranslationEntry(id: string) {
   return deleteJson<void>(`/ai/translations/entries/${id}`)
+}
+
+export interface AITtsSegment {
+  blockId: string
+  chunkIndex: number
+  text: string
+  url: string
+}
+
+export interface AITtsRow {
+  blockOrder: string[]
+  charCount: number
+  generationMetrics?: GenerationMetrics | null
+  id: string
+  isTranslation: boolean
+  lang: string
+  model: string
+  refId: string
+  segments: AITtsSegment[]
+  speed: number
+  updatedAt?: null | string
+  voice: string
+}
+
+export interface TtsVoiceOption {
+  id: string
+  kind: 'builtin' | 'provider'
+  name: string
+  previewUrl?: string
+}
+
+export interface TtsVoiceDiscoveryResponse {
+  error?: string
+  manualInputAllowed: true
+  source: 'builtin' | 'none' | 'remote'
+  voices: TtsVoiceOption[]
+}
+
+export function getTtsVoices(providerId: string, model: string) {
+  return getJson<TtsVoiceDiscoveryResponse>('/ai/tts/voices', {
+    model,
+    providerId,
+  })
+}
+
+export function createTtsTask(data: {
+  force?: boolean
+  langs?: string[]
+  refId: string
+}) {
+  return postJson<CreateTaskResponse, typeof data>('/ai/tts/task', data)
+}
+
+export interface TtsByRefResponse {
+  article: {
+    document: { title: string }
+    type: 'Note' | 'Page' | 'Post' | 'Recently'
+  } | null
+  rows: AITtsRow[]
+}
+
+export function getTtsByRefId(refId: string) {
+  return getJson<TtsByRefResponse>(`/ai/tts/ref/${refId}`)
+}
+
+export function deleteTts(id: string) {
+  return deleteJson<void>(`/ai/tts/${id}`)
+}
+
+export interface GroupedTtsData {
+  article: ArticleInfo
+  narrations: AITtsRow[]
+}
+
+export interface GroupedTtsResponse {
+  data: GroupedTtsData[]
+  pagination: PaginationInfo
+}
+
+export function getTtsGrouped(params?: {
+  page?: number
+  search?: string
+  size?: number
+}) {
+  return getJson<GroupedTtsResponse>('/ai/tts/grouped', params)
 }

@@ -2,6 +2,7 @@ import {
   Body,
   Get,
   Headers as RequestHeaders,
+  HttpCode,
   Inject,
   Post,
   Query,
@@ -10,7 +11,6 @@ import {
 import { SkipThrottle } from '@nestjs/throttler'
 import ejs from 'ejs'
 import type { FastifyReply } from 'fastify'
-import { createZodDto } from 'nestjs-zod'
 import { z } from 'zod'
 
 import { API_VERSION } from '~/app.config'
@@ -25,15 +25,28 @@ import { AuthInstanceInjectKey } from './auth.constant'
 import type { InjectAuthInstance } from './auth.interface'
 import { AuthService } from './auth.service'
 
-const DeviceVerifyBodySchema = z.object({
+export const DeviceVerifyBodySchema = z.object({
   userCode: z.string().min(1),
   action: z.enum(['approve', 'deny']),
 })
 
-export class DeviceVerifyDto extends createZodDto(DeviceVerifyBodySchema) {}
+export type DeviceVerifyDto = z.infer<typeof DeviceVerifyBodySchema>
 
 const deviceBasePath = isDev ? '/device' : `/api/v${API_VERSION}/device`
 const adminLoginPath = '/proxy/qaqdmin/#/login'
+
+const webTargets = {
+  admin: '/dashboard',
+  analytics: '/analyze',
+  comments: '/comments',
+  files: '/files',
+  notes: '/notes',
+  posts: '/posts',
+  recently: '/recently',
+  settings: '/settings',
+} as const
+
+type WebTarget = keyof typeof webTargets
 
 @ApiController('device')
 @SkipThrottle()
@@ -45,6 +58,42 @@ export class DeviceController {
     @Inject(AuthInstanceInjectKey)
     private readonly authInstance: InjectAuthInstance,
   ) {}
+
+  @Get('web-handoff')
+  @HTTPDecorators.RawResponse
+  async webHandoff(
+    @Query('token') token: string | undefined,
+    @Query('target') target: string | undefined,
+    @Res() reply: FastifyReply,
+  ) {
+    if (!token || !target || !(target in webTargets)) {
+      return reply.status(400).type('text/plain').send('Invalid handoff')
+    }
+
+    const auth = this.authInstance.get()
+    if (!auth) {
+      throw createAppException(AppErrorCode.AUTH_FAILED, {
+        message: 'auth not initialised',
+      })
+    }
+
+    const result = await auth.api.verifyOneTimeToken({
+      body: { token },
+      returnHeaders: true,
+    })
+    const setCookies = result.headers.getSetCookie()
+    if (setCookies.length > 0) reply.header('set-cookie', setCookies)
+
+    reply
+      .header('cache-control', 'no-store')
+      .header('referrer-policy', 'no-referrer')
+      .header('x-content-type-options', 'nosniff')
+
+    const { adminUrl } = await this.configsService.get('url')
+    const destination = new URL(adminUrl)
+    destination.hash = `#${webTargets[target as WebTarget]}`
+    return reply.redirect(destination.toString(), 302)
+  }
 
   @Get('/')
   @HTTPDecorators.RawResponse
@@ -86,9 +135,10 @@ export class DeviceController {
   }
 
   @Post('verify')
+  @HttpCode(200)
   @HTTPDecorators.RawResponse
   async verify(
-    @Body() body: DeviceVerifyDto,
+    @Body({ schema: DeviceVerifyBodySchema }) body: DeviceVerifyDto,
     @RequestHeaders('cookie') cookie: string | undefined,
   ) {
     const headers = new Headers()

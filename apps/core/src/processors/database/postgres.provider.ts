@@ -1,6 +1,11 @@
 import path from 'node:path'
 
-import { Logger } from '@nestjs/common'
+import {
+  Inject,
+  Injectable,
+  Logger,
+  type OnApplicationShutdown,
+} from '@nestjs/common'
 import { sql } from 'drizzle-orm'
 import { readMigrationFiles } from 'drizzle-orm/migrator'
 import { drizzle, type NodePgDatabase } from 'drizzle-orm/node-postgres'
@@ -18,8 +23,12 @@ export type AppDatabase = NodePgDatabase<DrizzleSchema>
 
 const logger = new Logger('PostgresProvider')
 
+const POOL_END_TIMEOUT_MS = 5_000
+
 let cachedPool: PgPool | null = null
 let cachedDb: AppDatabase | null = null
+const poolOwners = new WeakMap<PgPool, number>()
+const closingPools = new WeakMap<PgPool, Promise<void>>()
 
 export const db = new Proxy({} as AppDatabase, {
   get(_target, prop) {
@@ -95,11 +104,15 @@ export class MigrationDriftError extends Error {
 }
 
 /**
- * Verify that the database is at or beyond the latest bundled migration.
+ * Verify that every bundled migration has been applied.
  *
  * Throws `SchemaBehindError` if the database is missing migrations and
  * `MigrationDriftError` if a previously-applied migration's hash differs
  * from what the bundle expects.
+ *
+ * The check compares the full set of recorded hashes rather than the newest
+ * `created_at`: journal timestamps are not guaranteed monotonic across merged
+ * branches, so a single watermark lets a migration slip through unapplied.
  *
  * Schema mutation is the responsibility of the dedicated `migrate.mjs`
  * binary (see `apps/core/src/bin/migrate.ts`); the app refuses to start
@@ -125,29 +138,84 @@ export async function assertSchemaCurrent(
 
   const result = await db.execute<{ created_at: string; hash: string }>(sql`
     SELECT created_at, hash FROM drizzle.__drizzle_migrations
-    ORDER BY created_at DESC LIMIT 1
   `)
-  const latest = result.rows[0]
-  if (!latest || Number(latest.created_at) < last.folderMillis) {
-    throw new SchemaBehindError(
-      last.folderMillis,
-      latest?.created_at ?? null,
-      last.hash,
-    )
-  }
-  if (
-    Number(latest.created_at) === last.folderMillis &&
-    latest.hash !== last.hash
-  ) {
-    throw new MigrationDriftError(last.folderMillis, last.hash, latest.hash)
+  const appliedHashes = new Set(result.rows.map((row) => row.hash))
+  const hashByTimestamp = new Map(
+    result.rows.map((row) => [Number(row.created_at), row.hash]),
+  )
+  const newestTimestamp = result.rows.length
+    ? String(Math.max(...result.rows.map((row) => Number(row.created_at))))
+    : null
+
+  for (const file of files) {
+    if (appliedHashes.has(file.hash)) continue
+
+    const recordedHash = hashByTimestamp.get(file.folderMillis)
+    if (recordedHash !== undefined) {
+      throw new MigrationDriftError(file.folderMillis, file.hash, recordedHash)
+    }
+    throw new SchemaBehindError(file.folderMillis, newestTimestamp, file.hash)
   }
 }
 
 export async function disposePool(): Promise<void> {
-  if (cachedPool) {
-    await cachedPool.end()
-    cachedPool = null
-    cachedDb = null
+  const pool = cachedPool
+  cachedPool = null
+  cachedDb = null
+  if (pool) await closePool(pool)
+}
+
+// The cached pool is intentionally left in place after it ends: work that
+// outlives app.close() then fails on the ended pool instead of silently
+// opening a new one nothing will ever close. Only disposePool() resets it.
+function closePool(pool: PgPool): Promise<void> {
+  const closing = closingPools.get(pool)
+  if (closing) return closing
+
+  const result = endPool(pool)
+  closingPools.set(pool, result)
+  return result
+}
+
+async function endPool(pool: PgPool): Promise<void> {
+  let timer: NodeJS.Timeout | undefined
+  const timeout = new Promise<'timeout'>((resolve) => {
+    timer = setTimeout(resolve, POOL_END_TIMEOUT_MS, 'timeout')
+    timer.unref()
+  })
+  try {
+    const outcome = await Promise.race([pool.end(), timeout])
+    if (outcome === 'timeout') {
+      logger.warn(
+        `PostgreSQL pool did not drain within ${POOL_END_TIMEOUT_MS}ms; ` +
+          `${pool.totalCount - pool.idleCount} client(s) still checked out`,
+      )
+    }
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+@Injectable()
+export class PostgresPoolLifecycle implements OnApplicationShutdown {
+  private released = false
+
+  constructor(@Inject(PG_POOL_TOKEN) private readonly pool: PgPool) {
+    poolOwners.set(pool, (poolOwners.get(pool) ?? 0) + 1)
+  }
+
+  async onApplicationShutdown(): Promise<void> {
+    if (this.released) return
+    this.released = true
+
+    const remaining = (poolOwners.get(this.pool) ?? 1) - 1
+    if (remaining > 0) {
+      poolOwners.set(this.pool, remaining)
+      return
+    }
+
+    poolOwners.delete(this.pool)
+    await closePool(this.pool)
   }
 }
 

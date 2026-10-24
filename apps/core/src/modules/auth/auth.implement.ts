@@ -2,35 +2,188 @@ import type { ServerResponse } from 'node:http'
 import { IncomingMessage } from 'node:http'
 
 import { apiKey } from '@better-auth/api-key'
+import { expo } from '@better-auth/expo'
 import type { PasskeyOptions } from '@better-auth/passkey'
 import { passkey } from '@better-auth/passkey'
+import type { SnowflakeGenerator } from '@mx-space/db-schema/id'
 import * as authSchema from '@mx-space/db-schema/schema'
 import { compare } from 'bcryptjs'
 import type { BetterAuthOptions } from 'better-auth'
 import { betterAuth } from 'better-auth'
 import { drizzleAdapter } from 'better-auth/adapters/drizzle'
 import { APIError, createAuthMiddleware } from 'better-auth/api'
-import { hashPassword, verifyPassword } from 'better-auth/crypto'
+import {
+  hashPassword,
+  symmetricDecrypt,
+  verifyPassword,
+} from 'better-auth/crypto'
 import { toNodeHandler } from 'better-auth/node'
-import { bearer, deviceAuthorization, username } from 'better-auth/plugins'
+import {
+  bearer,
+  deviceAuthorization,
+  oneTimeToken,
+  username,
+} from 'better-auth/plugins'
 import { and, eq } from 'drizzle-orm'
 import { customAlphabet } from 'nanoid'
 import wcmatch from 'wildcard-match'
 
-import { API_VERSION, CROSS_DOMAIN } from '~/app.config'
-import { SECURITY } from '~/app.config.test'
+import {
+  API_VERSION,
+  CROSS_DOMAIN,
+  SECRET_STORAGE_V2,
+  SECURITY,
+} from '~/app.config'
 import { db } from '~/processors/database/postgres.provider'
 
+import { APPLE_ORIGIN } from './apple-client-secret'
+import { HASHED_API_KEY_CONFIG_ID } from './auth.constant'
 import { validateMxUsername } from './auth.username-validator'
+import {
+  type CredentialSignInGate,
+  denyEmailSignIn,
+  denyUsernameSignIn,
+} from './email-sign-in-gate'
+import { isReviewDemoEmail } from './review-demo.constants'
 
 const bcryptRegex = /^\$2[aby]\$/
 const isBcryptHash = (value?: string | null) =>
   typeof value === 'string' && bcryptRegex.test(value)
 
 export const MXS_CLI_CLIENT_ID = 'mxs-cli'
+export const SPACE_IOS_CLIENT_ID = 'space-ios'
+
+export const DEVICE_AUTHORIZATION_CLIENT_IDS: ReadonlySet<string> = new Set([
+  MXS_CLI_CLIENT_ID,
+  SPACE_IOS_CLIENT_ID,
+])
 
 const deviceUserCodeAlphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
 const generateDeviceUserCode = customAlphabet(deviceUserCodeAlphabet, 8)
+const reviewDemoMutableProfileFields = new Set(['image', 'name'])
+
+// Compatibility release: all replicas can read encrypted OAuth tokens before v2 writes are enabled.
+async function preserveLegacyOAuthWrites(
+  account: Record<string, unknown>,
+  context: any,
+) {
+  if (SECRET_STORAGE_V2) return
+  const data = { ...account }
+  for (const field of ['accessToken', 'refreshToken']) {
+    const token = data[field]
+    if (typeof token === 'string' && token) {
+      data[field] = await symmetricDecrypt({
+        key: context.context.secretConfig,
+        data: token,
+      })
+    }
+  }
+  return { data }
+}
+
+export const reviewDemoDatabaseHooks: NonNullable<
+  BetterAuthOptions['databaseHooks']
+> = {
+  account: {
+    create: { before: preserveLegacyOAuthWrites },
+    update: {
+      before: async (account, context) => {
+        if (
+          context?.path === '/change-password' &&
+          isReviewDemoEmail(context.context.session?.user ?? {})
+        ) {
+          throw new APIError('FORBIDDEN', {
+            message: 'app review demo credentials cannot be changed',
+          })
+        }
+        return preserveLegacyOAuthWrites(account, context)
+      },
+    },
+  },
+  user: {
+    update: {
+      before: async (_user, context) => {
+        if (
+          context?.path !== '/update-user' ||
+          !isReviewDemoEmail(context.context.session?.user ?? {})
+        ) {
+          return
+        }
+        const body = context.body
+        if (
+          body &&
+          typeof body === 'object' &&
+          !Array.isArray(body) &&
+          Object.keys(body).every((key) =>
+            reviewDemoMutableProfileFields.has(key),
+          )
+        ) {
+          return
+        }
+        throw new APIError('FORBIDDEN', {
+          message: 'app review demo identity cannot be changed',
+        })
+      },
+    },
+  },
+}
+
+export function assertUserDeletionAllowed(user: {
+  email?: string | null
+  role?: string | null
+}) {
+  if (user.role === 'owner') {
+    throw new APIError('FORBIDDEN', {
+      message: 'owner cannot delete',
+    })
+  }
+  if (isReviewDemoEmail(user)) {
+    throw new APIError('FORBIDDEN', {
+      message: 'app review demo account cannot be deleted',
+    })
+  }
+}
+
+export const createCredentialSignInHook = (
+  getCredentialSignInGate?: () => Promise<CredentialSignInGate>,
+) =>
+  createAuthMiddleware(async (ctx) => {
+    if (ctx.path === '/api-key/create') {
+      ctx.body.configId = SECRET_STORAGE_V2
+        ? HASHED_API_KEY_CONFIG_ID
+        : 'default'
+    }
+    if (ctx.body?.role !== undefined) {
+      throw new APIError('FORBIDDEN', {
+        message: 'role cannot be modified',
+      })
+    }
+    if (!['/sign-in/email', '/sign-in/username'].includes(ctx.path)) {
+      return
+    }
+    const gate = getCredentialSignInGate
+      ? await getCredentialSignInGate()
+      : {
+          disablePasswordLogin: false,
+          reviewDemoEnabled: false,
+          reviewDemoBanned: false,
+        }
+    const denied =
+      ctx.path === '/sign-in/email'
+        ? denyEmailSignIn(
+            typeof ctx.body?.email === 'string' ? ctx.body.email : '',
+            gate,
+          )
+        : denyUsernameSignIn(
+            typeof ctx.body?.username === 'string' ? ctx.body.username : '',
+            gate,
+          )
+    if (denied) {
+      throw new APIError('UNAUTHORIZED', {
+        message: 'Invalid email or password',
+      })
+    }
+  })
 
 const normalizeOrigin = (url: string | undefined): string | null => {
   if (!url) return null
@@ -81,6 +234,8 @@ export async function CreateAuth(
   providers: BetterAuthOptions['socialProviders'],
   passkeyOptions?: PasskeyOptions,
   serverUrl?: string,
+  idGenerator?: SnowflakeGenerator,
+  getCredentialSignInGate?: () => Promise<CredentialSignInGate>,
 ) {
   const deviceVerificationPath = isDev
     ? '/device'
@@ -106,11 +261,13 @@ export async function CreateAuth(
     baseURL: dynamicBaseURL,
     basePath: isDev ? '/auth' : `/api/v${API_VERSION}/auth`,
     trustedOrigins: async (request) => {
+      // Apple posts its callback from appleid.apple.com (response_mode=form_post)
+      const alwaysTrustedOrigins = ['yohaku://', APPLE_ORIGIN]
       if (isDev) {
-        if (!request) return ['http://localhost:2323']
+        if (!request) return ['http://localhost:2323', ...alwaysTrustedOrigins]
         const origin = request.headers.get('origin')
         if (origin?.includes('localhost') || origin?.includes('127.0.0.1')) {
-          return [origin]
+          return [origin, ...alwaysTrustedOrigins]
         }
       }
 
@@ -124,15 +281,17 @@ export async function CreateAuth(
           }
           return [...acc, `https://${origin}`, `http://${origin}`]
         },
-        [],
+        alwaysTrustedOrigins,
       )
     },
     account: {
+      encryptOAuthTokens: true,
       accountLinking: {
         enabled: true,
-        trustedProviders: ['google', 'github'],
+        trustedProviders: ['google', 'github', 'apple'],
       },
     },
+    databaseHooks: reviewDemoDatabaseHooks,
     emailAndPassword: {
       enabled: true,
       disableSignUp: true,
@@ -155,20 +314,32 @@ export async function CreateAuth(
         },
       },
     },
+    // Better Auth's default ids are mixed-case random strings, which get
+    // mangled when used as record keys by the snake_case response transform.
+    // Digit-only Snowflake ids survive both server and client case passes.
+    advanced: idGenerator
+      ? { database: { generateId: () => idGenerator.nextId() } }
+      : undefined,
     appName: 'mx-core',
     secret: SECURITY.jwtSecret,
+    secrets: SECURITY.jwtSecret
+      ? [{ version: 1, value: SECURITY.jwtSecret }]
+      : undefined,
     plugins: [
-      apiKey({
-        schema: {
-          apikey: {
-            modelName: 'apiKey',
+      expo(),
+      apiKey(
+        [
+          {
+            configId: 'default',
+            disableKeyHashing: true,
+            defaultKeyLength: 43,
           },
+          { configId: HASHED_API_KEY_CONFIG_ID, defaultKeyLength: 43 },
+        ],
+        {
+          schema: { apikey: { modelName: 'apiKey' } },
         },
-        apiKeyHeaders: ['x-api-key'],
-        disableKeyHashing: true,
-        defaultKeyLength: 43,
-        customAPIKeyGetter: (ctx) => ctx.headers?.get('x-api-key') ?? null,
-      }),
+      ),
       passkey({
         ...passkeyOptions,
         schema: {
@@ -183,6 +354,10 @@ export async function CreateAuth(
         },
       } as PasskeyOptions),
       bearer(),
+      oneTimeToken({
+        expiresIn: 1,
+        storeToken: 'hashed',
+      }),
       username({
         usernameValidator: validateMxUsername,
       }),
@@ -194,7 +369,7 @@ export async function CreateAuth(
         generateUserCode: () => generateDeviceUserCode(),
         verificationUri: deviceVerificationPath,
         onDeviceAuthRequest: async (clientId) => {
-          if (clientId !== MXS_CLI_CLIENT_ID) {
+          if (!DEVICE_AUTHORIZATION_CLIENT_IDS.has(clientId)) {
             throw new APIError('BAD_REQUEST', {
               error: 'invalid_client',
               error_description: `unsupported client_id: ${clientId}`,
@@ -204,13 +379,7 @@ export async function CreateAuth(
       }),
     ],
     hooks: {
-      before: createAuthMiddleware(async (ctx) => {
-        if (ctx.body?.role !== undefined) {
-          throw new APIError('FORBIDDEN', {
-            message: 'role cannot be modified',
-          })
-        }
-      }),
+      before: createCredentialSignInHook(getCredentialSignInGate),
       after: createAuthMiddleware(async (ctx) => {
         const newSession = ctx.context.newSession as
           | {
@@ -314,6 +483,10 @@ export async function CreateAuth(
     },
     user: {
       modelName: 'reader',
+      deleteUser: {
+        enabled: true,
+        beforeDelete: async (user) => assertUserDeletionAllowed(user),
+      },
       additionalFields: {
         role: {
           type: 'string',

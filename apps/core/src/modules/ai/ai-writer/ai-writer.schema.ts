@@ -1,4 +1,3 @@
-import { createZodDto } from 'nestjs-zod'
 import { z } from 'zod'
 
 export enum AiQueryType {
@@ -26,12 +25,9 @@ export const GenerateAiSchema = z
       return true
     },
     {
-      message:
+      error:
         'text is required when type is TitleSlug, title is required when type is Slug',
     },
   )
 
-export class GenerateAiDto extends createZodDto(GenerateAiSchema) {}
-
-// Type exports
-export type GenerateAiInput = z.infer<typeof GenerateAiSchema>
+export type GenerateAiDto = z.infer<typeof GenerateAiSchema>

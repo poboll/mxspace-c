@@ -21,6 +21,7 @@ import { getAppInfo } from '~/api/system'
 import { API_URL, GATEWAY_URL, WEB_URL } from '~/constants/env'
 import { SESSION_WITH_LOGIN } from '~/constants/keys'
 import { APP_SHELL_HEADER_HEIGHT_CLASS } from '~/constants/layout'
+import { resetAllCollections } from '~/data/resource/collection'
 import { useI18n } from '~/i18n'
 import { SUPPORTED_LOCALES } from '~/i18n/resources'
 import type { Locale, TranslationKey } from '~/i18n/types'
@@ -138,6 +139,7 @@ export function SidebarBody(props: { onCollapseSidebar?: () => void }) {
     await authClient.signOut()
     sessionStorage.removeItem(SESSION_WITH_LOGIN)
     queryClient.clear()
+    resetAllCollections()
     navigate('/login', { replace: true })
   }
   const handleBrandContextMenu = (event: ReactMouseEvent) => {
@@ -183,7 +185,9 @@ export function SidebarBody(props: { onCollapseSidebar?: () => void }) {
             decoding="async"
             src={faviconUrl}
           />
-          <span className="truncate text-sm font-medium text-fg">Mx Space</span>
+          <span className="truncate text-sm font-medium text-fg">
+            Mix Space
+          </span>
         </div>
         <div className="flex shrink-0 items-center gap-1">
           {props.onCollapseSidebar ? (

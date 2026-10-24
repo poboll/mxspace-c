@@ -1,7 +1,8 @@
-import { EncryptUtil } from '~/utils/encrypt.util'
 import { isArrayLike, isObject } from 'es-toolkit/compat'
-import { LRUCache } from 'lru-cache'
 import type { z } from 'zod'
+
+import { EncryptUtil } from '~/utils/encrypt.util'
+
 import { configSchemaMapping } from './configs.schema'
 import { getMeta } from './configs.zod-schema.util'
 
@@ -29,7 +30,7 @@ function getEncryptedPaths(): Set<string> {
 /**
  * Get the type name from a Zod schema (Zod 4.x compatible)
  */
-function getZodTypeName(schema: z.ZodTypeAny): string {
+function getZodTypeName(schema: z.ZodType): string {
   // Zod 4.x uses _zod.def.type
   const zodDef = (schema as any)._zod?.def
   if (zodDef?.type) {
@@ -45,7 +46,7 @@ function getZodTypeName(schema: z.ZodTypeAny): string {
 /**
  * Get the inner type from wrapper types (optional, nullable, default, etc.)
  */
-function getInnerType(schema: z.ZodTypeAny): z.ZodTypeAny | null {
+function getInnerType(schema: z.ZodType): z.ZodType | null {
   const zodDef = (schema as any)._zod?.def
   return zodDef?.innerType || null
 }
@@ -53,9 +54,7 @@ function getInnerType(schema: z.ZodTypeAny): z.ZodTypeAny | null {
 /**
  * Get the shape from an object schema
  */
-function getObjectShape(
-  schema: z.ZodTypeAny,
-): Record<string, z.ZodTypeAny> | null {
+function getObjectShape(schema: z.ZodType): Record<string, z.ZodType> | null {
   // Try direct .shape property first (Zod 4.x)
   if ((schema as any).shape && typeof (schema as any).shape === 'object') {
     return (schema as any).shape
@@ -74,7 +73,7 @@ function getObjectShape(
 /**
  * Get the element type from an array schema
  */
-function getArrayElementType(schema: z.ZodTypeAny): z.ZodTypeAny | null {
+function getArrayElementType(schema: z.ZodType): z.ZodType | null {
   const zodDef = (schema as any)._zod?.def
   return zodDef?.element || zodDef?.type || null
 }
@@ -86,7 +85,7 @@ function getArrayElementType(schema: z.ZodTypeAny): z.ZodTypeAny | null {
  * @param parentEncrypt - Whether a parent is marked as encrypt (for subtree encryption)
  */
 function collectEncryptedPathsFromSchema(
-  schema: z.ZodTypeAny,
+  schema: z.ZodType,
   prefix: string,
   parentEncrypt = false,
 ): Set<string> {
@@ -206,23 +205,6 @@ function isEncryptedPath(path: string): boolean {
   return false
 }
 
-const decryptLRU = new LRUCache<string, string>({
-  max: 100,
-  ttl: 1000 * 60 * 5,
-})
-
-/**
- * Decrypt a single value
- */
-function decryptValue(value: string): string {
-  if (decryptLRU.has(value)) {
-    return decryptLRU.get(value)!
-  }
-  const decryptedValue = EncryptUtil.decrypt(value)
-  decryptLRU.set(value, decryptedValue)
-  return decryptedValue
-}
-
 /**
  * Recursively decrypt all encrypted fields in an object
  */
@@ -238,13 +220,13 @@ export const decryptObject = <T extends object>(target: T, prefix = ''): T => {
         if (isObject(value[i]) && !isArrayLike(value[i])) {
           value[i] = decryptObject(value[i], itemPath)
         } else if (typeof value[i] === 'string' && isEncryptedPath(itemPath)) {
-          value[i] = decryptValue(value[i])
+          value[i] = EncryptUtil.decrypt(value[i], itemPath)
         }
       }
     } else if (isObject(value) && !isArrayLike(value)) {
       ;(target as any)[key] = decryptObject(value, currentPath)
     } else if (typeof value === 'string' && isEncryptedPath(currentPath)) {
-      ;(target as any)[key] = decryptValue(value)
+      ;(target as any)[key] = EncryptUtil.decrypt(value, currentPath)
     }
   }
   return target
@@ -265,13 +247,13 @@ export const encryptObject = <T extends object>(target: T, prefix = ''): T => {
         if (isObject(value[i]) && !isArrayLike(value[i])) {
           value[i] = encryptObject(value[i], itemPath)
         } else if (typeof value[i] === 'string' && isEncryptedPath(itemPath)) {
-          value[i] = EncryptUtil.encrypt(value[i])
+          value[i] = EncryptUtil.encrypt(value[i], itemPath)
         }
       }
     } else if (isObject(value) && !isArrayLike(value)) {
       ;(target as any)[key] = encryptObject(value, currentPath)
     } else if (typeof value === 'string' && isEncryptedPath(currentPath)) {
-      ;(target as any)[key] = EncryptUtil.encrypt(value)
+      ;(target as any)[key] = EncryptUtil.encrypt(value, currentPath)
     }
   }
   return target
@@ -318,8 +300,8 @@ export const sanitizeConfigForResponse = <T extends object>(
 }
 
 /**
- * Remove empty string values from encrypted fields
- * This prevents empty values from overwriting existing encrypted data during merge
+ * Remove blank (empty string or null) values from encrypted fields
+ * This prevents blank values from overwriting existing encrypted data during merge
  */
 export const removeEmptyEncryptedFields = <T extends object>(
   target: T,
@@ -351,8 +333,7 @@ export const removeEmptyEncryptedFields = <T extends object>(
     } else if (isObject(value) && !isArrayLike(value)) {
       ;(result as any)[key] = removeEmptyEncryptedFields(value, currentPath)
     } else if (
-      typeof value === 'string' &&
-      value === '' &&
+      (value === '' || value === null) &&
       isEncryptedPath(currentPath)
     ) {
       delete (result as any)[key]

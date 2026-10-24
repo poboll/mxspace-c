@@ -1,9 +1,11 @@
 import type {
   ArticleRefMap,
   InsightsMeta,
+  PaywallMeta,
   PostResponseMeta,
   RelatedRef,
   SummaryMeta,
+  TtsMeta,
 } from '~/common/response/meta.types'
 import { PostResponseMetaSchema } from '~/common/response/meta.types'
 import { MetaObjectBuilder } from '~/common/response/meta-builder'
@@ -38,6 +40,16 @@ export class PostMetaBuilder extends MetaObjectBuilder<
 
   skills(value: SkillBundleView[]): this {
     ;(this.meta as PostResponseMeta).skills = value
+    return this
+  }
+
+  paywall(value: PaywallMeta): this {
+    ;(this.meta as PostResponseMeta).paywall = value
+    return this
+  }
+
+  tts(value: TtsMeta): this {
+    ;(this.meta as PostResponseMeta).tts = value
     return this
   }
 }

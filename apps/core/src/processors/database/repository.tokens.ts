@@ -23,6 +23,7 @@ export const POSTGRES_REPOSITORY_TOKENS = {
   aiTranslation: Symbol('AiTranslationRepository'),
   translationEntry: Symbol('TranslationEntryRepository'),
   aiAgentConversation: Symbol('AiAgentConversationRepository'),
+  aiTts: Symbol('AiTtsRepository'),
   activity: Symbol('ActivityRepository'),
   analyze: Symbol('AnalyzeRepository'),
   fileReference: Symbol('FileReferenceRepository'),
@@ -39,6 +40,9 @@ export const POSTGRES_REPOSITORY_TOKENS = {
   webhookEvent: Symbol('WebhookEventRepository'),
   options: Symbol('OptionsRepository'),
   metaPreset: Symbol('MetaPresetRepository'),
+  membership: Symbol('MembershipRepository'),
+  articlePurchase: Symbol('ArticlePurchaseRepository'),
+  billingWebhookEvent: Symbol('BillingWebhookEventRepository'),
 } as const
 
 export type PostgresRepositoryToken =

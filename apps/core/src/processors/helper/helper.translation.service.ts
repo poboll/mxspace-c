@@ -5,6 +5,7 @@ import { AiTranslationService } from '~/modules/ai/ai-translation/ai-translation
 import type { TranslationSourceSnapshot } from '~/modules/ai/ai-translation/translation-consistency.types'
 import { TranslationEntryService } from '~/modules/ai/ai-translation/translation-entry.service'
 import type { TranslationEntryKeyPath } from '~/modules/ai/ai-translation/translation-entry.types'
+import { describeError, errorStack } from '~/utils/error.util'
 import { normalizeLanguageCode } from '~/utils/lang.util'
 
 export interface TranslationMeta {
@@ -71,10 +72,17 @@ const ALL_TRANSLATABLE_FIELDS: readonly ArticleTranslatableField[] = [
   'text',
   'subtitle',
   'summary',
-  'tags',
   'content',
   'contentFormat',
 ]
+
+export type TagGlossaryPair = { source: string; translated: string }
+
+export function buildTagGlossary(maps: EntryMaps): TagGlossaryPair[] {
+  const dictMap = maps.dictMaps.get('post.tag')
+  if (!dictMap) return []
+  return [...dictMap].map(([source, translated]) => ({ source, translated }))
+}
 
 export function buildArticleTranslationMeta(
   result: TranslationResult,
@@ -239,14 +247,17 @@ export class TranslationService {
         text: translation.text,
         subtitle: translation.subtitle ?? originalData.subtitle,
         summary: translation.summary ?? originalData.summary,
-        tags: translation.tags ?? originalData.tags,
+        tags: originalData.tags,
         isTranslated: true,
         sourceLang: translation.sourceLang,
         translationMeta: {
           sourceLang: translation.sourceLang,
           targetLang: translation.lang,
           translatedAt: translation.createdAt,
-          model: translation.aiModel ?? undefined,
+          model:
+            translation.generationMetrics?.model ??
+            translation.aiModel ??
+            undefined,
         },
         availableTranslations,
       }
@@ -255,7 +266,10 @@ export class TranslationService {
         result.contentFormat = translation.contentFormat
       return result
     } catch (error) {
-      this.logger.error(error)
+      this.logger.error(
+        `translateArticle failed: ${describeError(error)}`,
+        errorStack(error),
+      )
       return { ...originalData, isTranslated: false }
     }
   }
@@ -345,7 +359,6 @@ export class TranslationService {
       'text',
       'subtitle',
       'summary',
-      'tags',
       'content',
       'translationMeta',
     ]
@@ -398,7 +411,7 @@ export class TranslationService {
                 text: translation.text,
                 subtitle: translation.subtitle ?? article.subtitle,
                 summary: translation.summary ?? article.summary,
-                tags: translation.tags ?? article.tags,
+                tags: article.tags,
                 content: translation.content ?? undefined,
                 contentFormat: translation.contentFormat ?? undefined,
                 isTranslated: true,
@@ -410,7 +423,10 @@ export class TranslationService {
                       sourceLang: translation.sourceLang,
                       targetLang: translation.lang,
                       translatedAt: translation.createdAt,
-                      model: translation.aiModel ?? undefined,
+                      model:
+                        translation.generationMetrics?.model ??
+                        translation.aiModel ??
+                        undefined,
                     }
                   : undefined,
               },
@@ -420,7 +436,10 @@ export class TranslationService {
         }),
       )
     } catch (error) {
-      this.logger.error(error)
+      this.logger.error(
+        `translateArticleList failed: ${describeError(error)}`,
+        errorStack(error),
+      )
       return buildUntranslatedMap()
     }
   }
@@ -482,7 +501,10 @@ export class TranslationService {
         lookupKeys,
       )
     } catch (error) {
-      this.logger.error(error)
+      this.logger.error(
+        `getEntityTranslations failed: ${describeError(error)}`,
+        errorStack(error),
+      )
       return new Map()
     }
   }
@@ -501,7 +523,10 @@ export class TranslationService {
         sourceTexts,
       )
     } catch (error) {
-      this.logger.error(error)
+      this.logger.error(
+        `getDictTranslations failed: ${describeError(error)}`,
+        errorStack(error),
+      )
       return new Map()
     }
   }

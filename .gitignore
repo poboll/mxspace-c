@@ -46,6 +46,7 @@ run
 /data
 /assets
 .env
+.env.local
 
 scripts/workflow/docker-compose.yml
 scripts/workflow/data
@@ -53,6 +54,7 @@ scripts/workflow/data
 bin/process-reporter
 
 dist
+dist-author
 dev/
 
 .eslintcache

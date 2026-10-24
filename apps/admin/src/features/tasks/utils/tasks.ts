@@ -68,6 +68,17 @@ export function getTaskSummary(task: AITask, t: Translator) {
     return t('tasks.task.insights.generation')
   if (task.type === AITaskType.InsightsTranslation)
     return t('tasks.task.insights.translation')
+  if (task.type === AITaskType.ImageGeneration) {
+    const prompt = payload.prompt as string | undefined
+    return prompt || t('tasks.task.imageGeneration.task')
+  }
+  if (task.type === AITaskType.Tts) {
+    return (
+      (payload.title as string) ||
+      (payload.refId as string) ||
+      t('tasks.task.tts.task')
+    )
+  }
 
   const refId = task.payload.refId
   if (typeof refId === 'string' && refId) return refId
@@ -94,6 +105,11 @@ export function getTaskDetailSummary(task: AITask, t: Translator) {
       ? t('tasks.task.translation.allArticlesCount', { count })
       : t('tasks.task.translation.allArticles')
     return `${head} -> ${langs || t('tasks.task.translation.defaultLang')}`
+  }
+  if (task.type === AITaskType.Tts) {
+    const title = (payload.title as string) || (payload.refId as string)
+    const langs = (payload.langs as string[] | undefined)?.join(', ')
+    return `${title || t('tasks.task.tts.task')} -> ${langs || t('tasks.task.translation.defaultLang')}`
   }
 
   return getTaskSummary(task, t)

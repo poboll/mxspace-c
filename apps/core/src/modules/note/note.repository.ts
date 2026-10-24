@@ -9,6 +9,7 @@ import {
   gte,
   ilike,
   inArray,
+  isNotNull,
   isNull,
   lt,
   lte,
@@ -36,6 +37,7 @@ import type {
   NotePatchInput,
   NoteRow,
   NoteSortOptions,
+  ScheduledNoteRow,
 } from './note.types'
 
 type NoteRowSource = Omit<typeof notes.$inferSelect, 'text' | 'content'> &
@@ -147,10 +149,7 @@ const mapTopic = (topic: TopicProjection): NoteRow['topic'] => {
   }
 }
 
-const mapWithTopic = (
-  note: NoteRowSource,
-  topic: TopicProjection,
-): NoteRow => {
+const mapWithTopic = (note: NoteRowSource, topic: TopicProjection): NoteRow => {
   const row = mapBase(note)
   row.topic = mapTopic(topic)
   return row
@@ -440,7 +439,9 @@ export class NoteRepository extends BaseRepository {
       name: metaOnly
         ? 'notes_default_visible_list_meta_v2'
         : 'notes_default_visible_list_v2',
-      text: metaOnly ? defaultVisibleNoteListMetaSql : defaultVisibleNoteListSql,
+      text: metaOnly
+        ? defaultVisibleNoteListMetaSql
+        : defaultVisibleNoteListSql,
     })
     const count = result.rows[0]?.totalCount ?? 0
     return {
@@ -609,6 +610,35 @@ export class NoteRepository extends BaseRepository {
     options: NoteSortOptions & NoteListFilter = {},
   ): Promise<PaginationResult<NoteRow>> {
     return this.listInternal(page, size, options)
+  }
+
+  /**
+   * Collect every distinct mood / weather string from visible notes —
+   * used by the translation glossary so historical entries are also seeded.
+   */
+  async findDistinctMoodsAndWeathers(): Promise<{
+    moods: string[]
+    weathers: string[]
+  }> {
+    const visible = this.visibleClause()
+    const [moodRows, weatherRows] = await Promise.all([
+      this.db
+        .selectDistinct({ value: notes.mood })
+        .from(notes)
+        .where(and(visible, isNotNull(notes.mood))!),
+      this.db
+        .selectDistinct({ value: notes.weather })
+        .from(notes)
+        .where(and(visible, isNotNull(notes.weather))!),
+    ])
+    const pick = (rows: Array<{ value: string | null }>): string[] =>
+      rows
+        .map((row) => row.value)
+        .filter((value): value is string => Boolean(value))
+    return {
+      moods: pick(moodRows),
+      weathers: pick(weatherRows),
+    }
   }
 
   async findRecent(
@@ -787,9 +817,14 @@ export class NoteRepository extends BaseRepository {
     await this.update(id, { images })
   }
 
-  async getLatestVisible(): Promise<NoteRow | null> {
-    const [row] = await this.findRecent(1, { visibleOnly: true })
-    return row ?? null
+  async getLatestVisibleId(): Promise<Pick<NoteRow, 'id' | 'nid'> | null> {
+    const [row] = await this.db
+      .select({ id: notes.id, nid: notes.nid })
+      .from(notes)
+      .where(this.visibleClause())
+      .orderBy(createdAtDescNullsLast)
+      .limit(1)
+    return row ? { id: toEntityId(row.id) as EntityId, nid: row.nid } : null
   }
 
   async findLatestVisiblePair(): Promise<{
@@ -915,6 +950,80 @@ export class NoteRepository extends BaseRepository {
       .where(filters.length ? and(...filters) : undefined)
       .orderBy(orderBy)
     return rows.map((row) => mapWithTopic(row.note, row.topic))
+  }
+
+  async findScheduled(limit: number): Promise<ScheduledNoteRow[]> {
+    const rows = await this.db
+      .select({
+        id: notes.id,
+        nid: notes.nid,
+        title: notes.title,
+        publicAt: notes.publicAt,
+      })
+      .from(notes)
+      .where(and(eq(notes.isPublished, true), gt(notes.publicAt, new Date())))
+      .orderBy(asc(notes.publicAt))
+      .limit(limit)
+    return rows.map((row) => ({
+      id: toEntityId(row.id) as EntityId,
+      nid: row.nid,
+      title: row.title,
+      publicAt: row.publicAt!,
+    }))
+  }
+
+  async findOnThisDay(
+    month: number,
+    day: number,
+    beforeYear: number,
+    limit: number,
+  ): Promise<
+    Array<{
+      id: EntityId
+      title: string | null
+      text: string | null
+      createdAt: Date
+    }>
+  > {
+    const rows = await this.db
+      .select({
+        id: notes.id,
+        title: notes.title,
+        text: notes.text,
+        createdAt: notes.createdAt,
+      })
+      .from(notes)
+      .where(
+        and(
+          eq(notes.isPublished, true),
+          sql`extract(month from ${notes.createdAt})::int = ${month}`,
+          sql`extract(day from ${notes.createdAt})::int = ${day}`,
+          sql`extract(year from ${notes.createdAt})::int < ${beforeYear}`,
+        ),
+      )
+      .orderBy(desc(notes.createdAt))
+      .limit(limit)
+    return rows.map((row) => ({
+      id: toEntityId(row.id) as EntityId,
+      title: row.title,
+      text: row.text,
+      createdAt: row.createdAt,
+    }))
+  }
+
+  async countPublishedByDay(
+    since: Date,
+  ): Promise<Array<{ date: string; count: number }>> {
+    const day = sql<string>`to_char(${notes.createdAt}, 'YYYY-MM-DD')`
+    const rows = await this.db
+      .select({ date: day, count: sql<number>`count(*)::int` })
+      .from(notes)
+      .where(and(eq(notes.isPublished, true), gte(notes.createdAt, since)))
+      .groupBy(day)
+    return rows.map((row) => ({
+      date: row.date,
+      count: Number(row.count ?? 0),
+    }))
   }
 
   async findVisibleForSitemap(): Promise<NoteRow[]> {

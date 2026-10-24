@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 
 import { Injectable, Logger, type OnModuleInit } from '@nestjs/common'
 
@@ -15,6 +15,7 @@ import { EnrichmentRepository } from './enrichment.repository'
 import type { EnrichmentResult, ProviderMeta } from './enrichment.types'
 import {
   ChallengeBlockedError,
+  EnrichmentDeferredError,
   ProviderDisabledError,
   TokenMissingError,
 } from './enrichment.types'
@@ -30,8 +31,6 @@ type ThirdPartyConfig = IConfig['thirdPartyServiceIntegration']
 
 const REDIS_KEY_PREFIX = 'enrichment:resolve:'
 const REDIS_TTL = 600
-const BACKOFF_BASE = 60
-const BACKOFF_MAX = 86400
 
 const ENRICHMENT_REFRESH_TASK_TYPE = 'enrichment:refresh'
 const ENRICHMENT_TASK_SCOPE = 'enrichment'
@@ -75,6 +74,7 @@ function stampRowId(
 @Injectable()
 export class EnrichmentService implements OnModuleInit {
   private readonly logger = new Logger(EnrichmentService.name)
+  private inFlightFetches = new Map<string, Promise<EnrichmentResult>>()
 
   constructor(
     private readonly providerRegistry: ProviderRegistry,
@@ -99,10 +99,11 @@ export class EnrichmentService implements OnModuleInit {
         try {
           await this.refresh(payload.provider, payload.externalId, locale, {
             url,
+            reuseFresh: true,
           })
         } catch (error) {
-          // Record per-row failure so backoff kicks in on subsequent SWR
-          // resolves; re-throw so the task queue marks the task failed.
+          // The shared fetch path records retry state; re-throw so the
+          // task queue marks this attempt failed.
           // Challenge pages are expected anti-bot signals, not infra faults —
           // log at info to keep on-call dashboards clean.
           const logFn =
@@ -112,18 +113,6 @@ export class EnrichmentService implements OnModuleInit {
           logFn(
             `Enrichment refresh task failed for ${payload.provider}:${payload.externalId} (locale=${locale || '∅'}): ${error.message}`,
           )
-          try {
-            await this.repository.recordFailure(
-              payload.provider,
-              payload.externalId,
-              error.message,
-              locale,
-            )
-          } catch (recordError) {
-            this.logger.warn(
-              `recordFailure failed for ${payload.provider}:${payload.externalId}: ${recordError.message}`,
-            )
-          }
           throw error
         }
       },
@@ -176,10 +165,7 @@ export class EnrichmentService implements OnModuleInit {
       const stamped = stampRowId(dbRow.normalized, dbRow.id)
 
       if (isExpired) {
-        const inBackoff = this.isInFailureBackoff(dbRow, now)
-        if (!inBackoff) {
-          this.enqueueRefresh(provider.name, match.id, cacheLocale)
-        }
+        void this.enqueueRefresh(provider.name, match.id, cacheLocale)
         return { result: stamped, stale: true }
       }
 
@@ -209,6 +195,7 @@ export class EnrichmentService implements OnModuleInit {
         url: match.fullUrl,
         subtype: match.subtype,
         locale: cacheLocale,
+        reuseFresh: true,
       })
       await this.setToRedis(url, cacheLocale, result)
       return { result }
@@ -258,14 +245,39 @@ export class EnrichmentService implements OnModuleInit {
     )
     if (row) return stampRowId(row.normalized, row.id)
 
-    return this.fetchAndPersist(provider, id, { locale: cacheLocale })
+    return this.fetchAndPersist(provider, id, {
+      locale: cacheLocale,
+      reuseFresh: true,
+    })
+  }
+
+  async search(
+    providerName: string,
+    query: string,
+    lang?: string,
+    limit = 8,
+  ): Promise<EnrichmentResult[]> {
+    const provider = this.providerRegistry.getByName(providerName)
+    if (!provider?.search) throw new ProviderDisabledError(providerName)
+
+    const config = await this.configsService.get('thirdPartyServiceIntegration')
+    if (!this.isProviderEnabled(provider, config)) {
+      throw new ProviderDisabledError(provider.name)
+    }
+    if (!this.hasRequiredConfig(provider, config)) {
+      throw new TokenMissingError(provider.name)
+    }
+
+    const reqLocale = resolveRequestedLanguage(lang)
+    const locale = this.resolveCacheLocale(provider, reqLocale)
+    return provider.search(query, locale || undefined, limit)
   }
 
   async refresh(
     providerName: string,
     id: string,
     lang?: string,
-    opts?: { url?: string },
+    opts?: { url?: string; force?: boolean; reuseFresh?: boolean },
   ): Promise<EnrichmentResult> {
     const provider = this.providerRegistry.getByName(providerName)
     if (!provider) throw new Error(`Unknown provider: ${providerName}`)
@@ -276,6 +288,8 @@ export class EnrichmentService implements OnModuleInit {
     const result = await this.fetchAndPersist(provider, id, {
       locale: cacheLocale,
       url: opts?.url,
+      force: opts?.force,
+      reuseFresh: opts?.reuseFresh,
     })
     await this.deleteFromRedis(result.url, cacheLocale)
     return result
@@ -466,13 +480,12 @@ export class EnrichmentService implements OnModuleInit {
     }
 
     try {
-      const result = await provider.fetch(match.id, undefined, {
+      const result = await this.fetchAndPersist(provider, match.id, {
         url: match.fullUrl,
+        subtype: match.subtype,
+        force: true,
+        persist: false,
       })
-      result.fetchedAt = new Date().toISOString()
-      result.category = provider.category
-      if (match.subtype) result.subtype = match.subtype
-      await this.enrichWithImageMeta(result)
       return { matched: ref, result, cached: false }
     } catch (error) {
       if (error instanceof ProviderDisabledError) {
@@ -562,15 +575,33 @@ export class EnrichmentService implements OnModuleInit {
         locale,
       })),
     )
+    const states = await this.repository.findFetchStates(refQueries)
+    const stateByKey = new Map(
+      states.map((state) => [
+        JSON.stringify([state.provider, state.externalId, state.locale]),
+        state,
+      ]),
+    )
     const now = new Date()
+    const canFetch = (provider: string, externalId: string, locale: string) =>
+      !this.isFetchDeferred(
+        stateByKey.get(JSON.stringify([provider, externalId, locale])),
+        now,
+      )
     const out: Record<string, EnrichmentResult> = {}
     const seenKeys = new Set<string>()
     for (const row of rows) {
       const fullKey = `${row.provider}\t${row.externalId}\t${row.locale}`
       seenKeys.add(fullKey)
       const isExpired = !!row.expiresAt && row.expiresAt < now
-      if (isExpired && !this.isInFailureBackoff(row, now)) {
-        this.enqueueRefresh(row.provider, row.externalId, row.locale)
+      if (isExpired && canFetch(row.provider, row.externalId, row.locale)) {
+        void this.enqueueRefresh(
+          row.provider,
+          row.externalId,
+          row.locale,
+          row.url,
+          true,
+        )
       }
       out[refKey(row.provider, row.externalId)] = row.normalized
     }
@@ -606,11 +637,13 @@ export class EnrichmentService implements OnModuleInit {
           const fb = fallbackByKey.get(k)
           if (fb) out[k] = fb
         }
-        this.enqueueRefresh(
+        if (!canFetch(entry.provider, entry.externalId, entry.locale)) continue
+        void this.enqueueRefresh(
           entry.provider,
           entry.externalId,
           entry.locale,
           entry.url,
+          true,
         )
       }
     }
@@ -781,48 +814,169 @@ export class EnrichmentService implements OnModuleInit {
   private async fetchAndPersist(
     provider: EnrichmentProvider,
     externalId: string,
-    opts?: { url?: string; subtype?: string; locale?: string },
+    opts: {
+      url?: string
+      subtype?: string
+      locale?: string
+      force?: boolean
+      reuseFresh?: boolean
+      persist?: boolean
+    } = {},
   ): Promise<EnrichmentResult> {
-    const locale = opts?.locale ?? ''
-    // Opaque-id providers (open-graph) need the source URL to reconstruct the
-    // upstream call. Cold paths supply it via `opts.url`; refresh paths fall
-    // back to whatever URL the existing cache row recorded so background
-    // refreshes work without re-matching.
-    let ctxUrl = opts?.url
-    if (!ctxUrl) {
-      const existing = await this.repository.findByProviderAndExternalId(
+    const key = JSON.stringify([
+      provider.name,
+      externalId,
+      opts.locale ?? '',
+      opts.persist !== false,
+    ])
+    const flights = (this.inFlightFetches ??= new Map())
+    const existing = flights.get(key)
+    if (existing) return existing
+    const request = this.runFetch(provider, externalId, opts)
+    flights.set(key, request)
+    try {
+      return await request
+    } finally {
+      if (flights.get(key) === request) flights.delete(key)
+    }
+  }
+
+  private async runFetch(
+    provider: EnrichmentProvider,
+    externalId: string,
+    opts: {
+      url?: string
+      subtype?: string
+      locale?: string
+      force?: boolean
+      reuseFresh?: boolean
+      persist?: boolean
+    },
+  ): Promise<EnrichmentResult> {
+    const locale = opts.locale ?? ''
+    const config = await this.configsService.get('thirdPartyServiceIntegration')
+    if (!this.isProviderEnabled(provider, config))
+      throw new ProviderDisabledError(provider.name)
+    if (!this.hasRequiredConfig(provider, config))
+      throw new TokenMissingError(provider.name)
+    const token = randomUUID()
+    if (
+      !(await this.repository.claimFetch(
+        provider.name,
+        externalId,
+        locale,
+        token,
+        opts.force,
+      ))
+    ) {
+      const [state] = await this.repository.findFetchStates([
+        { provider: provider.name, externalId, locale },
+      ])
+      throw new EnrichmentDeferredError(
+        state?.nextRetryAt ?? state?.leaseExpiresAt ?? undefined,
+      )
+    }
+
+    let leaseLost = false
+    const leaseController = new AbortController()
+    const loseLease = () => {
+      leaseLost = true
+      leaseController.abort(new Error('Enrichment fetch lease lost'))
+    }
+    let renewing: Promise<void> | undefined
+    const timer = setInterval(() => {
+      if (renewing) return
+      renewing = this.repository
+        .renewFetch(provider.name, externalId, locale, token)
+        .then((owned) => {
+          if (!owned) loseLease()
+        })
+        .catch(loseLease)
+        .finally(() => {
+          renewing = undefined
+        })
+    }, 20_000)
+    timer.unref?.()
+    try {
+      // Re-read after claiming: another instance may have completed between
+      // the original cache lookup and this claim.
+      const cached = await this.repository.findByProviderAndExternalId(
         provider.name,
         externalId,
         locale,
       )
-      ctxUrl = existing?.url
+      if (
+        opts.reuseFresh &&
+        cached &&
+        (!cached.expiresAt || cached.expiresAt > new Date())
+      ) {
+        return stampRowId(cached.normalized, cached.id)
+      }
+      const ctxUrl = opts.url ?? cached?.url
+      const fetchContext =
+        ctxUrl || provider.requiresUrlContext
+          ? {
+              ...(ctxUrl ? { url: ctxUrl } : {}),
+              ...(provider.requiresUrlContext
+                ? { signal: leaseController.signal }
+                : {}),
+            }
+          : undefined
+      const result = await provider.fetch(
+        externalId,
+        locale || undefined,
+        fetchContext,
+      )
+      result.fetchedAt = new Date().toISOString()
+      result.category = provider.category
+      if (opts.subtype) result.subtype = opts.subtype
+      await this.enrichWithImageMeta(result)
+      clearInterval(timer)
+      await renewing
+      if (leaseLost) throw new Error('Enrichment fetch lease lost')
+      const row = await this.repository.completeFetch({
+        provider: provider.name,
+        externalId,
+        locale,
+        token,
+        url: opts.url ?? result.url,
+        result,
+        expiresAt: new Date(Date.now() + provider.defaultTtl * 1000),
+        persist: opts.persist !== false,
+      })
+      if (row) {
+        result.id = row.id
+        await this.processCaptureIfPresent(row.id, result)
+      }
+      return result
+    } catch (error) {
+      // Exactly one owner records failure, including the very first fetch.
+      // A failed persistence operation must not turn into an unhandled promise.
+      try {
+        await this.repository.recordFailure(
+          provider.name,
+          externalId,
+          (error as Error).message,
+          locale,
+          token,
+        )
+      } catch (recordError) {
+        this.logger.warn(
+          `Failed to record enrichment failure: ${(recordError as Error).message}`,
+        )
+      }
+      throw error
+    } finally {
+      clearInterval(timer)
+      await renewing
+      await this.repository
+        .releaseFetch(provider.name, externalId, locale, token)
+        .catch((error) => {
+          this.logger.warn(
+            `Failed to release enrichment lease: ${(error as Error).message}`,
+          )
+        })
     }
-    const result = await provider.fetch(
-      externalId,
-      locale || undefined,
-      ctxUrl ? { url: ctxUrl } : undefined,
-    )
-    result.fetchedAt = new Date().toISOString()
-    result.category = provider.category
-    if (opts?.subtype) result.subtype = opts.subtype
-
-    await this.enrichWithImageMeta(result)
-
-    const expiresAt = new Date(Date.now() + provider.defaultTtl * 1000)
-    const row = await this.repository.upsert(
-      provider.name,
-      externalId,
-      opts?.url ?? result.url,
-      result,
-      null,
-      expiresAt,
-      locale,
-    )
-    result.id = row.id
-
-    await this.processCaptureIfPresent(row.id, result)
-
-    return result
   }
 
   /**
@@ -912,17 +1066,24 @@ export class EnrichmentService implements OnModuleInit {
     }
   }
 
-  private enqueueRefresh(
+  private async enqueueRefresh(
     providerName: string,
     externalId: string,
     locale: string,
     url?: string,
-  ): void {
-    const dedupKey = locale
-      ? `${providerName}:${externalId}:${locale}`
-      : `${providerName}:${externalId}`
-    void this.taskQueueService
-      .createTask({
+    eligibilityChecked = false,
+  ): Promise<void> {
+    try {
+      if (!eligibilityChecked) {
+        const [state] = await this.repository.findFetchStates([
+          { provider: providerName, externalId, locale },
+        ])
+        if (this.isFetchDeferred(state, new Date())) return
+      }
+      const dedupKey = locale
+        ? `${providerName}:${externalId}:${locale}`
+        : `${providerName}:${externalId}`
+      await this.taskQueueService.createTask({
         type: ENRICHMENT_REFRESH_TASK_TYPE,
         scope: ENRICHMENT_TASK_SCOPE,
         dedupKey,
@@ -933,23 +1094,23 @@ export class EnrichmentService implements OnModuleInit {
           ...(url ? { url } : {}),
         } satisfies EnrichmentRefreshPayload,
       })
-      .catch((error) => {
-        this.logger.warn(
-          `Failed to enqueue enrichment refresh for ${providerName}:${externalId} (locale=${locale || '∅'}): ${error.message}`,
-        )
-      })
+    } catch (error) {
+      this.logger.warn(
+        `Failed to enqueue enrichment refresh for ${providerName}:${externalId} (locale=${locale || '∅'}): ${(error as Error).message}`,
+      )
+    }
   }
 
-  private isInFailureBackoff(
-    row: { failureCount: number; fetchedAt: Date },
+  private isFetchDeferred(
+    state:
+      { nextRetryAt: Date | null; leaseExpiresAt: Date | null } | undefined,
     now: Date,
   ): boolean {
-    if (row.failureCount <= 0) return false
-    const backoffSeconds = this.calculateBackoff(row.failureCount)
-    const backoffUntil = new Date(
-      row.fetchedAt.getTime() + backoffSeconds * 1000,
+    return (
+      !!state &&
+      ((!!state.nextRetryAt && state.nextRetryAt > now) ||
+        (!!state.leaseExpiresAt && state.leaseExpiresAt > now))
     )
-    return now < backoffUntil
   }
 
   private async getFromRedis(
@@ -988,10 +1149,6 @@ export class EnrichmentService implements OnModuleInit {
   private redisKey(url: string, locale: string): string {
     const hash = createHash('sha1').update(url).digest('hex')
     return `${REDIS_KEY_PREFIX}${hash}:${locale}`
-  }
-
-  private calculateBackoff(failureCount: number): number {
-    return Math.min(BACKOFF_BASE * Math.pow(2, failureCount), BACKOFF_MAX)
   }
 
   /**

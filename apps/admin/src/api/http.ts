@@ -1,3 +1,5 @@
+import { isPlainObject } from 'es-toolkit'
+
 import { API_URL } from '~/constants/env'
 import { SESSION_WITH_LOGIN } from '~/constants/keys'
 
@@ -6,11 +8,35 @@ const requestUuid = createRequestUuid()
 type ResponseEnvelope<T> = {
   code?: number | string
   data?: T
-  error?: { code?: number | string; message?: string | string[] }
+  error?: {
+    code?: number | string
+    details?: Record<string, unknown>
+    message?: string | string[]
+  }
   meta?: {
     pagination?: unknown
+    [key: string]: unknown
   }
   message?: string | string[]
+}
+
+export class ApiRequestError extends Error {
+  code?: number | string
+  details?: Record<string, unknown>
+  status: number
+
+  constructor(
+    message: string,
+    code?: number | string,
+    status = 0,
+    details?: Record<string, unknown>,
+  ) {
+    super(message)
+    this.name = 'ApiRequestError'
+    this.code = code
+    this.details = details
+    this.status = status
+  }
 }
 
 export async function postJson<TResponse, TData>(
@@ -28,12 +54,7 @@ export async function postJson<TResponse, TData>(
 
 type QueryObject = Record<string, boolean | number | string | undefined>
 type QueryValue =
-  | Array<number | string>
-  | QueryObject
-  | boolean
-  | number
-  | string
-  | undefined
+  Array<number | string> | QueryObject | boolean | number | string | undefined
 
 export async function getJson<TResponse>(
   path: string,
@@ -66,16 +87,21 @@ export async function requestJson<TResponse>(
       responseData?.message ||
       response.statusText
 
-    throw new Error(
+    throw new ApiRequestError(
       Array.isArray(message) ? message.join(', ') : message || 'Request failed',
+      responseData?.error?.code ?? responseData?.code,
+      response.status,
+      responseData?.error?.details,
     )
   }
 
   if (responseData && 'data' in responseData) {
     if (responseData.meta?.pagination) {
+      const { pagination, ...restMeta } = responseData.meta
       return {
         data: responseData.data,
-        pagination: responseData.meta.pagination,
+        pagination,
+        ...restMeta,
       } as TResponse
     }
 
@@ -261,15 +287,10 @@ function camelcaseKeys<T>(value: T): T {
   ) as T
 }
 
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  if (!value || typeof value !== 'object') return false
-  const prototype = Object.getPrototypeOf(value)
-
-  return prototype === Object.prototype || prototype === null
-}
-
 function toCamelCase(value: string) {
-  return value.replace(/_([a-z])/g, (_, letter: string) => letter.toUpperCase())
+  return value.replaceAll(/_([a-z])/g, (_, letter: string) =>
+    letter.toUpperCase(),
+  )
 }
 
 function normalizeResponseData<T>(value: T): T {

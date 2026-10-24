@@ -40,6 +40,7 @@ function makeService(stubs: {
   providerRegistry?: any
 }) {
   const repository = {
+    findFetchStates: vi.fn(async () => [] as any[]),
     findManyByRefs: vi.fn(
       async (
         refs: { provider: string; externalId: string; locale?: string }[],
@@ -124,6 +125,7 @@ describe('EnrichmentService.hydrateRefs', () => {
           provider: 'gh-repo',
           externalId: 'vercel/next.js',
           locale: '',
+          url: row.url,
         },
       }),
     )
@@ -138,6 +140,7 @@ describe('EnrichmentService.hydrateRefs', () => {
       normalized: { title: 'Default' } as EnrichmentResult,
     })
     const repository = {
+      findFetchStates: vi.fn(async () => [] as any[]),
       findManyByRefs: vi
         .fn()
         .mockResolvedValueOnce([])

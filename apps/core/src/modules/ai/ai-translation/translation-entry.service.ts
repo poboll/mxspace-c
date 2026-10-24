@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 
+import { AI_PROMPTS } from '@mx-space/ai/prompts'
 import { Injectable, Logger } from '@nestjs/common'
 
 import { RedisKeys } from '~/constants/cache.constant'
@@ -11,13 +12,12 @@ import { normalizeLanguageCode } from '~/utils/lang.util'
 import { getRedisKey } from '~/utils/redis.util'
 
 import { ConfigsService } from '../../configs/configs.service'
-import { AI_PROMPTS } from '../ai.prompts'
 import { AiService } from '../ai.service'
 import { TranslationEntryRepository } from './ai-translation.repository'
 import {
   type TranslationEntryKeyPath,
   type TranslationEntryKeyType,
-  TranslationEntryModel,
+  type TranslationEntryModel,
 } from './translation-entry.types'
 
 interface CollectedValue {
@@ -242,31 +242,33 @@ export class TranslationEntryService {
       }
     }
 
-    const notes = await this.noteService.findRecent(100)
-    const moods = [...new Set(notes.map((note) => note.mood).filter(Boolean))]
+    const { moods, weathers } =
+      await this.noteService.findDistinctMoodsAndWeathers()
     for (const mood of moods) {
-      if (mood) {
-        values.push({
-          keyPath: 'note.mood',
-          keyType: 'dict',
-          lookupKey: TranslationEntryService.hashSourceText(mood),
-          sourceText: mood,
-        })
-      }
+      values.push({
+        keyPath: 'note.mood',
+        keyType: 'dict',
+        lookupKey: TranslationEntryService.hashSourceText(mood),
+        sourceText: mood,
+      })
+    }
+    for (const weather of weathers) {
+      values.push({
+        keyPath: 'note.weather',
+        keyType: 'dict',
+        lookupKey: TranslationEntryService.hashSourceText(weather),
+        sourceText: weather,
+      })
     }
 
-    const weathers = [
-      ...new Set(notes.map((note) => note.weather).filter(Boolean)),
-    ]
-    for (const weather of weathers) {
-      if (weather) {
-        values.push({
-          keyPath: 'note.weather',
-          keyType: 'dict',
-          lookupKey: TranslationEntryService.hashSourceText(weather),
-          sourceText: weather,
-        })
-      }
+    const tags = await this.entryRepository.listDistinctPostTags()
+    for (const tag of tags) {
+      values.push({
+        keyPath: 'post.tag',
+        keyType: 'dict',
+        lookupKey: TranslationEntryService.hashSourceText(tag),
+        sourceText: tag,
+      })
     }
 
     return values
@@ -322,8 +324,9 @@ export class TranslationEntryService {
     return this.translateValuesForLangs(
       values,
       targetLangs,
-      () =>
+      (lang) =>
         this.entryRepository.listByKeyPathLookupKeys(
+          lang,
           values.map((v) => ({ keyPath: v.keyPath, lookupKey: v.lookupKey })),
         ),
       'Auto field translation failed',
@@ -367,13 +370,14 @@ export class TranslationEntryService {
 
       if (!toTranslate.length) continue
 
+      // ponytail: models drop/mangle 64-hex hash keys, so send positional keys and map back by index
       const fields: Record<string, string> = {}
-      for (const item of toTranslate) {
-        fields[`${item.keyPath}::${item.lookupKey}`] = item.sourceText
-      }
+      toTranslate.forEach((item, index) => {
+        fields[String(index)] = item.sourceText
+      })
 
       try {
-        const runtime = await this.aiService.getTranslationModel()
+        const runtime = await this.aiService.getFieldTranslationModel()
         const promptData = AI_PROMPTS.fieldTranslation(lang, fields)
         const result = await runtime.generateStructured({
           prompt: promptData.prompt,
@@ -383,10 +387,13 @@ export class TranslationEntryService {
         })
 
         const translations = result.output.translations
-        for (const item of toTranslate) {
-          const compositeKey = `${item.keyPath}::${item.lookupKey}`
-          const translatedText = translations[compositeKey]
-          if (!translatedText) continue
+        const missing: string[] = []
+        for (const [index, item] of toTranslate.entries()) {
+          const translatedText = translations[String(index)]
+          if (!translatedText) {
+            missing.push(`${item.keyPath}:${item.sourceText}`)
+            continue
+          }
 
           await this.entryRepository.upsert({
             keyPath: item.keyPath,
@@ -411,6 +418,11 @@ export class TranslationEntryService {
         }
 
         await this.cacheDictTranslations(dictCacheEntries)
+        if (missing.length) {
+          this.logger.warn(
+            `${errorLabel} for lang=${lang}: model omitted ${missing.length}/${toTranslate.length} fields: ${missing.slice(0, 10).join(', ')}`,
+          )
+        }
       } catch (error) {
         this.logger.error(
           `${errorLabel} for lang=${lang}: ${(error as Error).message}`,
@@ -533,7 +545,11 @@ export class TranslationEntryService {
   }
 
   private isDictKeyPath(keyPath: TranslationEntryKeyPath): boolean {
-    return keyPath === 'note.mood' || keyPath === 'note.weather'
+    return (
+      keyPath === 'note.mood' ||
+      keyPath === 'note.weather' ||
+      keyPath === 'post.tag'
+    )
   }
 
   private async getCachedDictTranslations(

@@ -1,5 +1,6 @@
 import { Effect, Exit, Layer, Option } from 'effect'
 import { describe, expect, it } from 'vitest'
+import { handler } from '../../helper/handler'
 
 import { create } from '../../../src/cli/page/create'
 import { del } from '../../../src/cli/page/delete'
@@ -105,7 +106,7 @@ describe('page list command', () => {
       },
     })
     const exit = await Effect.runPromiseExit(
-      list.handler({}).pipe(Effect.provide(buildLayer(http))),
+      handler(list)({}).pipe(Effect.provide(buildLayer(http))),
     )
     expect(Exit.isSuccess(exit)).toBe(true)
     expect(http.recorder.calls.length).toBe(1)
@@ -122,8 +123,7 @@ describe('page get command', () => {
       },
     })
     const exit = await Effect.runPromiseExit(
-      get
-        .handler({ slugOrId: 'about' })
+      handler(get)({ slugOrId: 'about' })
         .pipe(Effect.provide(buildLayer(http))),
     )
     expect(Exit.isSuccess(exit)).toBe(true)
@@ -131,16 +131,15 @@ describe('page get command', () => {
 })
 
 describe('page create command', () => {
-  it('POSTs /pages with built payload (title/slug/format defaults to lexical)', async () => {
+  it('creates a page branch with the built payload', async () => {
     const http = testHttpLayer({
-      'POST https://blog.example.com/api/v2/pages': {
+      'POST https://blog.example.com/api/v2/drafts': {
         status: 200,
         body: { id: 'p1', slug: 'about' },
       },
     })
     const exit = await Effect.runPromiseExit(
-      create
-        .handler({
+      handler(create)({
           title: Option.some('About'),
           slug: Option.some('about'),
           subtitle: Option.none(),
@@ -159,28 +158,69 @@ describe('page create command', () => {
         ),
     )
     expect(Exit.isSuccess(exit)).toBe(true)
-    const body = http.recorder.calls[0]?.body as Record<string, unknown>
-    expect(body.title).toBe('About')
-    expect(body.slug).toBe('about')
-    expect(body.contentFormat).toBe('lexical')
+    const body = http.recorder.calls[0]?.body as {
+      data: Record<string, unknown>
+      refType: string
+    }
+    expect(body.refType).toBe('page')
+    expect(body.data.title).toBe('About')
+    expect(body.data.contentFormat).toBe('lexical')
+    expect(body.data.typeSpecificData).toMatchObject({ slug: 'about' })
   })
 })
 
 describe('page update command', () => {
-  it('resolves slug → id then PATCH /pages/:id without content fields', async () => {
+  it('resolves slug and publishes a full snapshot branch', async () => {
     const http = testHttpLayer({
       'GET https://blog.example.com/api/v2/pages/slug/about': {
         status: 200,
         body: { id: 'p-123', slug: 'about' },
       },
-      'PATCH https://blog.example.com/api/v2/pages/p-123': {
+      'GET https://blog.example.com/api/v2/drafts/context/page/p-123': {
         status: 200,
-        body: { ok: true },
+        body: {
+          branches: [],
+          document: {
+            id: 'document-1',
+            published_revision_id: 'published-1',
+            ref_id: 'p-123',
+            ref_type: 'page',
+          },
+          published_revision: {
+            content: null,
+            content_format: 'markdown',
+            id: 'published-1',
+            images: [],
+            meta: null,
+            text: 'Online body',
+            title: 'Old title',
+            type_specific_data: { slug: 'about' },
+          },
+        },
+      },
+      'POST https://blog.example.com/api/v2/drafts': {
+        status: 200,
+        body: {
+          document: {
+            id: 'document-1',
+            published_revision_id: 'published-1',
+            ref_id: 'p-123',
+            ref_type: 'page',
+          },
+          head_revision: { id: 'revision-2' },
+          head_revision_id: 'revision-2',
+          id: 'branch-1',
+          relation_to_published: 'ancestor',
+          status: 'active',
+        },
+      },
+      'POST https://blog.example.com/api/v2/publish-jobs': {
+        status: 200,
+        body: { id: 'task-1' },
       },
     })
     const exit = await Effect.runPromiseExit(
-      update
-        .handler({
+      handler(update)({
           slugOrId: 'about',
           title: Option.some('New title'),
           slug: Option.none(),
@@ -200,8 +240,13 @@ describe('page update command', () => {
         ),
     )
     expect(Exit.isSuccess(exit)).toBe(true)
-    const patchCall = http.recorder.calls.find((c) => c.method === 'PATCH')!
-    expect(patchCall.body).toEqual({ title: 'New title' })
+    const draftCall = http.recorder.calls.find(
+      (call) => call.method === 'POST' && call.url.endsWith('/drafts'),
+    )!
+    expect(draftCall.body).toMatchObject({
+      baseRevisionId: 'published-1',
+      data: { text: 'Online body', title: 'New title' },
+    })
   })
 })
 
@@ -209,8 +254,7 @@ describe('page delete command', () => {
   it('refuses without --force in non-TTY context', async () => {
     const http = testHttpLayer({})
     const exit = await Effect.runPromiseExit(
-      del
-        .handler({ slugOrId: '123456789012345', force: false })
+      handler(del)({ slugOrId: '123456789012345', force: false })
         .pipe(Effect.provide(buildLayer(http))),
     )
     expect(Exit.isFailure(exit)).toBe(true)
@@ -225,8 +269,7 @@ describe('page delete command', () => {
       },
     })
     const exit = await Effect.runPromiseExit(
-      del
-        .handler({ slugOrId: '123456789012345', force: true })
+      handler(del)({ slugOrId: '123456789012345', force: true })
         .pipe(
           Effect.provide(
             buildLayer(http, { ...baseResolved, profileExplicit: true }),

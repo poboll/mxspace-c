@@ -40,6 +40,7 @@ if [ "$PKG" = "cli" ]; then
   echo "--- npm pack --dry-run ---"
   echo "$pack_out" | tail -40
   echo "$pack_out" | grep -q 'bin/mxs.cjs' || { echo "RED bin/mxs.cjs missing from tarball"; exit 1; }
+  echo "$pack_out" | grep -q 'dist/vendor/author/index.html' || { echo "RED dist/vendor/author/index.html missing from tarball"; exit 1; }
 fi
 
 git add "$DIR/package.json"

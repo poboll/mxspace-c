@@ -1,13 +1,17 @@
+import { randomUUID } from 'node:crypto'
+
+import { type DecisionQuestion, requestDecision } from '@mx-space/ai/decision'
+import type { IModelRuntime } from '@mx-space/ai/runtime'
+import { createModelRuntime } from '@mx-space/ai/runtime'
 import { Injectable } from '@nestjs/common'
 
+import { OperationContext } from '~/common/contexts/operation.context'
 import { AppErrorCode, createAppException } from '~/common/errors'
 
 import type { AIConfig } from '../configs/configs.schema'
 import { ConfigsService } from '../configs/configs.service'
 import type { AIModelAssignment, AIProviderConfig } from './ai.types'
 import { AIFeatureKey, AIProviderType } from './ai.types'
-import type { IModelRuntime } from './runtime'
-import { createModelRuntime } from './runtime'
 
 export interface AIResolvedModelInfo {
   provider: AIProviderType
@@ -17,6 +21,29 @@ export interface AIResolvedModelInfo {
 @Injectable()
 export class AiService {
   constructor(private readonly configService: ConfigsService) {}
+
+  async decide(
+    state: unknown,
+    questions: Record<string, DecisionQuestion>,
+    signal: AbortSignal,
+  ) {
+    const config = await this.configService.get('ai')
+    const assignment = config.decisionModel
+    const provider = config.providers?.find(
+      (p) =>
+        p.id === assignment?.providerId &&
+        p.enabled &&
+        p.type === AIProviderType.TypeSafe &&
+        p.capabilities?.decision,
+    )
+    if (!provider) throw new Error('No decision provider configured')
+    return requestDecision(
+      { ...provider, defaultModel: assignment?.model || provider.defaultModel },
+      state,
+      questions,
+      signal,
+    )
+  }
 
   public async getSummaryModel(): Promise<IModelRuntime> {
     return this.getModelForFeature(AIFeatureKey.Summary)
@@ -53,6 +80,18 @@ export class AiService {
     return this.getModelForFeature(AIFeatureKey.TranslationReview)
   }
 
+  public async getFieldTranslationModel(): Promise<IModelRuntime> {
+    const aiConfig = await this.configService.get('ai')
+    const assignment = this.getAssignment(
+      aiConfig,
+      AIFeatureKey.FieldTranslation,
+    )
+    if (!assignment) {
+      return this.getTranslationModel()
+    }
+    return this.getModelForFeature(AIFeatureKey.FieldTranslation)
+  }
+
   public async getInsightsModel(): Promise<IModelRuntime> {
     return this.getModelForFeature(AIFeatureKey.Insights)
   }
@@ -86,7 +125,10 @@ export class AiService {
     }
 
     return {
-      runtime: createModelRuntime(provider, assignment?.model),
+      runtime: createModelRuntime(provider, assignment?.model, {
+        reasoningEffort: assignment?.reasoningEffort,
+        sessionId: OperationContext.currentId() ?? randomUUID(),
+      }),
       provider,
       assignment,
     }
@@ -124,6 +166,7 @@ export class AiService {
       [AIFeatureKey.CommentReview]: 'commentReviewModel',
       [AIFeatureKey.Translation]: 'translationModel',
       [AIFeatureKey.TranslationReview]: 'translationReviewModel',
+      [AIFeatureKey.FieldTranslation]: 'fieldTranslationModel',
       [AIFeatureKey.Insights]: 'insightsModel',
       [AIFeatureKey.InsightsTranslation]: 'insightsTranslationModel',
     }
@@ -141,12 +184,18 @@ export class AiService {
     // Use specified provider if found and enabled
     if (providerId) {
       const found = config.providers.find(
-        (p) => p.id === providerId && p.enabled,
+        (p) =>
+          p.id === providerId && p.enabled && (p.capabilities?.text ?? true),
       )
       if (found) return found
+      return null
     }
 
     // Fallback to first enabled provider
-    return config.providers.find((p) => p.enabled) || null
+    return (
+      config.providers.find(
+        (p) => p.enabled && (p.capabilities?.text ?? true),
+      ) || null
+    )
   }
 }

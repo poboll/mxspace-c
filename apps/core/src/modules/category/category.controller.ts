@@ -15,6 +15,7 @@ import { ApiController } from '~/common/decorators/api-controller.decorator'
 import { Auth } from '~/common/decorators/auth.decorator'
 import { HTTPDecorators } from '~/common/decorators/http.decorator'
 import { Lang } from '~/common/decorators/lang.decorator'
+import { HasAdminAccess } from '~/common/decorators/role.decorator'
 import { AppErrorCode, createAppException } from '~/common/errors'
 import { withMeta } from '~/common/response/envelope.types'
 import { MetaObjectBuilder } from '~/common/response/meta-builder'
@@ -23,20 +24,26 @@ import { TranslationEntryService } from '~/modules/ai/ai-translation/translation
 import {
   applyArticleTranslationInPlace,
   applyTranslationEntriesInPlace,
+  buildTagGlossary,
   type EntryMaps,
   type EntryRule,
   TranslationService,
 } from '~/processors/helper/helper.translation.service'
-import { EntityIdDto } from '~/shared/dto/id.dto'
+import { type EntityIdDto, EntityIdSchema } from '~/shared/dto/id.dto'
 
 import type { PostService } from '../post/post.service'
 import { CategoryType } from './category.enum'
 import {
-  CategoryDto,
-  MultiCategoriesQueryDto,
-  MultiQueryTagAndCategoryDto,
-  PartialCategoryDto,
-  SlugOrIdDto,
+  type CategoryDto,
+  CategorySchema,
+  type MultiCategoriesQueryDto,
+  MultiCategoriesQuerySchema,
+  type MultiQueryTagAndCategoryDto,
+  MultiQueryTagAndCategorySchema,
+  type PartialCategoryDto,
+  PartialCategorySchema,
+  type SlugOrIdDto,
+  SlugOrIdSchema,
 } from './category.schema'
 import { CategoryService } from './category.service'
 
@@ -54,9 +61,31 @@ export class CategoryController {
     private readonly translationEntryService: TranslationEntryService,
   ) {}
 
+  private batchTagGlossary(
+    lang: string,
+    tags: Iterable<string>,
+  ): Promise<EntryMaps> {
+    const sourceTexts = new Set([...tags].filter(Boolean))
+    return this.translationEntryService.getTranslationsBatch(lang, {
+      dictLookups: sourceTexts.size
+        ? [{ keyPath: 'post.tag', sourceTexts }]
+        : [],
+    })
+  }
+
+  private applyTagGlossary(
+    metaBuilder: MetaObjectBuilder<any>,
+    entryMaps: EntryMaps,
+  ) {
+    const tags = buildTagGlossary(entryMaps)
+    if (tags.length) metaBuilder.glossary({ tags })
+  }
+
   @Get('/')
   async getCategories(
-    @Query() query: MultiCategoriesQueryDto,
+    @Query({ schema: MultiCategoriesQuerySchema })
+    query: MultiCategoriesQueryDto,
+    @HasAdminAccess() isAuthenticated: boolean,
     @Lang() lang?: string,
   ) {
     const { ids, joint, type = CategoryType.Category } = query
@@ -77,11 +106,14 @@ export class CategoryController {
 
       const categoriesPromise = joint
         ? null
-        : this.categoryService.repository.findByIds(ids)
+        : this.categoryService.repository.findByIds(ids, {
+            publishedOnly: !isAuthenticated,
+          })
 
       const postsByCategory = await this.postService.listByCategoryIds(ids, {
         includeCategory: false,
         metaOnly: true,
+        publishedOnly: !isAuthenticated,
       })
       for (const id of ids) {
         const rawPosts = postsByCategory.get(id) ?? []
@@ -181,33 +213,47 @@ export class CategoryController {
 
     const result =
       type === CategoryType.Category
-        ? await this.categoryService.findAllCategory()
-        : await this.categoryService.getPostTagsSum()
+        ? await this.categoryService.findAllCategory({
+            publishedOnly: !isAuthenticated,
+          })
+        : await this.categoryService.getPostTagsSum({
+            publishedOnly: !isAuthenticated,
+          })
+
+    const listMetaBuilder = new MetaObjectBuilder().view('card')
 
     if (lang && Array.isArray(result) && result.length) {
-      const entryMaps = await this.translationEntryService.getTranslationsBatch(
-        lang,
-        {
-          entityLookups: [
-            {
-              keyPath: 'category.name',
-              lookupKeys: new Set(result.map((cat: any) => String(cat.id))),
-            },
-          ],
-        },
-      )
-      for (const cat of result as any[]) {
-        applyTranslationEntriesInPlace(cat, entryMaps, CATEGORY_NAME_RULES)
+      if (type === CategoryType.Tag) {
+        const entryMaps = await this.batchTagGlossary(
+          lang,
+          result.map((tag: any) => tag.name),
+        )
+        this.applyTagGlossary(listMetaBuilder, entryMaps)
+      } else {
+        const entryMaps =
+          await this.translationEntryService.getTranslationsBatch(lang, {
+            entityLookups: [
+              {
+                keyPath: 'category.name',
+                lookupKeys: new Set(result.map((cat: any) => String(cat.id))),
+              },
+            ],
+          })
+        for (const cat of result as any[]) {
+          applyTranslationEntriesInPlace(cat, entryMaps, CATEGORY_NAME_RULES)
+        }
       }
     }
 
-    return withMeta(result, new MetaObjectBuilder().view('card').build())
+    return withMeta(result, listMetaBuilder.build())
   }
 
   @Get('/:query')
   async getCategoryById(
-    @Param() { query }: SlugOrIdDto,
-    @Query() { tag }: MultiQueryTagAndCategoryDto,
+    @Param({ schema: SlugOrIdSchema }) { query }: SlugOrIdDto,
+    @Query({ schema: MultiQueryTagAndCategorySchema })
+    { tag }: MultiQueryTagAndCategoryDto,
+    @HasAdminAccess() isAuthenticated: boolean,
     @Lang() lang?: string,
   ) {
     if (!query) {
@@ -216,7 +262,9 @@ export class CategoryController {
       })
     }
     if (tag === true) {
-      const data = await this.categoryService.findArticleWithTag(query)
+      const data = await this.categoryService.findArticleWithTag(query, {
+        isPublished: isAuthenticated ? undefined : true,
+      })
       const tagMetaBuilder = new MetaObjectBuilder()
       if (lang && data?.length) {
         const articles = data.map((post: any) => ({
@@ -241,6 +289,11 @@ export class CategoryController {
           }
         }
         if (titleMeta.size > 0) tagMetaBuilder.translation(titleMeta)
+        const entryMaps = await this.batchTagGlossary(lang, [
+          query,
+          ...data.flatMap((post: any) => post.tags ?? []),
+        ])
+        this.applyTagGlossary(tagMetaBuilder, entryMaps)
       }
       return withMeta({ tag: query, data }, tagMetaBuilder.build())
     }
@@ -256,10 +309,15 @@ export class CategoryController {
 
     const [postsResult, tagsSum, count] = await Promise.all([
       this.categoryService.findCategoryPost(res.id, {
+        isPublished: isAuthenticated ? undefined : true,
         tags: typeof tag === 'string' ? tag : undefined,
       }),
-      this.categoryService.getCategoryTagsSum(res.id),
-      this.postService.countByCategoryId(res.id),
+      this.categoryService.getCategoryTagsSum(res.id, {
+        publishedOnly: !isAuthenticated,
+      }),
+      this.postService.countByCategoryId(res.id, {
+        publishedOnly: !isAuthenticated,
+      }),
     ])
 
     const children: any[] = postsResult ?? []
@@ -275,6 +333,10 @@ export class CategoryController {
         modifiedAt: post.modifiedAt ?? null,
       }))
 
+      const tagNames = new Set<string>([
+        ...(tagsSum ?? []).map((item: any) => item.name),
+        ...children.flatMap((post: any) => post.tags ?? []),
+      ])
       const [entryMaps, { results, meta: titleMeta }] = await Promise.all([
         this.translationEntryService.getTranslationsBatch(lang, {
           entityLookups: [
@@ -283,6 +345,9 @@ export class CategoryController {
               lookupKeys: new Set([String(res.id)]),
             },
           ],
+          dictLookups: tagNames.size
+            ? [{ keyPath: 'post.tag', sourceTexts: tagNames }]
+            : [],
         }),
         articles.length
           ? this.translationService.collectArticleTranslations({
@@ -306,6 +371,7 @@ export class CategoryController {
       }
 
       if (titleMeta.size > 0) metaBuilder.translation(titleMeta)
+      this.applyTagGlossary(metaBuilder, entryMaps)
     }
 
     return withMeta({ ...res, count, children, tagsSum }, metaBuilder.build())
@@ -314,14 +380,17 @@ export class CategoryController {
   @Post('/')
   @Auth()
   @HTTPDecorators.Idempotence()
-  create(@Body() body: CategoryDto) {
+  create(@Body({ schema: CategorySchema }) body: CategoryDto) {
     const { name, slug } = body
     return this.categoryService.create(name, slug!)
   }
 
   @Put('/:id')
   @Auth()
-  async modify(@Param() params: EntityIdDto, @Body() body: CategoryDto) {
+  async modify(
+    @Param({ schema: EntityIdSchema }) params: EntityIdDto,
+    @Body({ schema: CategorySchema }) body: CategoryDto,
+  ) {
     const { type, slug, name } = body
     const { id } = params
     await this.categoryService.update(id, { slug, type, name })
@@ -331,14 +400,17 @@ export class CategoryController {
   @Patch('/:id')
   @HttpCode(204)
   @Auth()
-  async patch(@Param() params: EntityIdDto, @Body() body: PartialCategoryDto) {
+  async patch(
+    @Param({ schema: EntityIdSchema }) params: EntityIdDto,
+    @Body({ schema: PartialCategorySchema }) body: PartialCategoryDto,
+  ) {
     const { id } = params
     await this.categoryService.update(id, body)
   }
 
   @Delete('/:id')
   @Auth()
-  deleteCategory(@Param() params: EntityIdDto) {
+  deleteCategory(@Param({ schema: EntityIdSchema }) params: EntityIdDto) {
     return this.categoryService.deleteById(params.id)
   }
 }

@@ -21,6 +21,7 @@ export interface PostRow {
   }
   copyright: boolean
   isPublished: boolean
+  isPremium: boolean
   readCount: number
   likeCount: number
   pinAt: Date | null
@@ -59,6 +60,7 @@ export interface PostCreateInput {
   categoryId: EntityId | string
   copyright?: boolean
   isPublished?: boolean
+  isPremium?: boolean
   pinAt?: Date | null
   pinOrder?: number | null
 }
@@ -76,6 +78,7 @@ export interface PostListParams {
   tag?: string
   publishedOnly?: boolean
   year?: number
+  excludeAiWritten?: boolean
   sortBy?: keyof PostRow
   sortOrder?: 1 | -1
   truncateText?: number

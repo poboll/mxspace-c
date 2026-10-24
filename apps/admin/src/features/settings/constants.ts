@@ -1,4 +1,4 @@
-import { ListPlus, Shield, User } from 'lucide-react'
+import { ListPlus, Shield, User, Wrench } from 'lucide-react'
 
 import type { TranslationKey } from '~/i18n/types'
 import type { MetaFieldType, MetaPresetScope } from '~/models/meta-preset'
@@ -6,6 +6,7 @@ import { adminQueryKeys } from '~/query/keys'
 
 import type {
   AIProviderType,
+  OauthProviderField,
   OauthProviderType,
   SettingsGroupSummary,
 } from './types/settings'
@@ -14,13 +15,60 @@ export const settingsQueryKey = adminQueryKeys.settings.root
 export const metaPresetsQueryKey = adminQueryKeys.metaPresets.root
 export const accountQueryKey = adminQueryKeys.settings.accountRoot
 
+export const systemGroupTranslationKeys: Record<
+  string,
+  { descriptionKey: TranslationKey; titleKey: TranslationKey }
+> = {
+  ai: {
+    descriptionKey: 'settings.group.ai.description',
+    titleKey: 'settings.group.ai.title',
+  },
+  content: {
+    descriptionKey: 'settings.group.content.description',
+    titleKey: 'settings.group.content.title',
+  },
+  integrations: {
+    descriptionKey: 'settings.group.integrations.description',
+    titleKey: 'settings.group.integrations.title',
+  },
+  membership: {
+    descriptionKey: 'settings.group.membership.description',
+    titleKey: 'settings.group.membership.title',
+  },
+  notification: {
+    descriptionKey: 'settings.group.notification.description',
+    titleKey: 'settings.group.notification.title',
+  },
+  search: {
+    descriptionKey: 'settings.group.search.description',
+    titleKey: 'settings.group.search.title',
+  },
+  site: {
+    descriptionKey: 'settings.group.site.description',
+    titleKey: 'settings.group.site.title',
+  },
+  storage: {
+    descriptionKey: 'settings.group.storage.description',
+    titleKey: 'settings.group.storage.title',
+  },
+  system: {
+    descriptionKey: 'settings.group.system.description',
+    titleKey: 'settings.group.system.title',
+  },
+}
+
 export const aiProviderTypeOptions: Array<{
-  label: string
+  labelKey: TranslationKey
   value: AIProviderType
 }> = [
-  { label: 'OpenAI Compatible', value: 'openai-compatible' },
-  { label: 'Anthropic', value: 'anthropic' },
-  { label: 'Generic', value: 'generic' },
+  { labelKey: 'settings.ai.providerType.typesafe', value: 'typesafe' },
+  {
+    labelKey: 'settings.ai.providerType.openaiCompatible',
+    value: 'openai-compatible',
+  },
+  { labelKey: 'settings.ai.providerType.googleVertex', value: 'google-vertex' },
+  { labelKey: 'settings.ai.providerType.anthropic', value: 'anthropic' },
+  { labelKey: 'settings.ai.providerType.generic', value: 'generic' },
 ]
 
 type SocialOption =
@@ -59,12 +107,76 @@ export const staticGroupsAfter: SettingsGroupSummary[] = [
     titleKey: 'settings.group.metaPreset.title',
     type: 'meta-preset',
   },
+  {
+    descriptionKey: 'settings.group.maintenance.description',
+    icon: Wrench,
+    key: 'maintenance',
+    titleKey: 'settings.group.maintenance.title',
+    type: 'maintenance',
+  },
 ]
 
-export const oauthProviders = [
-  { label: 'GitHub', type: 'github' },
-  { label: 'Google', type: 'google' },
-] as const satisfies Array<{ label: string; type: OauthProviderType }>
+const clientCredentialFields: OauthProviderField[] = [
+  {
+    key: 'clientId',
+    label: 'Client ID',
+    placeholderKey: 'settings.oauth.clientIdPlaceholder',
+  },
+  {
+    key: 'clientSecret',
+    label: 'Client Secret',
+    placeholderKey: 'settings.oauth.clientSecretPlaceholder',
+    secret: true,
+  },
+]
+
+export const oauthProviders: Array<{
+  fields: OauthProviderField[]
+  label: string
+  type: OauthProviderType
+}> = [
+  { fields: clientCredentialFields, label: 'GitHub', type: 'github' },
+  { fields: clientCredentialFields, label: 'Google', type: 'google' },
+  {
+    fields: [
+      {
+        descriptionKey: 'settings.oauth.apple.servicesIdHelp',
+        key: 'clientId',
+        label: 'Services ID',
+        placeholder: 'dev.example.web',
+      },
+      {
+        descriptionKey: 'settings.oauth.apple.teamIdHelp',
+        key: 'teamId',
+        label: 'Team ID',
+        placeholder: 'ABCDE12345',
+      },
+      {
+        descriptionKey: 'settings.oauth.apple.keyIdHelp',
+        key: 'keyId',
+        label: 'Key ID',
+        placeholder: 'ABC1234567',
+      },
+      {
+        descriptionKey: 'settings.oauth.apple.privateKeyHelp',
+        key: 'privateKey',
+        label: 'Private Key (.p8)',
+        multiline: true,
+        placeholder: '-----BEGIN PRIVATE KEY-----',
+        secret: true,
+      },
+      {
+        descriptionKey: 'settings.oauth.apple.bundleIdHelp',
+        key: 'appBundleIdentifier',
+        label: 'App Bundle ID',
+        optional: true,
+        placeholder: 'dev.example.app',
+      },
+    ],
+    label: 'Apple',
+    type: 'apple',
+  },
+]
 
 export const fieldTypeLabelKeys: Record<MetaFieldType, TranslationKey> = {
   boolean: 'settings.fieldType.boolean',

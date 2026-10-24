@@ -8,6 +8,7 @@ import { RedisKeys } from '~/constants/cache.constant'
 import { STATIC_FILE_TRASH_DIR, TEMP_DIR } from '~/constants/path.constant'
 import { AggregateService } from '~/modules/aggregate/aggregate.service'
 import { AnalyzeRepository } from '~/modules/analyze/analyze.repository'
+import { ReviewDemoService } from '~/modules/auth/review-demo.service'
 import { ConfigsService } from '~/modules/configs/configs.service'
 import { FileReferenceService } from '~/modules/file/file-reference.service'
 import { SearchService } from '~/modules/search/search.service'
@@ -37,6 +38,7 @@ export class CronBusinessService {
 
     private readonly searchService: SearchService,
     private readonly fileReferenceService: FileReferenceService,
+    private readonly reviewDemoService: ReviewDemoService,
   ) {
     this.logger = new Logger(CronBusinessService.name)
   }
@@ -115,15 +117,18 @@ export class CronBusinessService {
     const urls = pushUrls.map((item) => item.url).join('\n')
 
     try {
-      const res = await this.http.axiosRef.post(
+      const data = await this.http.fetch<any>(
         `http://data.zz.baidu.com/urls?site=${webUrl}&token=${token}`,
-        urls,
-        { headers: { 'Content-Type': 'text/plain' } },
+        {
+          method: 'POST',
+          body: urls,
+          headers: { 'Content-Type': 'text/plain' },
+        },
       )
       this.logger.log(
-        `Baidu Webmaster submission result: ${JSON.stringify(res.data)}`,
+        `Baidu Webmaster submission result: ${JSON.stringify(data)}`,
       )
-      return { response: res.data }
+      return { response: data }
     } catch (error) {
       this.logger.error(`Baidu push error: ${error.message}`)
       throw error
@@ -152,27 +157,25 @@ export class CronBusinessService {
     const urls = pushUrls.map((item) => item.url)
 
     try {
-      const res = await this.http.axiosRef.post(
+      const data = await this.http.fetch<any>(
         `https://ssl.bing.com/webmaster/api.svc/json/SubmitUrlbatch?apikey=${apiKey}`,
         {
-          siteUrl: webUrl,
-          urlList: urls,
-        },
-        {
+          method: 'POST',
+          body: { siteUrl: webUrl, urlList: urls },
           headers: {
             'Content-Type': 'application/json',
             charset: 'utf-8',
           },
         },
       )
-      if (res?.data?.d === null) {
+      if (data?.d === null) {
         this.logger.log('Bing Webmaster submission succeeded')
       } else {
         this.logger.log(
-          `Bing Webmaster submission result: ${JSON.stringify(res.data)}`,
+          `Bing Webmaster submission result: ${JSON.stringify(data)}`,
         )
       }
-      return { response: res.data }
+      return { response: data }
     } catch (error) {
       this.logger.error(`Bing push error: ${error.message}`)
       throw error
@@ -221,6 +224,15 @@ export class CronBusinessService {
     const result = await this.fileReferenceService.cleanupCommentUploads()
     this.logger.log(
       `--> Comment image upload cleanup finished pending=${result.pendingDeleted} detached=${result.detachedDeleted}`,
+    )
+    return result
+  }
+
+  async resetReviewDemo() {
+    this.logger.log('--> Starting App Review demo account reset')
+    const result = await this.reviewDemoService.resetDaily()
+    this.logger.log(
+      `--> App Review demo reset finished ${JSON.stringify(result)}`,
     )
     return result
   }
