@@ -1,18 +1,12 @@
+// mx-server pm2 配置（Caiths Safe Deploy 与服务器手动启动共用）。
+// 部署布局约定：release zip 解压后 main.mjs 位于应用目录根（zip-asset 从 out/ 打包），
+// 依赖与运行时变量分别来自共享 node_modules 软链与 mx-server.env.json。
 const fs = require('node:fs')
-const { execSync } = require('node:child_process')
 
-const nodePath = execSync('npm root --quiet -g', {
-  encoding: 'utf-8',
-}).split('\n')[0]
 const runtimeEnvPath =
-  process.env.MX_SPACE_RUNTIME_ENV_FILE ||
-  '/root/mx-space/mx-server.env.json'
-
-if (!fs.existsSync(runtimeEnvPath)) {
-  throw new Error(`MX Space runtime env is missing: ${runtimeEnvPath}`)
-}
-
+  process.env.MX_SPACE_RUNTIME_ENV_FILE || '/root/mx-space/mx-server.env.json'
 const runtimeEnv = JSON.parse(fs.readFileSync(runtimeEnvPath, 'utf8'))
+
 const requiredEnv = [
   'DB_HOST',
   'DB_PORT',
@@ -22,7 +16,6 @@ const requiredEnv = [
   'PORT',
   'MX_ENCRYPT_KEY',
 ]
-
 for (const key of requiredEnv) {
   if (!runtimeEnv[key]) {
     throw new Error(`MX Space runtime env is missing key: ${key}`)
@@ -33,9 +26,7 @@ module.exports = {
   apps: [
     {
       name: 'mx-server',
-      // Execute Node directly so main.mjs remains process.argv[1]. The MX Space
-      // release intentionally skips startMain() when it is only imported by a
-      // process-manager wrapper.
+      // pm2 守护进程跑在系统 node22 上，必须写死 node26 绝对路径执行 v15 bundle。
       script: '/usr/local/node26/bin/node',
       interpreter: 'none',
       cwd: '/root/mx-space/core-v15',
@@ -64,7 +55,6 @@ module.exports = {
       env: {
         ...runtimeEnv,
         NODE_ENV: 'production',
-        NODE_PATH: nodePath,
         SNOWFLAKE_WORKER_ID: String(runtimeEnv.SNOWFLAKE_WORKER_ID || 1),
       },
     },
