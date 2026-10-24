@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 INSTALL_DIR="${MX_SPACE_INSTALL_DIR:-/root/mx-space}"
-APP_DIR="${MX_SPACE_APP_DIR:-$INSTALL_DIR/core-v10}"
+APP_DIR="${MX_SPACE_APP_DIR:-$INSTALL_DIR/core-v15}"
 APP_NAME="${MX_SPACE_PM2_APP_NAME:-mx-server}"
 HEALTH_URL="${MX_SPACE_HEALTH_URL:-http://127.0.0.1:2333/api/v3/health}"
 ROLLBACK_KEEP="${MX_SPACE_ROLLBACK_KEEP:-3}"
@@ -140,7 +140,7 @@ fi
 pm2 save
 rm -f "$ZIP_PATH"
 rm -rf "$backup_dir"
-find "$INSTALL_DIR" -maxdepth 1 -type d -name 'core-v10.backup-*' \
+find "$INSTALL_DIR" -maxdepth 1 -type d -name 'core-v15.backup-*' \
   -printf '%T@ %p\n' | sort -rn | awk -v keep="$ROLLBACK_KEEP" 'NR > keep { print $2 }' | xargs -r rm -rf
 find "$INSTALL_DIR" -maxdepth 1 -type f -name 'deploy-*.log' -mtime +14 -delete
 trap - ERR
