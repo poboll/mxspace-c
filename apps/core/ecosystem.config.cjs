@@ -51,7 +51,7 @@ module.exports = {
       max_memory_restart: '450M',
       args: [
         '--max-old-space-size=320',
-        './out/main.mjs',
+        './main.mjs',
         '--color',
         '--encrypt_enable',
         '--snowflake_worker_id',
