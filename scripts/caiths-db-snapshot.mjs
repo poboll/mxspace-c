@@ -33,7 +33,7 @@ const digest = () => createHash('sha256').update(fs.readFileSync(dump)).digest('
 const counts = db => JSON.parse(sql(db, `SELECT json_build_object(
   'posts',(SELECT count(*) FROM posts), 'notes',(SELECT count(*) FROM notes),
   'pages',(SELECT count(*) FROM pages), 'agentConversations',(SELECT count(*) FROM ai_agent_conversations),
-  'postContent',(SELECT md5(string_agg(md5(jsonb_build_array(id,title,slug,text,content,content_format,created_at,modified_at,is_published)::text),'' ORDER BY id)) FROM posts WHERE id <> 141099812370530325),
+  'postContent',(SELECT md5(string_agg(md5(jsonb_build_array(id,title,slug,text,content,content_format,created_at,modified_at,is_published)::text),'' ORDER BY id)) FROM posts WHERE id <> '141099812370530325'),
   'noteContent',(SELECT md5(string_agg(md5(jsonb_build_array(id,title,slug,text,content,content_format,created_at,modified_at,is_published,public_at)::text),'' ORDER BY id)) FROM notes)
 )`))
 try {
