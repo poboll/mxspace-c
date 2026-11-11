@@ -10,6 +10,6 @@ const versions = Object.fromEntries(['ws', 'loro-crdt'].map(name => [name,
 ]))
 if (!core.dependencies['loro-crdt'] || !core.dependencies.ws) throw new Error('runtime dependency contract changed')
 // sharp is normally lazy-installed; pin the site's tested standalone runtime.
-versions.sharp = '0.34.5'
+versions.sharp = '0.35.5'
 fs.writeFileSync(path.join(out, 'package.json'), JSON.stringify({ private: true, type: 'module', dependencies: versions }, null, 2))
 execFileSync('npm', ['install', '--prefix', out, '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund', '--package-lock=true'], { stdio: 'inherit' })

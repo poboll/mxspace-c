@@ -102,6 +102,17 @@ export function escapeXml(unsafe: string) {
 }
 
 export const requireDepsWithInstall = async (deps: string) => {
+  // Release ZIPs carry their own runtime. Resolve it first; a broken native
+  // binding must fail startup rather than silently installing on production.
+  const bundledRequire = createRequire(import.meta.url)
+  let bundledPath: string | undefined
+  try {
+    bundledPath = bundledRequire.resolve(deps)
+  } catch (error: any) {
+    if (error.code !== 'MODULE_NOT_FOUND') throw error
+  }
+  if (bundledPath) return bundledRequire(bundledPath)
+
   const require = createRequire(NODE_REQUIRE_PATH)
   try {
     return require(require.resolve(deps))

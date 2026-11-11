@@ -70,7 +70,7 @@ jobs:
           PGPASSWORD=mx createdb -h 127.0.0.1 -U mx mx_verify
           pnpm -C apps/core run lint:migrations
           pnpm check:controller-response-envelope
-          pnpm -C apps/core exec vitest run test/src/contracts/admin/aggregate-stats-admin.contract.spec.ts test/src/processors/database/schema-migrator.spec.ts test/src/utils/secret-storage-compatibility.spec.ts test/src/utils/encrypt.util.spec.ts test/src/database/protect-stored-secrets.spec.ts
+          pnpm -C apps/core exec vitest run test/src/contracts/admin/aggregate-stats-admin.contract.spec.ts test/src/processors/database/schema-migrator.spec.ts test/src/utils/secret-storage-compatibility.spec.ts test/src/utils/encrypt.util.spec.ts test/src/database/protect-stored-secrets.spec.ts test/src/utils/runtime-dependencies.spec.ts
 
       - name: Build bundle
         run: pnpm run bundle
@@ -110,7 +110,7 @@ jobs:
         run: |
           runtime_dir="$(mktemp -d)"
           unzip -q release-linux.zip -d "$runtime_dir"
-          BUNDLE_DIR="$runtime_dir" bash scripts/workflow/test-server.sh
+          HOME="$(mktemp -d)" BUNDLE_DIR="$runtime_dir" bash scripts/workflow/test-server.sh
 
       - name: Upload release artifact
         uses: actions/upload-artifact@v7
