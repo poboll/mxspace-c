@@ -1,15 +1,15 @@
 import './setup-enrichment-linkcard'
 import '@haklex/rich-ext-ai-agent/style.css'
 import '@haklex/rich-ext-nested-doc/style.css'
+import '@haklex/rich-plugin-agent-stream/style.css'
 import '../core/style'
 
 import type {
-  AgentExecutorPlugin,
   AgentStore,
   AgentToolConfig,
   ChatMessage,
-  LLMProvider,
 } from '@haklex/rich-agent-core'
+import { EditorSurfacePlugins } from '@haklex/rich-editor'
 import { DialogStackProvider } from '@haklex/rich-editor-ui'
 import {
   AgentAskAIAction,
@@ -23,6 +23,7 @@ import {
   nestedDocEditNodes,
   NestedDocPlugin,
 } from '@haklex/rich-ext-nested-doc'
+import { AgentStreamPlugin } from '@haklex/rich-plugin-agent-stream'
 import { ImageEditModalPlugin } from '@haklex/rich-plugin-image-editor'
 import type { LexicalEditor } from 'lexical'
 import { useRef } from 'react'
@@ -32,8 +33,8 @@ import { imageGpsPrivacy } from '~/lib/image-upload-privacy'
 import type { RichEditorProps } from '../core'
 import { RichEditor } from '../core'
 import type {
-  AgentLitexmlRegistryProvider,
   AgentLoopHandle,
+  AgentRuntime,
   SaveExcalidrawSnapshot,
 } from '../types'
 import { AgentLoopCapture } from './AgentLoopCapture'
@@ -45,7 +46,7 @@ import { NestedDocDialogEditor } from './NestedDocDialogEditor'
 export interface ReactEditorPaneProps {
   editorProps: Omit<RichEditorProps, 'onChange' | 'onSubmit' | 'onEditorReady'>
   store: AgentStore
-  provider: LLMProvider | null
+  agentRuntime: AgentRuntime | null
   saveExcalidrawSnapshot: SaveExcalidrawSnapshot
   apiUrl: string
   fetchEnrichment?: EnrichmentFetcher | null
@@ -54,18 +55,14 @@ export interface ReactEditorPaneProps {
   onEditorReady?: (editor: LexicalEditor | null) => void
   onAgentLoopReady: (loop: AgentLoopHandle | null) => void
   onPinSelection?: () => void
-  injectDocumentXml?: boolean
-  plugins?: AgentExecutorPlugin[]
   tools?: AgentToolConfig[]
-  toolSystemRole?: string | false
-  litexmlRegistry?: AgentLitexmlRegistryProvider
   systemMessages?: ChatMessage[]
 }
 
 export function ReactEditorPane({
   editorProps,
   store,
-  provider,
+  agentRuntime,
   saveExcalidrawSnapshot,
   apiUrl,
   fetchEnrichment,
@@ -74,11 +71,7 @@ export function ReactEditorPane({
   onEditorReady,
   onAgentLoopReady,
   onPinSelection,
-  injectDocumentXml,
-  plugins,
   tools,
-  toolSystemRole,
-  litexmlRegistry,
   systemMessages,
 }: ReactEditorPaneProps) {
   const editorRef = useRef<LexicalEditor | null>(null)
@@ -105,7 +98,7 @@ export function ReactEditorPane({
               ]}
               header={<EditorToolbar />}
               floatingToolbarActions={
-                provider ? (
+                agentRuntime ? (
                   <AgentAskAIAction onPin={onPinSelection} />
                 ) : undefined
               }
@@ -113,22 +106,24 @@ export function ReactEditorPane({
               onSubmit={onSubmit}
               onEditorReady={handleEditorReady}
             >
+              <AgentStreamPlugin agentName="AI" />
               <DiffReviewOverlayPlugin store={store} />
-              {provider ? <AgentSelectionPinPlugin store={store} /> : null}
+              {agentRuntime ? <AgentSelectionPinPlugin store={store} /> : null}
               <AgentLoopCapture
+                agentRuntime={agentRuntime}
                 editorRef={editorRef}
-                injectDocumentXml={injectDocumentXml}
                 onAgentLoopReady={onAgentLoopReady}
-                plugins={plugins}
-                provider={provider}
                 store={store}
-                tools={tools}
-                toolSystemRole={toolSystemRole}
-                litexmlRegistry={litexmlRegistry}
                 systemMessages={systemMessages}
+                tools={tools}
               />
-              <NestedDocPlugin />
-              <ImageEditModalPlugin privacy={imageGpsPrivacy} />
+              <EditorSurfacePlugins>
+                <NestedDocPlugin />
+              </EditorSurfacePlugins>
+              <ImageEditModalPlugin
+                allowKeepOriginal
+                privacy={imageGpsPrivacy}
+              />
             </RichEditor>
           </ExcalidrawConfigProvider>
         </DialogStackProvider>

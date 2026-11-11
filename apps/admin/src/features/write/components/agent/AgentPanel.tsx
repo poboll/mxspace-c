@@ -76,7 +76,6 @@ export function AgentPanel({ agent }: AgentPanelProps) {
         sessions={agent.sessions}
       />
       <MessageList
-        onPublishDynamic={agent.publishDynamic}
         isHydrating={agent.isHydrating}
         onAcceptBatch={agent.acceptBatch}
         onReapplyBatch={agent.reapplyBatch}
@@ -90,8 +89,8 @@ export function AgentPanel({ agent }: AgentPanelProps) {
         onAbort={agent.abort}
         onChange={setInput}
         onSelectModel={agent.selectModel}
-        onSend={(message) => {
-          agent.sendMessage(message)
+        onSend={(message, attachments) => {
+          agent.sendMessage(message, attachments)
           setInput('')
         }}
         providerGroups={agent.providerGroups}

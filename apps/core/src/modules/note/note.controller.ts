@@ -32,6 +32,8 @@ import { AiInsightsService } from '../ai/ai-insights/ai-insights.service'
 import { parseLanguageCode } from '../ai/ai-language.util'
 import { AiSummaryService } from '../ai/ai-summary/ai-summary.service'
 import { AiTtsQueryService } from '../ai/ai-tts/ai-tts-query.service'
+import { CollabRepository } from '../draft/collab.repository'
+import { DraftRefType } from '../draft/draft.enum'
 import { EnrichmentService } from '../enrichment/enrichment.service'
 import {
   type ListQueryDto,
@@ -85,7 +87,16 @@ export class NoteController {
     private readonly lexicalService: LexicalService,
     private readonly enrichmentService: EnrichmentService,
     private readonly translationEntryService: TranslationEntryService,
+    private readonly collabRepository: CollabRepository,
   ) {}
+
+  private async coAuthorsOf(noteId: string) {
+    const byRef = await this.collabRepository.coAuthorsByRef(
+      DraftRefType.Note,
+      [noteId],
+    )
+    return byRef.get(noteId) ?? []
+  }
 
   private toArticleTranslationInput(note: NoteModel): ArticleTranslationInput {
     return {
@@ -199,15 +210,14 @@ export class NoteController {
     const { password, single: isSingle } = query
     const visibleOnly = !isAuthenticated
 
+    if (!isAuthenticated && this.noteService.checkNoteIsSecret(current)) {
+      throw createAppException(AppErrorCode.NOTE_NOT_FOUND)
+    }
+
     if (!isAuthenticated) {
       current.location = null
       current.coordinates = null
     }
-
-    current.text =
-      !isAuthenticated && this.noteService.checkNoteIsSecret(current)
-        ? ''
-        : current.text
 
     if (
       !(await this.noteService.checkPasswordToAccess(current.id, password)) &&
@@ -286,7 +296,10 @@ export class NoteController {
       const { enrichments, ...noteData } =
         await this.enrichmentService.attachEnrichments(current)
       metaBuilder.enrichments(enrichments as Record<string, EnrichmentEntry>)
-      return withMeta(noteData, metaBuilder.build())
+      return withMeta(
+        { ...noteData, coAuthors: await this.coAuthorsOf(String(current.id)) },
+        metaBuilder.build(),
+      )
     }
 
     const [[prev], [next]] = await Promise.all([
@@ -328,6 +341,7 @@ export class NoteController {
     return withMeta(
       {
         ...noteData,
+        coAuthors: await this.coAuthorsOf(String(current.id)),
         next: this.toAdjacentNavNote(next),
         prev: this.toAdjacentNavNote(prev),
       },
@@ -456,11 +470,17 @@ export class NoteController {
       throw createAppException(AppErrorCode.NOTE_NOT_FOUND, { id })
     }
 
-    if (!isAuthenticated && !current.isPublished) {
+    if (
+      !isAuthenticated &&
+      (!current.isPublished || this.noteService.checkNoteIsSecret(current))
+    ) {
       throw createAppException(AppErrorCode.NOTE_NOT_FOUND, { id })
     }
 
     if (!isAuthenticated) {
+      if (!(await this.noteService.checkPasswordToAccess(id))) {
+        throw createAppException(AppErrorCode.NOTE_FORBIDDEN)
+      }
       current.location = null
       current.coordinates = null
     }
@@ -515,7 +535,13 @@ export class NoteController {
     const { id } = params
 
     const currentDocument = await this.noteService.findById(id)
-    if (!currentDocument) {
+    if (
+      !currentDocument ||
+      (!isAuthenticated &&
+        (!currentDocument.isPublished ||
+          currentDocument.hasPassword ||
+          this.noteService.checkNoteIsSecret(currentDocument)))
+    ) {
       return withMeta([], new MetaObjectBuilder().view('card').build())
     }
 
@@ -581,9 +607,9 @@ export class NoteController {
     @Body({ schema: PartialNoteSchema }) body: PartialNoteDto,
     @Param({ schema: EntityIdSchema }) params: EntityIdDto,
   ) {
-    await this.noteService.updateById(
+    await this.noteService.patchById(
       params.id,
-      body as unknown as Partial<NoteModel>,
+      body as Parameters<NoteService['patchById']>[1],
     )
   }
 

@@ -110,12 +110,15 @@ const groupConfigs: GroupConfig[] = [
   {
     key: 'storage',
     title: 'Storage',
-    description: 'Backup, image hosting, comment image uploads',
+    description:
+      'Backup, image hosting, comment image uploads, media processing, draft cleanup',
     icon: 'database',
     sectionKeys: [
       'backupOptions',
       'imageStorageOptions',
       'commentUploadOptions',
+      'mediaProcessingOptions',
+      'draftCleanupOptions',
     ],
   },
   {

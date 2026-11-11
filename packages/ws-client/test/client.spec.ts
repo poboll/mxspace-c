@@ -118,7 +118,7 @@ describe('createWsClient', () => {
 
     const client = createWsClient({
       url: `ws://127.0.0.1:${port}`,
-      query: { token: 'abc', room: '1' },
+      query: { trace: 'abc', room: '1' },
       webSocketImpl: NodeWebSocket as unknown as typeof WebSocket,
       pingIntervalMs: 60_000,
     })
@@ -127,7 +127,7 @@ describe('createWsClient', () => {
     })
 
     const url = await requestUrl
-    expect(url).toContain('token=abc')
+    expect(url).toContain('trace=abc')
     expect(url).toContain('room=1')
   })
 
@@ -183,6 +183,29 @@ describe('createWsClient', () => {
 
     await expect(client.request('add')).rejects.toMatchObject({
       code: 'BAD_INPUT',
+    })
+  })
+
+  it('keeps the whole rejected ack on the error', async () => {
+    const { client, serverSocket } = await connectedHarness()
+
+    serverSocket.on('message', (raw) => {
+      const parsed: unknown = JSON.parse(String(raw))
+      if (!isWsEnvelope(parsed) || parsed.event === 'ack') return
+      serverSocket.send(
+        JSON.stringify(
+          buildEnvelope(
+            'ack',
+            { ok: false, code: 'FILE_BASE_MISMATCH', paths: ['/doc.xml'] },
+            parsed.id,
+          ),
+        ),
+      )
+    })
+
+    await expect(client.request('add')).rejects.toMatchObject({
+      code: 'FILE_BASE_MISMATCH',
+      ack: { ok: false, code: 'FILE_BASE_MISMATCH', paths: ['/doc.xml'] },
     })
   })
 

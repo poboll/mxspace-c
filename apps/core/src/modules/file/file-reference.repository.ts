@@ -5,6 +5,8 @@ import {
   eq,
   gte,
   inArray,
+  isNotNull,
+  isNull,
   lt,
   ne,
   notExists,
@@ -12,8 +14,16 @@ import {
   sql,
 } from 'drizzle-orm'
 
+import { AppErrorCode, createAppException } from '~/common/errors'
 import { PG_DB_TOKEN } from '~/constants/system.constant'
-import { aiTtsBlocks, fileReferences, fileUsages } from '~/database/schema'
+import {
+  aiTtsBlocks,
+  contentCrdtDocs,
+  contentRevisions,
+  drafts,
+  fileReferences,
+  fileUsages,
+} from '~/database/schema'
 import {
   BaseRepository,
   type PaginationResult,
@@ -43,11 +53,28 @@ const mapRow = (row: typeof fileReferences.$inferSelect): FileReferenceRow => ({
   mimeType: row.mimeType ?? null,
   byteSize: row.byteSize ?? null,
   detachedAt: row.detachedAt ?? null,
+  assetKey: row.assetKey ?? null,
+  draftId: row.draftId ?? null,
   createdAt: row.createdAt,
 })
 
 @Injectable()
 export class FileReferenceRepository extends BaseRepository {
+  async withReaderUploadLock<T>(
+    readerId: string,
+    upload: () => Promise<T>,
+  ): Promise<T> {
+    return this.db.transaction(async (tx) => {
+      const result = await tx.execute(
+        sql`SELECT pg_try_advisory_xact_lock(hashtextextended(${`reader-upload:${readerId}`}, 0)) AS acquired`,
+      )
+      if (!result.rows[0]?.acquired) {
+        throw createAppException(AppErrorCode.COMMENT_UPLOAD_RATE_LIMITED)
+      }
+      return upload()
+    })
+  }
+
   constructor(
     @Inject(PG_DB_TOKEN) db: AppDatabase,
     private readonly snowflake: SnowflakeService,
@@ -55,12 +82,19 @@ export class FileReferenceRepository extends BaseRepository {
     super(db)
   }
 
+  private ownerWhere() {
+    return or(
+      ne(fileReferences.uploadedBy, FileUploadedBy.Reader),
+      sql`${fileReferences.uploadedBy} IS NULL`,
+    )!
+  }
+
   private ownerOrphanWhere() {
+    return and(this.ownerWhere(), this.unusedWhere())!
+  }
+
+  private unusedWhere() {
     return and(
-      or(
-        ne(fileReferences.uploadedBy, FileUploadedBy.Reader),
-        sql`${fileReferences.uploadedBy} IS NULL`,
-      ),
       notExists(
         this.db
           .select({ id: fileUsages.id })
@@ -140,6 +174,8 @@ export class FileReferenceRepository extends BaseRepository {
     uploadedBy?: FileUploadedBy | null
     mimeType?: string | null
     byteSize?: number | null
+    assetKey?: string | null
+    draftId?: string | null
   }): Promise<FileReferenceRow> {
     const id = this.snowflake.nextId()
     const [row] = await this.db
@@ -156,9 +192,33 @@ export class FileReferenceRepository extends BaseRepository {
         uploadedBy: input.uploadedBy ?? null,
         mimeType: input.mimeType ?? null,
         byteSize: input.byteSize ?? null,
+        assetKey: input.assetKey ?? null,
+        draftId: input.draftId ?? null,
       })
       .returning()
     return mapRow(row)
+  }
+
+  async tagAsset(
+    fileUrl: string,
+    tag: { assetKey: string | null; draftId: string | null },
+  ) {
+    await this.db
+      .update(fileReferences)
+      .set({ assetKey: tag.assetKey, draftId: tag.draftId })
+      .where(eq(fileReferences.fileUrl, fileUrl))
+  }
+
+  async backfillAssetKey(fileUrl: string, assetKey: string) {
+    await this.db
+      .update(fileReferences)
+      .set({ assetKey })
+      .where(
+        and(
+          eq(fileReferences.fileUrl, fileUrl),
+          isNull(fileReferences.assetKey),
+        )!,
+      )
   }
 
   async createOwnerPendingMany(
@@ -538,6 +598,36 @@ export class FileReferenceRepository extends BaseRepository {
     }
   }
 
+  async listRemote(
+    page = 1,
+    size = 20,
+  ): Promise<PaginationResult<FileReferenceRow & { inUse: boolean }>> {
+    page = Math.max(1, page)
+    size = Math.min(100, Math.max(1, size))
+    const offset = (page - 1) * size
+    const where = and(isNotNull(fileReferences.s3ObjectKey), this.ownerWhere())
+    const [rows, [{ count }]] = await Promise.all([
+      this.db
+        .select({
+          row: fileReferences,
+          inUse: sql<boolean>`not (${this.unusedWhere()})`,
+        })
+        .from(fileReferences)
+        .where(where)
+        .orderBy(desc(fileReferences.createdAt))
+        .limit(size)
+        .offset(offset),
+      this.db
+        .select({ count: sql<number>`count(*)::int` })
+        .from(fileReferences)
+        .where(where),
+    ])
+    return {
+      data: rows.map(({ row, inUse }) => ({ ...mapRow(row), inUse })),
+      pagination: this.paginationOf(Number(count ?? 0), page, size),
+    }
+  }
+
   async countOrphans(): Promise<number> {
     const [{ count }] = await this.db
       .select({ count: sql<number>`count(*)::int` })
@@ -563,6 +653,34 @@ export class FileReferenceRepository extends BaseRepository {
         )!,
       )
     return rows.map(mapRow)
+  }
+
+  async findUploadedSinceDraftSave(ids: string[]): Promise<Set<string>> {
+    if (ids.length === 0) return new Set()
+    const rows = await this.db
+      .select({ id: fileReferences.id })
+      .from(fileReferences)
+      .innerJoin(drafts, eq(drafts.id, fileReferences.draftId))
+      .innerJoin(
+        contentRevisions,
+        eq(contentRevisions.id, drafts.headRevisionId),
+      )
+      .innerJoin(
+        contentCrdtDocs,
+        eq(contentCrdtDocs.documentId, drafts.documentId),
+      )
+      .where(
+        and(
+          inArray(
+            fileReferences.id,
+            ids.map((id) => parseEntityId(id)),
+          ),
+          eq(drafts.status, 'active'),
+          sql`${contentCrdtDocs.editedAt} > ${contentRevisions.createdAt}`,
+          sql`${fileReferences.createdAt} > ${contentRevisions.createdAt}`,
+        )!,
+      )
+    return new Set(rows.map((row) => String(toEntityId(row.id))))
   }
 
   async findOwnerReferences(): Promise<FileReferenceRow[]> {

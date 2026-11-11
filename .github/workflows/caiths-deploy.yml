@@ -2,6 +2,11 @@ name: Caiths Safe Deploy
 
 on:
   workflow_dispatch:
+    inputs:
+      validate_only:
+        description: Build and test without production deployment
+        type: boolean
+        default: true
   push:
     branches:
       - master
@@ -46,7 +51,26 @@ jobs:
       - name: Setup Node.js and pnpm
         uses: ./.github/actions/setup-node
         with:
-          node-version: '22.x'
+          node-version: '26.x'
+
+      - name: Deployment recovery regression tests
+        run: python3 -m unittest discover -s scripts/tests -p 'test_caiths_deploy.py' -v
+
+      - name: Install test Redis binary
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y redis-server
+
+      - name: Migration and API contract gates
+        env:
+          PG_VERIFY_URL: postgres://mx:mx@127.0.0.1:5432/mx_verify
+          REDIS_BINARY_PATH: /usr/bin/redis-server
+          REDISMS_SYSTEM_BINARY: /usr/bin/redis-server
+        run: |
+          PGPASSWORD=mx createdb -h 127.0.0.1 -U mx mx_verify
+          pnpm -C apps/core run lint:migrations
+          pnpm check:controller-response-envelope
+          pnpm -C apps/core exec vitest run test/src/contracts/admin/aggregate-stats-admin.contract.spec.ts test/src/processors/database/schema-migrator.spec.ts test/src/utils/secret-storage-compatibility.spec.ts test/src/utils/encrypt.util.spec.ts test/src/database/protect-stored-secrets.spec.ts test/src/utils/runtime-dependencies.spec.ts
 
       - name: Build bundle
         run: pnpm run bundle
@@ -70,6 +94,23 @@ jobs:
           sh apps/core/zip-asset.sh
           mv release.zip release-linux.zip
           unzip -l release-linux.zip | grep 'src/database/migrations/meta/_journal.json'
+          unzip -l release-linux.zip | grep 'node_modules/loro-crdt/package.json'
+
+      - name: Smoke test standalone packaged runtime
+        env:
+          SNOWFLAKE_WORKER_ID: 1
+          PG_HOST: 127.0.0.1
+          PG_PORT: 5432
+          PG_USER: mx
+          PG_PASSWORD: mx
+          PG_DATABASE: mx_core
+          REDIS_HOST: 127.0.0.1
+          REDIS_PORT: 6379
+          JWT_SECRET: test-bundle-server-jwt-secret
+        run: |
+          runtime_dir="$(mktemp -d)"
+          unzip -q release-linux.zip -d "$runtime_dir"
+          HOME="$(mktemp -d)" BUNDLE_DIR="$runtime_dir" bash scripts/workflow/test-server.sh
 
       - name: Upload release artifact
         uses: actions/upload-artifact@v7
@@ -80,11 +121,13 @@ jobs:
           retention-days: 7
 
       - name: Deploy to 8.218
+        if: ${{ github.ref == 'refs/heads/master' && !inputs.validate_only }}
         env:
           DEPLOY_HOST: ${{ secrets.CAITHS_DEPLOY_HOST }}
           DEPLOY_PORT: ${{ secrets.CAITHS_DEPLOY_PORT }}
           DEPLOY_USER: ${{ secrets.CAITHS_DEPLOY_USER }}
           DEPLOY_KEY: ${{ secrets.CAITHS_DEPLOY_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.CAITHS_DEPLOY_KNOWN_HOSTS }}
         run: |
           set -euo pipefail
           DEPLOY_PORT="${DEPLOY_PORT:-22}"
@@ -92,8 +135,24 @@ jobs:
           install -m 700 -d ~/.ssh
           printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/caiths_deploy
           chmod 600 ~/.ssh/caiths_deploy
-          ssh-keyscan -p "$DEPLOY_PORT" "$DEPLOY_HOST" >> ~/.ssh/known_hosts
+          test -n "$DEPLOY_KNOWN_HOSTS"
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+          # Whitelist only this authenticated runner connection in the existing
+          # login-alert list, before transfer/deployment. No firewall or sshd changes.
+          ssh -p "$DEPLOY_PORT" -i ~/.ssh/caiths_deploy "${DEPLOY_USER}@${DEPLOY_HOST}" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          src=${SSH_CONNECTION%% *}
+          [[ "$src" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || exit 17
+          ALLOWED=/root/.ops-bot/ssh-allowlist.txt
+          source <(sed -n '/^is_allowed() {/,/^}/p' /root/.ops-bot/ops-watch.sh)
+          if ! is_allowed "$src"; then
+            cp -n --preserve=mode,timestamps "$ALLOWED" "$ALLOWED.before-ci-$(date +%Y%m%d-%H%M%S)"
+            printf '%s\n' "$src" >> "$ALLOWED"
+            chmod 600 "$ALLOWED"
+          fi
+          REMOTE
           remote_zip="/tmp/mx-core-${GITHUB_SHA}.zip"
           scp -P "$DEPLOY_PORT" -i ~/.ssh/caiths_deploy release-linux.zip "${DEPLOY_USER}@${DEPLOY_HOST}:${remote_zip}"
-          scp -P "$DEPLOY_PORT" -i ~/.ssh/caiths_deploy scripts/caiths-safe-deploy.sh "${DEPLOY_USER}@${DEPLOY_HOST}:/root/mx-space/caiths-safe-deploy.sh"
-          ssh -p "$DEPLOY_PORT" -i ~/.ssh/caiths_deploy "${DEPLOY_USER}@${DEPLOY_HOST}" "chmod 700 /root/mx-space/caiths-safe-deploy.sh && /root/mx-space/caiths-safe-deploy.sh '${remote_zip}'"
+          scp -P "$DEPLOY_PORT" -i ~/.ssh/caiths_deploy scripts/caiths-controlled-deploy.sh scripts/caiths-db-snapshot.mjs "${DEPLOY_USER}@${DEPLOY_HOST}:/root/mx-space/"
+          ssh -p "$DEPLOY_PORT" -i ~/.ssh/caiths_deploy "${DEPLOY_USER}@${DEPLOY_HOST}" "chmod 700 /root/mx-space/caiths-controlled-deploy.sh /root/mx-space/caiths-db-snapshot.mjs && /root/mx-space/caiths-controlled-deploy.sh '${remote_zip}'"

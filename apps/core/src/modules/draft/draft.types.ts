@@ -21,6 +21,7 @@ export interface RevisionSnapshot {
 
 export interface ContentDocumentRow {
   createdAt: Date
+  crdtEpoch: number
   id: EntityId
   publishAiResources: PublishAiResourceRequest[] | null
   publishedRevisionId: EntityId | null
@@ -29,11 +30,44 @@ export interface ContentDocumentRow {
   updatedAt: Date | null
 }
 
+export type Frontiers = { counter: number; peer: `${number}` }[]
+
+export type CheckpointKind =
+  'save' | 'publish' | 'restore' | 'undo' | 'import' | 'legacy-save'
+
 export interface ContentRevisionRow extends RevisionSnapshot {
   createdAt: Date
   documentId: EntityId
+  frontiers?: Frontiers | null
   id: EntityId
+  kind?: CheckpointKind | null
   parentRevisionId: EntityId | null
+}
+
+export interface CrdtFields {
+  meta: Record<string, unknown> | null
+  typeSpecificData: Record<string, unknown> | null
+}
+
+export type CrdtFieldsPatch = {
+  [K in keyof CrdtFields]?: Record<string, unknown>
+}
+
+export interface CrdtDocRow {
+  createdAt: Date
+  documentId: EntityId
+  editedAt: Date | null
+  fields: CrdtFields | null
+  snapshot: Uint8Array
+  snapshotVersion: Uint8Array
+  syncedRevisionId: EntityId | null
+  updatedAt: Date | null
+}
+
+export interface CheckpointInput {
+  frontiers: Frontiers | null
+  kind: CheckpointKind
+  snapshot: RevisionSnapshot
 }
 
 export interface ContentPublicationEventRow {
@@ -101,6 +135,38 @@ export interface DraftListFilter {
   refType?: DraftRefType
   search?: string
   status?: DraftBranchStatus
+}
+
+export const DRAFT_RELATIONS = ['in_sync', 'ahead', 'fresh'] as const
+export type DraftRelation = (typeof DRAFT_RELATIONS)[number]
+
+export interface DraftCardFilter extends DraftListFilter {
+  relation?: DraftRelation
+  sort?: 'size' | 'updated'
+}
+
+export interface DraftCard {
+  baseRevisionId: EntityId
+  createdAt: Date
+  document: {
+    id: EntityId
+    publishedRevisionId: EntityId | null
+    refId: EntityId | null
+    refType: DraftRefType
+  }
+  documentId: EntityId
+  headRevision: {
+    contentFormat: string
+    createdAt: Date
+    id: EntityId
+    title: string
+  }
+  headRevisionId: EntityId
+  id: EntityId
+  relation: DraftRelation
+  status: DraftBranchStatus
+  storage: { crdtBytes: number; revisionBytes: number; revisionCount: number }
+  updatedAt: Date | null
 }
 
 export interface DocumentShareRow {

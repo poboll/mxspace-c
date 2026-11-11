@@ -445,6 +445,40 @@ export const APP_ERROR_DEFINITIONS = {
       expectedPublishedRevisionId: p.expectedPublishedRevisionId,
     }),
   },
+  [AppErrorCode.DRAFT_CRDT_UPDATE_REJECTED]: {
+    status: 400,
+    message: 'The collaborative update was rejected',
+    details: (p) => ({ branchId: p.branchId, reason: p.reason }),
+  },
+  [AppErrorCode.DRAFT_CRDT_FORMAT_UNSUPPORTED]: {
+    status: 400,
+    message: 'This draft only accepts Lexical content',
+    details: (p) => ({ branchId: p.branchId, contentFormat: p.contentFormat }),
+  },
+  [AppErrorCode.DRAFT_CRDT_STALE]: {
+    status: 409,
+    message: 'The collaborative document was rebuilt; reload it',
+    details: (p) => ({ documentId: p.documentId }),
+  },
+  [AppErrorCode.DRAFT_CLEANUP_CONFLICT]: {
+    status: 409,
+    message: 'The draft changed while it was being cleaned up; try again',
+    details: (p) => ({ documentId: p.documentId }),
+  },
+  [AppErrorCode.DRAFT_PUBLISH_PENDING]: {
+    status: 409,
+    message: 'This document has a publish task in progress',
+    details: (p) => ({ documentId: p.documentId }),
+  },
+  [AppErrorCode.COLLAB_INVITE_INVALID]: {
+    status: 410,
+    message: 'This invite link can no longer be used',
+    details: (p) => ({ reason: p.reason }),
+  },
+  [AppErrorCode.COLLAB_FORBIDDEN]: {
+    status: 403,
+    message: 'You are not a collaborator of this document',
+  },
 
   // document / helper
   [AppErrorCode.DOCUMENT_NOT_FOUND]: {
@@ -525,6 +559,13 @@ export const APP_ERROR_DEFINITIONS = {
         ? `File must be a zip archive, got: ${p.got}`
         : 'File must be a zip archive',
     details: (p) => (p?.got ? { got: p.got } : undefined),
+  },
+  [AppErrorCode.MEDIA_TRANSCODE_FAILED]: {
+    status: 422,
+    message: (p) =>
+      p?.reason
+        ? `Media transcoding failed: ${p.reason}`
+        : 'Media transcoding failed',
   },
 
   // init

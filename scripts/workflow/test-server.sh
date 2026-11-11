@@ -1,6 +1,10 @@
 #!/bin/bash
 
 MAX_RETRIES=10
+BUNDLE_DIR="${BUNDLE_DIR:-apps/core/out}"
+BUNDLE_DIR="$(cd "$BUNDLE_DIR" && pwd)" || exit 1
+export MIGRATIONS_DIR="${MIGRATIONS_DIR:-$BUNDLE_DIR/src/database/migrations}"
+cd "$BUNDLE_DIR" || exit 1
 
 node -v
 
@@ -12,13 +16,13 @@ fi
 # Apply schema migrations as a release-phase step before booting the server.
 # The app boot guard refuses to start if the schema is behind.
 echo "Running database migrations..."
-node apps/core/out/migrate.mjs
+node "$BUNDLE_DIR/migrate.mjs"
 if [[ $? -ne 0 ]]; then
   echo "migrate.mjs failed"
   exit 1
 fi
 
-nohup node apps/core/out/main.mjs >/tmp/mx-server.log 2>&1 &
+nohup node "$BUNDLE_DIR/main.mjs" >/tmp/mx-server.log 2>&1 &
 p=$!
 echo "started server with pid $p"
 

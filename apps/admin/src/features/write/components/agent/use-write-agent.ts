@@ -2,10 +2,12 @@ import type {
   AgentOperation,
   AgentStore,
   AgentToolConfig,
-  LLMProvider,
   ToolCallGroupItem,
 } from '@haklex/rich-agent-core'
-import { projectAgentDiffNodesToFactualState } from '@haklex/rich-ext-ai-agent'
+import {
+  $captureSelection,
+  projectAgentDiffNodesToFactualState,
+} from '@haklex/rich-ext-ai-agent'
 import { useQuery } from '@tanstack/react-query'
 import type { LexicalEditor } from 'lexical'
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -13,25 +15,42 @@ import { toast } from 'sonner'
 
 import type { ProviderModelsResponse } from '~/api/ai'
 import { getModels } from '~/api/ai'
+import { agentCommitMessage } from '~/features/write/crdt/agent-commit-message'
+import type { AgentTurn } from '~/features/write/crdt/crdt-draft-session'
 import type { AgentSessionMeta } from '~/hooks/use-agent-session-manager'
 import { useAgentSessionManager } from '~/hooks/use-agent-session-manager'
 import { useLocalStorageState } from '~/hooks/use-local-storage-state'
 import { useI18n } from '~/i18n'
 import { adminQueryKeys } from '~/query/keys'
-import type { AgentLoopHandle } from '~/vendor/rich-editor/types'
-import { createDocumentBashWorkspace } from '~/vendor/rich-editor/utils/document-bash'
-import { buildDynamicTools } from '~/vendor/rich-editor/utils/dynamic-tools'
+import { getAdminSocket } from '~/socket/SocketBridge'
+import { bundledAgentSkillFiles } from '~/vendor/rich-editor/agent-skills/bundled'
+import type {
+  AgentLoopHandle,
+  AgentRuntime,
+  AgentUserAttachments,
+} from '~/vendor/rich-editor/types'
+import {
+  buildProposedState,
+  buildReviewXml,
+  buildSelectionXml,
+  createDocumentBashWorkspace,
+} from '~/vendor/rich-editor/utils/document-bash'
 
 import { extractAgentOperationFromToolItem } from './agent-operations'
 import { createManagedAgentStore } from './agent-store'
-import type { AbortSignalRef } from './llm-provider'
-import { createSseLlmProvider } from './llm-provider'
-import { createDynamicPublisher } from './publish-dynamic-component'
+import {
+  type ComposerAttachment,
+  toAgentAttachments,
+  toBubbleAttachments,
+} from './composer-attachments'
 import type { SelectedAgentModel, UserChatBubble } from './types'
+import { useWriteEmbeds } from './use-write-embeds'
+import { createWriteAgentRuntime } from './write-agent-runtime'
 
 export interface WriteAgentController {
+  addEmbedFile: (url: string, name: string) => Promise<string>
   store: AgentStore
-  provider: LLMProvider | null
+  agentRuntime: AgentRuntime | null
   onAgentLoopReady: (loop: AgentLoopHandle | null) => void
   onEditorReady: (editor: LexicalEditor | null) => void
   agentReady: boolean
@@ -49,15 +68,13 @@ export interface WriteAgentController {
   renameSession: (id: string, title: string) => void
   switchSession: (id: string) => void
   retryLoadSessions: () => void
-  sendMessage: (message: string) => void
+  sendMessage: (message: string, attachments?: ComposerAttachment[]) => void
   abort: () => void
   acceptBatch: (batchId: string) => void
   rejectBatch: (batchId: string) => void
   reapplyBatch: (batchId: string) => void
   reapplyToolGroup: (items: ToolCallGroupItem[]) => void
   documentBashTool: AgentToolConfig
-  dynamicTools: AgentToolConfig[]
-  publishDynamic: (item: ToolCallGroupItem) => Promise<void>
 }
 
 function isSelectedAgentModelAvailable(
@@ -80,10 +97,18 @@ function deriveDocumentSessionId(
   return `${documentKind}:${documentId}`
 }
 
+export interface AgentDocument {
+  active: boolean
+  startAgentTurn: (message: string) => AgentTurn | null
+}
+
 export function useWriteAgent(opts: {
   agentVisible: boolean
+  document?: AgentDocument
   documentId?: string
   documentKind: 'note' | 'page' | 'post'
+  draftId?: string
+  ensureDocument?: () => Promise<boolean>
 }): WriteAgentController {
   const { t } = useI18n()
 
@@ -104,24 +129,12 @@ export function useWriteAgent(opts: {
   })
   const providerGroups = modelsQuery.data ?? []
 
-  const fetchSignalRef = useRef<AbortSignalRef>({ current: null })
-  const fetchControllerRef = useRef<AbortController | null>(null)
   const documentSessionId = deriveDocumentSessionId(
     opts.documentKind,
     opts.documentId,
   )
   const [generatedProviderSessionId] = useState(() => crypto.randomUUID())
   const providerSessionId = documentSessionId ?? generatedProviderSessionId
-
-  const provider = useMemo<LLMProvider | null>(() => {
-    if (!selectedModel) return null
-    return createSseLlmProvider({
-      model: selectedModel.modelId,
-      providerId: selectedModel.providerId,
-      sessionId: providerSessionId,
-      signalRef: fetchSignalRef.current,
-    })
-  }, [providerSessionId, selectedModel])
 
   useEffect(() => {
     if (!providerGroups.length) return
@@ -144,29 +157,70 @@ export function useWriteAgent(opts: {
   }, [providerGroups, selectedModel, selectModel])
 
   const agentLoopRef = useRef<AgentLoopHandle | null>(null)
+  const documentRef = useRef(opts.document)
+  documentRef.current = opts.document
+  const ensureDocumentRef = useRef(opts.ensureDocument)
+  ensureDocumentRef.current = opts.ensureDocument
+  const turnRef = useRef<AgentTurn | null>(null)
   const lexicalEditorRef = useRef<LexicalEditor | null>(null)
-  const dynamicTools = useMemo(
-    () => buildDynamicTools(() => lexicalEditorRef.current),
-    [],
-  )
+  const { embeds, registerDynamics } = useWriteEmbeds({
+    draftId: opts.draftId,
+    lexicalEditorRef,
+  })
   const documentBash = useMemo(
     () =>
       createDocumentBashWorkspace({
-        getEditorState: () => {
+        applyDocument: (target, focusBlockId) => {
+          if (!turnRef.current) throw new Error('No agent turn is open')
+          turnRef.current.apply(target, focusBlockId)
+          registerDynamics(target.root)
+        },
+        ownsWrites: () => turnRef.current !== null,
+        onSeed: () => turnRef.current?.markView(),
+        getBaseState: () => {
           const editor = lexicalEditorRef.current
           if (!editor) return null
           return projectAgentDiffNodesToFactualState(
             editor.getEditorState().toJSON(),
           )
         },
+        getEditorState: () => {
+          const editor = lexicalEditorRef.current
+          if (!editor) return null
+          return buildProposedState(
+            projectAgentDiffNodesToFactualState(
+              editor.getEditorState().toJSON(),
+            ),
+            store.getState().reviewState,
+          )
+        },
+        getReviewXml: () =>
+          buildReviewXml(store.getState().reviewState, embeds.viewNode),
+        embeds,
+        readonlyFiles: bundledAgentSkillFiles,
+        getSelectionXml: () => {
+          const editor = lexicalEditorRef.current
+          if (!editor) return ''
+          const { liveSelection, pinnedSelection } = store.getState()
+          const selection =
+            pinnedSelection ??
+            liveSelection ??
+            editor.getEditorState().read(() => $captureSelection())
+          return buildSelectionXml(
+            embeds.toView(
+              projectAgentDiffNodesToFactualState(
+                editor.getEditorState().toJSON(),
+              ),
+              { remember: false },
+            ).state,
+            selection,
+          )
+        },
       }),
-    [],
-  )
-  const publishDynamic = useMemo(
-    () => createDynamicPublisher(store, () => lexicalEditorRef.current),
     [store],
   )
   const [agentReady, setAgentReady] = useState(false)
+  const activeRunRef = useRef<Promise<void> | null>(null)
 
   const onAgentLoopReady = (loop: AgentLoopHandle | null) => {
     agentLoopRef.current = loop
@@ -187,26 +241,64 @@ export function useWriteAgent(opts: {
   )
 
   const abort = () => {
-    fetchControllerRef.current?.abort()
-    fetchControllerRef.current = null
-    fetchSignalRef.current.current = null
     agentLoopRef.current?.abort()
     store.getState().setStatus('idle')
   }
 
+  const describeToolCall = (name: string, params: Record<string, unknown>) => {
+    const tool = [documentBash.tool].find(
+      (candidate) => candidate.name === name,
+    )
+    try {
+      return tool?.describeCall?.(params) ?? describeFirstParam(params)
+    } catch {
+      return describeFirstParam(params)
+    }
+  }
+
   const sessionManager = useAgentSessionManager({
     abort,
-    getModel: () => selectedModel?.modelId ?? '',
-    getProviderId: () => selectedModel?.providerId ?? '',
+    describeToolCall,
     sessionId: documentSessionId,
     store,
   })
+  const sessionManagerRef = useRef(sessionManager)
+  sessionManagerRef.current = sessionManager
 
-  const sendMessage = (message: string) => {
+  const agentRuntime = useMemo<AgentRuntime | null>(() => {
+    if (!selectedModel) return null
+    return createWriteAgentRuntime({
+      getConversationId: () =>
+        sessionManagerRef.current.getActiveConversationId(),
+      onConversation: (id) => sessionManagerRef.current.adoptConversation(id),
+      onReviewBatch: (batchId, toolCallId) =>
+        sessionManagerRef.current.recordAnchor(batchId, toolCallId),
+      getSocket: getAdminSocket,
+      model: selectedModel,
+      sessionId: providerSessionId,
+      connectionLostMessage: t('write.agent.connectionLost'),
+      socketUnavailableMessage: t('write.agent.socketUnavailable'),
+      store,
+      workspace: documentBash,
+    })
+  }, [documentBash, providerSessionId, selectedModel, store, t])
+
+  const sendMessage = (
+    message: string,
+    attachments: ComposerAttachment[] = [],
+  ) => {
     const trimmed = message.trim()
     if (!trimmed) return
-    if (!selectedModel || !provider) {
+    if (!selectedModel || !agentRuntime) {
       toast.error(t('write.agent.selectModelFirst'))
+      return
+    }
+    const ensureDocument = ensureDocumentRef.current
+    if (ensureDocument && !documentRef.current?.active) {
+      void ensureDocument().then((ready) => {
+        if (ready && documentRef.current?.active)
+          sendMessage(message, attachments)
+      })
       return
     }
     if (!agentLoopRef.current) {
@@ -214,31 +306,56 @@ export function useWriteAgent(opts: {
       return
     }
 
-    const controller = new AbortController()
-    fetchControllerRef.current = controller
-    fetchSignalRef.current.current = controller.signal
-
+    const loop = agentLoopRef.current
     const pinnedSelection = store.getState().pinnedSelection
-    const userBubble: UserChatBubble = pinnedSelection
-      ? { content: trimmed, selection: pinnedSelection, type: 'user' }
-      : { content: trimmed, type: 'user' }
+    const bubbleAttachments = toBubbleAttachments(attachments)
+    const userBubble: UserChatBubble = {
+      content: trimmed,
+      type: 'user',
+      ...(pinnedSelection ? { selection: pinnedSelection } : {}),
+      ...(bubbleAttachments.length ? { attachments: bubbleAttachments } : {}),
+    }
     store.getState().addBubble(userBubble)
+
+    const payload = toAgentAttachments(attachments)
+    const running = activeRunRef.current
+    if (running) {
+      void loop.steer(trimmed, payload).then((steered) => {
+        if (!steered) void running.then(() => startRun(loop, trimmed, payload))
+      })
+      return
+    }
+    startRun(loop, trimmed, payload)
+  }
+
+  const startRun = (
+    loop: AgentLoopHandle,
+    message: string,
+    attachments?: AgentUserAttachments,
+  ) => {
     documentBash.beginRun()
-    agentLoopRef.current
-      .run(trimmed)
-      .catch((error: unknown) => {
+    const shared = documentRef.current
+    const turn = shared?.active
+      ? shared.startAgentTurn(agentCommitMessage(message))
+      : null
+    turnRef.current = turn
+    const promise = loop.run(message, attachments).then(
+      () => sessionManagerRef.current.onRunFinished(),
+      (error: unknown) => {
         if ((error as Error)?.name === 'AbortError') return
-        if (controller.signal.aborted) return
         const detail = error instanceof Error ? error.message : String(error)
         store.getState().addBubble({ message: detail, type: 'error' })
         store.getState().setStatus('idle')
-      })
-      .finally(() => {
-        if (fetchControllerRef.current === controller) {
-          fetchControllerRef.current = null
-          fetchSignalRef.current.current = null
-        }
-      })
+      },
+    )
+    activeRunRef.current = promise
+    void promise.then(() => {
+      if (activeRunRef.current === promise) activeRunRef.current = null
+      if (turn) {
+        turn.end()
+        if (turnRef.current === turn) turnRef.current = null
+      }
+    })
   }
 
   const reapplyBatch = (batchId: string) => {
@@ -291,7 +408,11 @@ export function useWriteAgent(opts: {
   // resolution. Applying ops to the document here as well double-applies
   // (or conflicts, since pending blocks are replaced by diff decorators).
   const acceptBatch = (batchId: string) => {
+    const batch = store
+      .getState()
+      .reviewState?.batches.find((item) => item.id === batchId)
     store.getState().acceptReviewBatch(batchId)
+    if (batch) registerDynamics(batch.entries.map((entry) => entry.op))
     toast.success(t('write.agent.toast.suggestionApplied'))
   }
 
@@ -352,6 +473,7 @@ export function useWriteAgent(opts: {
   return {
     abort,
     acceptBatch,
+    addEmbedFile: documentBash.addEmbedFile,
     activeSessionId: sessionManager.activeSessionId,
     agentReady,
     createSession: sessionManager.createSession,
@@ -362,10 +484,8 @@ export function useWriteAgent(opts: {
     loadSessionsError: sessionManager.loadError,
     onAgentLoopReady,
     onEditorReady,
-    provider,
+    agentRuntime,
     documentBashTool: documentBash.tool,
-    dynamicTools,
-    publishDynamic,
     providerGroups,
     reapplyBatch,
     reapplyToolGroup,
@@ -379,4 +499,9 @@ export function useWriteAgent(opts: {
     store,
     switchSession: sessionManager.switchSession,
   }
+}
+
+function describeFirstParam(params: Record<string, unknown>) {
+  const first = Object.values(params)[0]
+  return first === undefined ? undefined : String(first).slice(0, 40)
 }

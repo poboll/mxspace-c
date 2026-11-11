@@ -1,3 +1,4 @@
+import { canonicalizeLanguageTag, isKnownLanguageTag } from '@mx-space/ai'
 import { z } from 'zod'
 
 import { zAllowedUrl } from '~/common/zod'
@@ -374,6 +375,49 @@ export const TtsOptionsSchema = section('AI text to speech', {
 })
 
 // ==================== Comment Upload Options ====================
+export const DraftCleanupOptionsSchema = section('Draft cleanup', {
+  enable: field.toggle(
+    z.boolean().optional(),
+    'Clean up drafts automatically',
+    {
+      description:
+        'Runs daily at 04:00 with the same rules as the manual cleanup on the drafts page. Drafts with unpublished changes are never deleted.',
+    },
+  ),
+  olderThanDays: field.number(
+    z.preprocess(
+      (val) => (val ? Number(val) : val),
+      z.number().int().min(7).max(3650).optional(),
+    ),
+    'Only touch content idle for (days)',
+    { 'ui:options': { halfGrid: true }, description: 'Minimum 7. Default 30' },
+  ),
+  deleteInSyncDrafts: field.toggle(
+    z.boolean().optional(),
+    'Delete drafts identical to the published version',
+  ),
+  pruneRevisions: field.toggle(
+    z.boolean().optional(),
+    'Delete old intermediate versions',
+    {
+      description:
+        'Keeps the current content, published versions, shared versions and each draft base',
+    },
+  ),
+  compactCrdt: field.toggle(
+    z.boolean().optional(),
+    'Compact idle collaborative documents',
+    {
+      description:
+        'Rebuilds idle documents from their current content; step-by-step history is dropped',
+    },
+  ),
+  removeOrphanCrdt: field.toggle(
+    z.boolean().optional(),
+    'Remove orphaned collaborative data',
+  ),
+})
+
 export const CommentUploadOptionsSchema = section('Comment image uploads', {
   enable: field.toggle(
     z.boolean().optional(),
@@ -509,9 +553,67 @@ export const FileUploadOptionsSchema = section('File upload settings', {
     {
       'ui:options': { halfGrid: true },
       description:
-        'Default 100. Applies to local-disk storage only; S3 storage uploads are unlimited',
+        'Default 100. S3 storage uploads are unlimited unless video WebM conversion is enabled',
     },
   ),
+})
+
+const optionalInt = (min: number, max?: number) =>
+  z.preprocess(
+    (val) => (val === '' || val == null ? undefined : Number(val)),
+    (max === undefined
+      ? z.number().int().min(min)
+      : z.number().int().min(min).max(max)
+    ).optional(),
+  )
+
+// ==================== Media Processing ====================
+export const MediaProcessingOptionsSchema = section('Media processing', {
+  imageToWebp: field.toggle(z.boolean().optional(), 'Convert images to WebP', {
+    description:
+      'Uploaded images are re-encoded as WebP before storage. SVG and WebP are kept as-is',
+  }),
+  imageQuality: field.number(optionalInt(1, 100), 'WebP quality', {
+    description: '1-100, default 80. Ignored in lossless mode',
+    'ui:options': { halfGrid: true },
+  }),
+  imageEffort: field.number(optionalInt(0, 6), 'WebP effort', {
+    description: '0-6, default 4. Higher is smaller but slower',
+    'ui:options': { halfGrid: true },
+  }),
+  imageLossless: field.toggle(z.boolean().optional(), 'Lossless WebP'),
+  imageKeepMetadata: field.toggle(
+    z.boolean().optional(),
+    'Keep image metadata',
+    {
+      description:
+        'Carry EXIF (camera, lens, capture time, GPS) and the ICC color profile into the WebP output',
+    },
+  ),
+  imageMaxDimension: field.number(optionalInt(1), 'Max image edge (px)', {
+    description: 'Longest edge is scaled down to this; empty keeps the size',
+    'ui:options': { halfGrid: true },
+  }),
+  videoToWebm: field.toggle(z.boolean().optional(), 'Convert videos to WebM', {
+    description:
+      'Uploaded videos are transcoded to WebM (VP9 + Opus) with ffmpeg before storage. The upload waits for the transcode; S3 uploads are then capped by the video size limit',
+  }),
+  videoCrf: field.number(optionalInt(0, 63), 'VP9 CRF', {
+    description: '0-63, default 32. Lower is better quality and larger',
+    'ui:options': { halfGrid: true },
+  }),
+  videoCpuUsed: field.number(optionalInt(0, 8), 'VP9 speed (cpu-used)', {
+    description: '0-8, default 4. Higher is faster with lower quality',
+    'ui:options': { halfGrid: true },
+  }),
+  videoAudioBitrate: field.number(optionalInt(8, 512), 'Opus bitrate (kbps)', {
+    description: 'Default 128',
+    'ui:options': { halfGrid: true },
+  }),
+  videoMaxHeight: field.number(optionalInt(2), 'Max video height (px)', {
+    description: 'Taller videos are scaled down; empty keeps the size',
+    'ui:options': { halfGrid: true },
+  }),
 })
 
 // ==================== Baidu Search Options ====================
@@ -797,7 +899,7 @@ const AIProviderConfigSchema = withMeta(
     type: field.plain(z.enum(AIProviderType), 'Provider type', {
       description: 'openai | openai-compatible | anthropic | openrouter',
     }),
-    apiKey: field.password(z.string().min(1), 'API Key'),
+    apiKey: field.password(z.string().default(''), 'API Key'),
     endpoint: field.plain(z.string().optional(), 'Custom endpoint', {
       description:
         'Required for OpenAI-compatible services, e.g. https://api.deepseek.com',
@@ -847,7 +949,15 @@ const AIProviderConfigSchema = withMeta(
     ),
   }),
   { title: 'AI provider configuration', 'ui:options': { type: 'hidden' } },
-)
+).superRefine((provider, ctx) => {
+  if (provider.type !== AIProviderType.LobeHub && !provider.apiKey) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['apiKey'],
+      message: 'API Key is required',
+    })
+  }
+})
 
 const AIModelAssignmentSchema = withMeta(
   z.object({
@@ -909,6 +1019,29 @@ const AITtsFeatureSchema = withMeta(
   { title: 'AI text to speech feature', 'ui:options': { type: 'hidden' } },
 )
 
+const languageTagList = () =>
+  z
+    .preprocess(
+      (value) =>
+        Array.isArray(value)
+          ? [
+              ...new Set(
+                value.map((tag) =>
+                  typeof tag === 'string'
+                    ? (canonicalizeLanguageTag(tag) ?? tag)
+                    : tag,
+                ),
+              ),
+            ]
+          : value,
+      z.array(
+        z.string().refine(isKnownLanguageTag, {
+          error: 'invalid BCP 47 language tag',
+        }),
+      ),
+    )
+    .optional()
+
 export const AISchema = section('AI settings', {
   version: z.literal(2).optional().default(2),
   providers: field.array(
@@ -933,11 +1066,11 @@ export const AISchema = section('AI settings', {
     description: 'Whether to allow calling AI to generate summaries',
   }),
   summaryTargetLanguages: field.array(
-    z.array(z.string()).optional(),
+    languageTagList(),
     'AI summary target languages',
     {
       description:
-        'Target languages for auto-generated summaries, using [ISO 639-1 language codes](https://www.w3schools.com/tags/ref_language_codes.asp), e.g. ["zh", "en", "ja"]',
+        'Target languages for auto-generated summaries, using BCP 47 language-region tags, e.g. ["zh-CN", "zh-TW", "en-US", "ja-JP"]',
     },
   ),
   translationModel: field.plain(
@@ -961,11 +1094,11 @@ export const AISchema = section('AI settings', {
     },
   ),
   translationTargetLanguages: field.array(
-    z.array(z.string()).optional(),
+    languageTagList(),
     'AI translation target languages',
     {
       description:
-        'Target languages for auto-generated translations, using [ISO 639-1 language codes](https://www.w3schools.com/tags/ref_language_codes.asp), e.g. ["en", "ja", "ko"]',
+        'Target languages for auto-generated translations, using BCP 47 language-region tags, e.g. ["en-US", "ja-JP", "zh-TW"]',
     },
   ),
   translationLangConcurrency: field.number(
@@ -1031,11 +1164,11 @@ export const AISchema = section('AI settings', {
     },
   ),
   insightsTargetLanguages: field.array(
-    z.array(z.string()).optional(),
+    languageTagList(),
     'Insights target languages',
     {
       description:
-        'ISO 639-1 list; the source language is automatically excluded',
+        'BCP 47 language-region tags; the source language is automatically excluded',
     },
   ),
   imageGeneration: AIImageGenerationFeatureSchema.optional(),
@@ -1139,7 +1272,9 @@ export const configSchemaMapping = {
   imageGenerationOptions: ImageGenerationOptionsSchema,
   ttsOptions: TtsOptionsSchema,
   fileUploadOptions: FileUploadOptionsSchema,
+  mediaProcessingOptions: MediaProcessingOptionsSchema,
   commentUploadOptions: CommentUploadOptionsSchema,
+  draftCleanupOptions: DraftCleanupOptionsSchema,
   baiduSearchOptions: BaiduSearchOptionsSchema,
   bingSearchOptions: BingSearchOptionsSchema,
   featureList: FeatureListSchema,

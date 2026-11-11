@@ -1,9 +1,11 @@
+import { canonicalizeLanguageTag } from '@mx-space/ai'
 import { forwardRef, Inject, Injectable, Logger } from '@nestjs/common'
 import { OnEvent } from '@nestjs/event-emitter'
 
 import { RequestContext } from '~/common/contexts/request.context'
 import { BusinessEvents } from '~/constants/business-event.constant'
 import { POST_SERVICE_TOKEN } from '~/constants/injection.constant'
+import { resolveServedLanguage } from '~/modules/ai/ai-language.util'
 import { AiTranslationRepository } from '~/modules/ai/ai-translation/ai-translation.repository'
 import type { AiTranslationRow } from '~/modules/ai/ai-translation/ai-translation.types'
 import type { SearchDto } from '~/modules/search/search.schema'
@@ -15,6 +17,7 @@ import {
 } from '~/processors/helper/lexical-truncate.util'
 import { AsyncQueue } from '~/utils/queue.util'
 
+import { ConfigsService } from '../configs/configs.service'
 import { NoteService } from '../note/note.service'
 import { PageService } from '../page/page.service'
 import type { PostService } from '../post/post.service'
@@ -116,6 +119,8 @@ export class SearchService {
 
     @Inject(forwardRef(() => AiTranslationRepository))
     private readonly aiTranslationRepository: AiTranslationRepository,
+
+    private readonly configService: ConfigsService,
   ) {}
 
   private toPublicArticleFields<T extends Record<string, any>>(article: T): T {
@@ -127,8 +132,11 @@ export class SearchService {
     }
   }
 
-  async search(searchOption: SearchDto) {
-    return this.searchIndex(searchOption, undefined)
+  async search(
+    searchOption: SearchDto,
+    options?: { asAdmin?: boolean; refType?: SearchDocumentRefType },
+  ) {
+    return this.searchIndex(searchOption, options?.refType, options?.asAdmin)
   }
 
   async searchNote(searchOption: SearchDto) {
@@ -523,7 +531,9 @@ export class SearchService {
     const translations = await this.aiTranslationRepository.listByRefIds(refIds)
     for (const t of translations) {
       // any translation row carries the canonical sourceLang of the article.
-      if (!out.has(t.refId)) out.set(t.refId, t.sourceLang)
+      if (!out.has(t.refId)) {
+        out.set(t.refId, canonicalizeLanguageTag(t.sourceLang) ?? t.sourceLang)
+      }
     }
     return out
   }
@@ -554,7 +564,7 @@ export class SearchService {
       }
     }
 
-    if (!lang) lang = SEARCH_DOCUMENT_DEFAULT_SOURCE_LANG
+    lang = canonicalizeLanguageTag(lang) ?? SEARCH_DOCUMENT_DEFAULT_SOURCE_LANG
 
     this.cacheSourceLang(refId, lang)
     return lang
@@ -575,8 +585,9 @@ export class SearchService {
   private async searchIndex(
     searchOption: SearchDto,
     refType: SearchDocumentRefType | undefined,
+    asAdmin?: boolean,
   ): Promise<PaginationResult<any>> {
-    const hasAdminAccess = RequestContext.hasAdminAccess()
+    const hasAdminAccess = asAdmin ?? RequestContext.hasAdminAccess()
     const { keyword, page, size } = searchOption
     const searchTerms = this.buildSearchTerms(keyword)
     const highlightKeywordFragments =
@@ -587,7 +598,7 @@ export class SearchService {
       Math.max(size * page * SEARCH_CANDIDATE_MULTIPLIER, size * 4),
     )
 
-    const effectiveLang = this.resolveEffectiveLang(searchOption.lang)
+    const effectiveLang = await this.resolveEffectiveLang(searchOption.lang)
 
     const mainHits = await this.searchInLang({
       lang: effectiveLang,
@@ -718,11 +729,16 @@ export class SearchService {
     )
   }
 
-  private resolveEffectiveLang(explicitLang?: string) {
-    const trim = (s: string | undefined) => s?.trim().toLowerCase() || undefined
+  // Search documents exist only under served tags, so `en-GB` has to resolve
+  // to the configured `en-US` before the exact `lang` equality lookups.
+  private async resolveEffectiveLang(explicitLang?: string) {
+    const requested =
+      canonicalizeLanguageTag(explicitLang) ??
+      canonicalizeLanguageTag(RequestContext.currentLang())
+    if (!requested) return SEARCH_DOCUMENT_DEFAULT_SOURCE_LANG
+    const aiConfig = await this.configService.get('ai')
     return (
-      trim(explicitLang) ??
-      trim(RequestContext.currentLang()) ??
+      resolveServedLanguage(requested, aiConfig?.translationTargetLanguages) ??
       SEARCH_DOCUMENT_DEFAULT_SOURCE_LANG
     )
   }

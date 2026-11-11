@@ -295,6 +295,62 @@
       "when": 1790877150039,
       "tag": "0041_publish_ai_resources",
       "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "7",
+      "when": 1792900000000,
+      "tag": "0042_agent_transcript",
+      "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "7",
+      "when": 1792950000000,
+      "tag": "0043_loro_content_storage",
+      "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "7",
+      "when": 1793000000000,
+      "tag": "0044_content_collaborators",
+      "breakpoints": true
+    },
+    {
+      "idx": 45,
+      "version": "7",
+      "when": 1793050000000,
+      "tag": "0045_collaborator_removed_at",
+      "breakpoints": true
+    },
+    {
+      "idx": 46,
+      "version": "7",
+      "when": 1793100000000,
+      "tag": "0046_draft_cleanup",
+      "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "7",
+      "when": 1793150000000,
+      "tag": "0047_language_tag_bcp47",
+      "breakpoints": true
+    },
+    {
+      "idx": 48,
+      "version": "7",
+      "when": 1793984466102,
+      "tag": "0048_agent_conversation_rebuild",
+      "breakpoints": true
+    },
+    {
+      "idx": 49,
+      "version": "7",
+      "when": 1794100000000,
+      "tag": "0049_file_reference_asset",
+      "breakpoints": true
     }
   ]
 }

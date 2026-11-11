@@ -20,11 +20,50 @@ export interface RevisionSnapshot {
   typeSpecificData: TypeSpecificData | null
 }
 
+export interface CrdtOpId {
+  counter: number
+  peer: `${number}`
+}
+
+export type CheckpointKind =
+  'import' | 'legacy-save' | 'publish' | 'restore' | 'save' | 'undo'
+
 export interface ContentRevision extends RevisionSnapshot {
   createdAt: string
   documentId: string
+  frontiers?: CrdtOpId[] | null
   id: string
+  kind?: CheckpointKind | null
   parentRevisionId: string | null
+}
+
+export type DraftCheckpoint = Pick<
+  ContentRevision,
+  | 'contentFormat'
+  | 'createdAt'
+  | 'frontiers'
+  | 'id'
+  | 'kind'
+  | 'parentRevisionId'
+  | 'title'
+>
+
+export interface DraftChange {
+  deps: CrdtOpId[]
+  id: CrdtOpId
+  lamport: number
+  message?: string
+  timestamp: number
+}
+
+export interface DraftHistory {
+  changes: DraftChange[]
+  checkpoints: DraftCheckpoint[]
+}
+
+export interface DraftFields {
+  meta: Record<string, unknown> | null
+  typeSpecificData: Record<string, unknown> | null
 }
 
 export interface ContentDocument {
@@ -51,6 +90,96 @@ export interface DraftModel {
   relationToPublished: RevisionRelation | null
   status: 'active' | 'archived'
   updatedAt: string | null
+}
+
+export type DraftRelation = 'ahead' | 'fresh' | 'in_sync'
+
+export interface DraftCard {
+  baseRevisionId: string
+  createdAt: string
+  document: Pick<
+    ContentDocument,
+    'id' | 'publishedRevisionId' | 'refId' | 'refType'
+  >
+  documentId: string
+  headRevision: Pick<
+    ContentRevision,
+    'contentFormat' | 'createdAt' | 'id' | 'title'
+  >
+  headRevisionId: string
+  id: string
+  relation: DraftRelation
+  status: 'active' | 'archived'
+  storage: { crdtBytes: number; revisionBytes: number; revisionCount: number }
+  updatedAt: string | null
+}
+
+export interface DraftStorageSummary {
+  crdt: { bytes: number; count: number }
+  reclaimableBytes: number
+  relations: { ahead: number; fresh: number; inSync: number }
+  revisions: { bytes: number; count: number }
+  updates: { bytes: number; count: number }
+}
+
+export type CleanupCategory = 'A' | 'B' | 'C' | 'D' | 'E'
+
+export interface CleanupDraftCandidate {
+  bytes: number
+  documentId: string
+  draftId: string
+  title: string
+}
+
+export interface CleanupPreview {
+  archived: CleanupDraftCandidate[]
+  categories: Record<CleanupCategory, { bytes: number; count: number }>
+  inSync: CleanupDraftCandidate[]
+  olderThanDays: number
+  testDrafts: CleanupDraftCandidate[]
+}
+
+export interface FreedTotals {
+  bytes: number
+  crdtDocs: number
+  drafts: number
+  revisions: number
+}
+
+export interface CleanupResult {
+  freed: FreedTotals
+  skipped: string[]
+}
+
+export interface CompactPreview {
+  crdtBytes: number
+  revisionBytes: number
+  revisionIds: string[]
+}
+
+export interface OrganizerArticle {
+  bytes: number
+  documentId: string
+  draftCount: number
+  hasChanges: boolean
+  lastEditedAt: string
+  refType: DraftRefType
+  revisionCount: number
+  title: string
+  version: string
+}
+
+export type OrganizerSkipReason =
+  'changed' | 'editing' | 'publishing' | 'unconfirmed' | 'failed'
+
+export interface OrganizerResult {
+  freed: FreedTotals
+  organized: number
+  skipped: { documentId: string; reason: OrganizerSkipReason; title: string }[]
+}
+
+export interface OrganizerRunResult extends OrganizerResult {
+  unverified: OrganizerArticle[]
 }
 
 export type DraftShareMode = 'follow' | 'pinned'

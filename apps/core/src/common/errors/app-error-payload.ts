@@ -128,6 +128,27 @@ export type AppErrorPayloadMap = {
     documentId: string
     expectedPublishedRevisionId: string | null
   }
+  [AppErrorCode.DRAFT_CRDT_UPDATE_REJECTED]: {
+    branchId: string
+    reason: string
+  }
+  [AppErrorCode.DRAFT_CRDT_FORMAT_UNSUPPORTED]: {
+    branchId: string
+    contentFormat: string
+  }
+  [AppErrorCode.DRAFT_PUBLISH_PENDING]: {
+    documentId: string
+  }
+  [AppErrorCode.DRAFT_CRDT_STALE]: {
+    documentId: string
+  }
+  [AppErrorCode.DRAFT_CLEANUP_CONFLICT]: {
+    documentId: string
+  }
+  [AppErrorCode.COLLAB_INVITE_INVALID]: {
+    reason: 'exhausted' | 'expired' | 'not_found' | 'revoked'
+  }
+  [AppErrorCode.COLLAB_FORBIDDEN]: undefined
 
   // document / helper
   [AppErrorCode.DOCUMENT_NOT_FOUND]: WithId
@@ -152,6 +173,7 @@ export type AppErrorPayloadMap = {
   [AppErrorCode.FILE_UPLOAD_NOT_AUTHORIZED]: undefined
   [AppErrorCode.FILE_REQUIRED]: undefined
   [AppErrorCode.MIME_ZIP_REQUIRED]: { got?: string } | undefined
+  [AppErrorCode.MEDIA_TRANSCODE_FAILED]: { reason?: string } | undefined
 
   // init
   [AppErrorCode.INIT_ALREADY_COMPLETED]: undefined

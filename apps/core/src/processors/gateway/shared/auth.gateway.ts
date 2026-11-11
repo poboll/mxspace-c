@@ -30,6 +30,14 @@ export const createAuthGateway = (options: AuthGatewayOptions) => {
       super(namespace, bus, presence)
     }
 
+    private roleGeneration = 0
+    private readonly authenticated = new WeakSet<WsConnection>()
+
+    // Message handlers run as soon as the socket is tracked, before the auth lookup settles,
+    // and keep running while a rejected socket is closing.
+    protected isAuthenticated(conn: WsConnection) {
+      return this.authenticated.has(conn)
+    }
     tokenSocketIdMap = new Map<string, Set<string>>()
     private readonly socketIdTokenMap = new Map<string, string>()
 
@@ -50,25 +58,32 @@ export const createAuthGateway = (options: AuthGatewayOptions) => {
     }
 
     authFailed(conn: WsConnection) {
+      this.authenticated.delete(conn)
       this.sendTo(conn, BusinessEvents.AUTH_FAILED, 'Authentication failed')
       conn.ws.close(AUTH_FAILED_CLOSE_CODE, 'auth failed')
     }
 
     async handleConnection(ws: WebSocket, request: IncomingMessage) {
+      const generation = this.roleGeneration
       const conn = this.trackConnection(ws)
       await this.presence.addConnection(namespace, conn.id)
 
-      const { cookie, origin } = request.headers
-      if (cookie) {
+      const { cookie, origin, authorization } = request.headers
+      if (cookie || authorization) {
         const headers = new Headers()
-        headers.set('cookie', cookie)
+        if (cookie) headers.set('cookie', cookie)
+        if (authorization) headers.set('authorization', authorization)
         if (origin) {
           headers.set('origin', origin)
         }
         const session =
           await this.authService.getSessionUserFromHeaders(headers)
         if (session?.user?.role === 'owner') {
-          return this.completeConnection(conn, session.session?.token)
+          return this.completeConnection(
+            conn,
+            session.session?.token,
+            generation,
+          )
         }
       }
 
@@ -76,8 +91,7 @@ export const createAuthGateway = (options: AuthGatewayOptions) => {
       const headerAuthorization = request.headers.authorization
       const apiKey =
         (Array.isArray(headerApiKey) ? headerApiKey[0] : headerApiKey) ||
-        headerAuthorization ||
-        queryToken(request)
+        headerAuthorization
       if (!apiKey) {
         return this.authFailed(conn)
       }
@@ -91,13 +105,19 @@ export const createAuthGateway = (options: AuthGatewayOptions) => {
         return this.authFailed(conn)
       }
 
-      this.completeConnection(conn, result.id)
+      this.completeConnection(conn, result.id, generation)
     }
 
     // A close during the auth lookups already unbound this connection; binding
     // now would strand the token entry, since nothing unbinds it again.
-    private completeConnection(conn: WsConnection, token?: string) {
+    private completeConnection(
+      conn: WsConnection,
+      token: string | undefined,
+      generation: number,
+    ) {
       if (!this.resolveConnection(conn.ws)) return
+      if (generation !== this.roleGeneration) return this.authFailed(conn)
+      this.authenticated.add(conn)
       this.sendConnectGreeting(conn)
       if (token) this.bindToken(token, conn)
     }
@@ -122,7 +142,28 @@ export const createAuthGateway = (options: AuthGatewayOptions) => {
       return closed
     }
 
+    @OnEvent(EventBusEvents.OwnerRolesChanged)
+    handleOwnerRolesChanged() {
+      this.closeForRoleChange()
+      this.bus.publish({
+        ns: this.namespace,
+        event: EventBusEvents.OwnerRolesChanged,
+      })
+    }
+
+    private closeForRoleChange() {
+      this.roleGeneration++
+      for (const conn of this.registry.all()) {
+        this.authFailed(conn)
+        void this.handleDisconnect(conn.ws)
+      }
+    }
+
     protected override deliverLocal(frame: WsBusFrame) {
+      if (frame.event === EventBusEvents.OwnerRolesChanged) {
+        this.closeForRoleChange()
+        return
+      }
       if (
         frame.event === EventBusEvents.TokenExpired &&
         typeof frame.payload === 'string'
@@ -148,15 +189,4 @@ export const createAuthGateway = (options: AuthGatewayOptions) => {
   }
 
   return AuthGateway
-}
-
-function queryToken(request: IncomingMessage): string | undefined {
-  try {
-    return (
-      new URL(request.url ?? '', 'ws://localhost').searchParams.get('token') ??
-      undefined
-    )
-  } catch {
-    return undefined
-  }
 }

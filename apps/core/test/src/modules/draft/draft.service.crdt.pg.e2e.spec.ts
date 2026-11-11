@@ -1,0 +1,517 @@
+import { createLoroBinding } from '@haklex/rich-collab-loro'
+import { allHeadlessNodes } from '@haklex/rich-headless'
+import { createHeadlessEditor } from '@lexical/headless'
+import { SnowflakeGenerator } from '@mx-space/db-schema/id'
+import * as schema from '@mx-space/db-schema/schema'
+import { sql } from 'drizzle-orm'
+import { drizzle } from 'drizzle-orm/node-postgres'
+import { $getRoot, $getState, $setState, createState } from 'lexical'
+import { LoroDoc } from 'loro-crdt'
+import { Pool } from 'pg'
+import { createIsolatedPgDatabase } from 'test/helper/pg-testcontainer'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+
+import { AppErrorCode } from '~/common/errors/app-error-code'
+import { BusinessEvents } from '~/constants/business-event.constant'
+import { DraftRefType } from '~/modules/draft/draft.enum'
+import { DraftRepository } from '~/modules/draft/draft.repository'
+import { DraftService } from '~/modules/draft/draft.service'
+import type { RevisionSnapshot } from '~/modules/draft/draft.types'
+import { DraftCleanupRepository } from '~/modules/draft/draft-cleanup.repository'
+import { DraftCleanupService } from '~/modules/draft/draft-cleanup.service'
+import { editDocAt } from '~/modules/draft/draft-crdt.doc'
+import { DraftCrdtRepository } from '~/modules/draft/draft-crdt.repository'
+import { DraftCrdtService } from '~/modules/draft/draft-crdt.service'
+import { DraftOrganizerRepository } from '~/modules/draft/draft-organizer.repository'
+import { DraftStorageRepository } from '~/modules/draft/draft-storage.repository'
+import type { AppDatabase } from '~/processors/database/postgres.provider'
+import type { SnowflakeService } from '~/shared/id/snowflake.service'
+
+const body = (...values: string[]) =>
+  JSON.stringify({
+    root: {
+      children: values.map((value) => ({
+        children: [
+          {
+            detail: 0,
+            format: 0,
+            mode: 'normal',
+            style: '',
+            text: value,
+            type: 'text',
+            version: 1,
+          },
+        ],
+        direction: null,
+        format: '',
+        indent: 0,
+        textFormat: 0,
+        textStyle: '',
+        type: 'paragraph',
+        version: 1,
+      })),
+      direction: null,
+      format: '',
+      indent: 0,
+      type: 'root',
+      version: 1,
+    },
+  })
+
+const texts = (content: string | null) =>
+  (
+    JSON.parse(content!) as {
+      root: { children: { children: { text: string }[] }[] }
+    }
+  ).root.children.map((child) => child.children.map((t) => t.text).join(''))
+
+const lexical = (title: string, values: string[]): RevisionSnapshot => ({
+  content: body(...values),
+  contentFormat: 'lexical',
+  images: null,
+  meta: null,
+  text: values.join('\n\n'),
+  title,
+  typeSpecificData: { slug: 's' },
+})
+
+const blockIdState = createState('blockId', {
+  parse: (value: unknown) => (typeof value === 'string' ? value : ''),
+})
+
+const blockIds = (content: string | null) =>
+  (
+    JSON.parse(content!) as {
+      root: { children: { $?: { blockId?: string } }[] }
+    }
+  ).root.children.map((child) => child.$?.blockId)
+
+const markdown = (title: string): RevisionSnapshot => ({
+  content: null,
+  contentFormat: 'markdown',
+  images: null,
+  meta: null,
+  text: title,
+  title,
+  typeSpecificData: null,
+})
+
+describe('DraftService on the Loro path (real PG)', () => {
+  let pool: Pool
+  let database: Awaited<ReturnType<typeof createIsolatedPgDatabase>>
+  let drafts: DraftRepository
+  let crdtRepository: DraftCrdtRepository
+  let storage: DraftStorageRepository
+  let organizer: DraftOrganizerRepository
+  let db: AppDatabase
+  let service: DraftService
+  let refCounter = 7_100_000_000_000_000_000n
+  const emit = vi.fn()
+  const fileReferences = {
+    removeReferencesForDocument: vi.fn(),
+    updateReferencesForDocument: vi.fn(),
+  }
+
+  const seed = async (published: RevisionSnapshot) => {
+    const refId = String(refCounter++)
+    const { document, revision } = await drafts.createDocumentWithRoot(
+      DraftRefType.Post,
+      refId,
+      published,
+      true,
+    )
+    const { branch } = await drafts.createBranch(
+      document.id,
+      revision.id,
+      published,
+      true,
+    )
+    return { branch, document, published: revision, refId }
+  }
+
+  const seedPage = async (published: RevisionSnapshot) => {
+    const refId = String(refCounter++)
+    await db.execute(sql`
+      insert into pages (id, title, slug, text, content_format)
+      values (${refId}, ${published.title}, ${refId}, ${published.text}, 'lexical')
+    `)
+    const { document, revision } = await drafts.createDocumentWithRoot(
+      DraftRefType.Page,
+      refId,
+      published,
+      true,
+    )
+    const { branch } = await drafts.createBranch(
+      document.id,
+      revision.id,
+      published,
+      true,
+    )
+    return { branch, document, published: revision }
+  }
+
+  const openInEditor = async (branchId: string) => {
+    await service.findForEditing(branchId)
+    const tab = new LoroDoc()
+    tab.import(await service.exportCrdt(branchId))
+    const from = tab.oplogVersion()
+    const editor = createHeadlessEditor({
+      nodes: allHeadlessNodes,
+      onError: (error) => {
+        throw error
+      },
+    })
+    const binding = createLoroBinding(editor, tab, {
+      commitMessage: 'human:owner',
+    })
+    editor.update(
+      () => {
+        const used = new Set<string>()
+        for (const child of $getRoot().getChildren()) {
+          let id = $getState(child, blockIdState)
+          if (!id || used.has(id)) {
+            id = `client-${used.size}`
+            $setState(child, blockIdState, id)
+          }
+          used.add(id)
+        }
+      },
+      { discrete: true },
+    )
+    binding.dispose()
+    const emitted = tab.oplogVersion().compare(from) !== 0
+    if (emitted) {
+      await service.importCrdt(branchId, tab.export({ from, mode: 'update' }))
+    }
+    return { emitted, tab }
+  }
+
+  const type = async (branchId: string, tab: LoroDoc, values: string[]) => {
+    const from = tab.oplogVersion()
+    tab.import(
+      editDocAt(
+        tab,
+        tab.frontiers(),
+        { content: body(...values), title: 'Pub' },
+        'human:owner',
+      ),
+    )
+    await service.importCrdt(branchId, tab.export({ from, mode: 'update' }))
+  }
+
+  const relationOf = async (branchId: string) => {
+    const view = await service.findById(branchId)
+    const page = await storage.cards(1, 50, {})
+    const [candidate] = await organizer.candidates(
+      { olderThanDays: 0 },
+      undefined,
+      String(view!.documentId),
+    )
+    return {
+      card: page.data.find((card) => card.id === branchId)?.relation,
+      hasChanges: candidate?.hasChanges,
+      view: view?.relationToPublished,
+    }
+  }
+
+  const inSync = { card: 'in_sync', hasChanges: false, view: 'same' }
+  const ahead = { card: 'ahead', hasChanges: true, view: 'ancestor' }
+
+  beforeAll(async () => {
+    database = await createIsolatedPgDatabase()
+    pool = new Pool({ connectionString: database.getConnectionUri(), max: 6 })
+    db = drizzle(pool, { schema }) as unknown as AppDatabase
+    const snowflake = new SnowflakeGenerator({
+      workerId: 46,
+    }) as SnowflakeService
+    drafts = new DraftRepository(db, snowflake)
+    crdtRepository = new DraftCrdtRepository(db, snowflake)
+    const crdt = new DraftCrdtService(
+      drafts,
+      crdtRepository,
+      fileReferences as never,
+    )
+    storage = new DraftStorageRepository(db)
+    organizer = new DraftOrganizerRepository(db)
+    const cleanup = new DraftCleanupService(
+      drafts,
+      crdt,
+      new DraftCleanupRepository(db),
+      storage,
+      fileReferences as never,
+      { getTasks: async () => ({ data: [] }) } as never,
+      organizer,
+      { roomHasMembers: async () => false } as never,
+    )
+    service = new DraftService(
+      drafts,
+      fileReferences as never,
+      {} as never,
+      { emit } as never,
+      crdt,
+      cleanup,
+      storage,
+    )
+  }, 120_000)
+
+  afterAll(async () => {
+    await pool?.end()
+    await database?.drop()
+  })
+
+  it('never conflicts on a stale PUT and returns the write’s own checkpoint', async () => {
+    const { branch, published } = await seed(lexical('Pub', ['a', 'b']))
+    await service.update(branch.id, {
+      data: lexical('Pub', ['a', 'b owner']),
+      expectedHeadRevisionId: published.id,
+    } as never)
+
+    const view = await service.update(branch.id, {
+      data: lexical('Pub', ['a cli', 'b']),
+      expectedHeadRevisionId: published.id,
+    } as never)
+
+    expect(texts(view.headRevision.content)).toEqual(['a cli', 'b'])
+    const stored = await drafts.findBranchById(view.id)
+    const head = await drafts.findRevisionById(stored!.headRevisionId)
+    expect(texts(head!.content)).toEqual(['a cli', 'b owner'])
+    expect(emit).toHaveBeenCalledWith(
+      BusinessEvents.DRAFT_UPDATE,
+      expect.objectContaining({ headRevisionId: stored!.headRevisionId }),
+      expect.anything(),
+    )
+  })
+
+  it('writes a CLI save against the published base into the working copy', async () => {
+    const { branch, published, refId } = await seed(lexical('Pub', ['a']))
+
+    const view = await service.create({
+      baseRevisionId: published.id,
+      data: lexical('Pub', ['a', 'cli']),
+      refId,
+      refType: DraftRefType.Post,
+    } as never)
+
+    expect(view.id).toBe(branch.id)
+    expect(texts(view.headRevision.content)).toEqual(['a', 'cli'])
+    expect(await drafts.findBranchesByDocument(branch.documentId)).toHaveLength(
+      1,
+    )
+  })
+
+  it('keeps the branch flow and its conflicts for Markdown documents', async () => {
+    const { branch, published } = await seed(markdown('Md'))
+    await service.update(branch.id, {
+      data: markdown('Md 2'),
+      expectedHeadRevisionId: published.id,
+    } as never)
+
+    await expect(
+      service.update(branch.id, {
+        data: markdown('Md 3'),
+        expectedHeadRevisionId: published.id,
+      } as never),
+    ).rejects.toMatchObject({ code: AppErrorCode.DRAFT_HEAD_CONFLICT })
+  })
+
+  it('reads Lexical context without importing or retiring draft branches', async () => {
+    const { document, published, refId } = await seed(lexical('Pub', ['a']))
+    await drafts.createBranch(
+      document.id,
+      published.id,
+      lexical('Other', ['o']),
+      false,
+    )
+
+    const before = await storage.totals()
+    const context = await service.getContext(DraftRefType.Post, refId)
+
+    expect(context.branches).toHaveLength(2)
+    expect(await storage.totals()).toEqual(before)
+    expect(await crdtRepository.findDoc(document.id)).toBeNull()
+  })
+
+  it('does not recreate a deleted draft when its context is refreshed', async () => {
+    const { branch, document, published, refId } = await seed(
+      lexical('Pub', ['a']),
+    )
+    await service.findForEditing(branch.id)
+    await service.delete(branch.id)
+    const afterDelete = await storage.totals()
+
+    const context = await service.getContext(DraftRefType.Post, refId)
+
+    expect(context.branches).toEqual([])
+    expect(context.publishedRevision?.id).toBe(published.id)
+    expect(await crdtRepository.findDoc(document.id)).toBeNull()
+    expect(await storage.totals()).toEqual(afterDelete)
+  })
+
+  it('previews a Lexical draft without creating collaboration data or checkpoints', async () => {
+    const { branch, document } = await seed(lexical('Pub', ['a']))
+    const before = await storage.totals()
+
+    const view = await service.findById(branch.id)
+
+    expect(view?.headRevisionId).toBe(branch.headRevisionId)
+    expect(await crdtRepository.findDoc(document.id)).toBeNull()
+    expect(await storage.totals()).toEqual(before)
+  })
+
+  it('collapses a Lexical document to one branch when opened for editing', async () => {
+    const { branch, document, published } = await seed(lexical('Pub', ['a']))
+    await drafts.createBranch(
+      document.id,
+      published.id,
+      lexical('Other', ['o']),
+      false,
+    )
+
+    const view = await service.findForEditing(branch.id)
+
+    expect(await drafts.findBranchesByDocument(document.id)).toHaveLength(1)
+    expect(view?.headRevision.frontiers).not.toBeNull()
+    expect(await crdtRepository.findDoc(document.id)).not.toBeNull()
+  })
+
+  it('syncs binary updates and broadcasts the working copy', async () => {
+    const { branch } = await seed(lexical('Pub', ['a']))
+    const tab = new LoroDoc()
+    tab.import(await service.exportCrdt(branch.id))
+    const from = tab.oplogVersion()
+    tab.import(
+      editDocAt(
+        tab,
+        tab.frontiers(),
+        { content: body('a', 'typed'), title: 'Pub' },
+        'human:owner',
+      ),
+    )
+    emit.mockClear()
+
+    await service.importCrdt(branch.id, tab.export({ from, mode: 'update' }))
+    const { headRevision } = await service.createCheckpoint(branch.id, 'save')
+
+    expect(texts(headRevision.content)).toEqual(['a', 'typed'])
+    expect(emit).toHaveBeenCalledWith(
+      BusinessEvents.DRAFT_UPDATE,
+      expect.objectContaining({ branchId: branch.id }),
+      expect.anything(),
+    )
+  })
+
+  it('merges live article edits into the working copy fields', async () => {
+    const { branch, refId } = await seed(lexical('Pub', ['a']))
+    await service.findForEditing(branch.id)
+
+    await service.mergeArticleFields(DraftRefType.Post, refId, {
+      categoryId: 'cat-2',
+      pin: true,
+    })
+    const view = await service.createCheckpoint(branch.id, 'save')
+
+    expect(view.headRevision.typeSpecificData).toEqual({
+      categoryId: 'cat-2',
+      pin: true,
+      slug: 's',
+    })
+  })
+
+  it('leaves documents without a Loro doc alone on live edits', async () => {
+    const { branch, refId } = await seed(markdown('Md'))
+
+    await service.mergeArticleFields(DraftRefType.Post, refId, { pin: true })
+
+    const view = await service.findById(branch.id)
+    expect(view?.headRevision.typeSpecificData).toBeNull()
+  })
+
+  it('opens a Lexical draft for editing at a fresh checkpoint', async () => {
+    const { branch } = await seed(lexical('Pub', ['a']))
+    await service.findForEditing(branch.id)
+    await service.updateFields(branch.id, { meta: { cover: 'late.png' } })
+
+    const view = await service.findForEditing(branch.id)
+
+    expect(view?.headRevision.meta).toEqual({ cover: 'late.png' })
+    expect((await service.findForEditing(branch.id))?.headRevisionId).toBe(
+      view?.headRevisionId,
+    )
+  })
+
+  it('opens a Markdown draft for editing without touching it', async () => {
+    const { branch } = await seed(markdown('Md'))
+
+    const view = await service.findForEditing(branch.id)
+
+    expect(view?.headRevisionId).toBe(branch.headRevisionId)
+  })
+
+  describe('opening a published document', () => {
+    it('stays in sync when the editor loads it without edits', async () => {
+      const { branch } = await seedPage(lexical('Pub', ['a', 'b']))
+
+      const { emitted } = await openInEditor(branch.id)
+
+      expect(emitted).toBe(false)
+      const view = await service.findById(branch.id)
+      expect(view?.headRevision.kind).toBe('import')
+      const ids = blockIds(view!.headRevision.content)
+      expect(ids.every(Boolean)).toBe(true)
+      expect(new Set(ids).size).toBe(ids.length)
+      expect(await relationOf(branch.id)).toEqual(inSync)
+    })
+
+    it('stays in sync on reopen and on a field patch that changes nothing', async () => {
+      const { branch } = await seedPage(lexical('Pub', ['a']))
+      await openInEditor(branch.id)
+
+      const { emitted } = await openInEditor(branch.id)
+      await service.updateFields(branch.id, {
+        typeSpecificData: { slug: 's' },
+      })
+
+      expect(emitted).toBe(false)
+      expect(await relationOf(branch.id)).toEqual(inSync)
+    })
+
+    it('is ahead once the content changes', async () => {
+      const { branch } = await seedPage(lexical('Pub', ['a']))
+      const { tab } = await openInEditor(branch.id)
+
+      await type(branch.id, tab, ['a', 'typed'])
+
+      expect(await relationOf(branch.id)).toEqual(ahead)
+    })
+
+    it('is ahead once a field changes', async () => {
+      const { branch } = await seedPage(lexical('Pub', ['a']))
+      await openInEditor(branch.id)
+
+      await service.updateFields(branch.id, { meta: { cover: 'c.png' } })
+
+      expect(await relationOf(branch.id)).toEqual(ahead)
+    })
+
+    it('is in sync again after publishing and reopening', async () => {
+      const { branch } = await seedPage(lexical('Pub', ['a']))
+      const { tab } = await openInEditor(branch.id)
+      await type(branch.id, tab, ['a', 'typed'])
+      const { headRevision } = await service.createCheckpoint(
+        branch.id,
+        'publish',
+      )
+      const document = await drafts.findDocumentById(headRevision.documentId)
+      await drafts.recordPublication(
+        headRevision.documentId,
+        headRevision.id,
+        document!.publishedRevisionId,
+      )
+
+      const { emitted } = await openInEditor(branch.id)
+
+      expect(emitted).toBe(false)
+      expect(await relationOf(branch.id)).toEqual(inSync)
+    })
+  })
+})

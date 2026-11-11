@@ -1,5 +1,6 @@
+import { formatBytes } from '~/features/files/utils/format'
 import { useI18n } from '~/i18n'
-import type { DraftModel } from '~/models/draft'
+import type { DraftCard } from '~/models/draft'
 import type { ListAction, ListRowSelectMode } from '~/ui/list-actions'
 import { buildMenuItemsFromActions, ListRow } from '~/ui/list-actions'
 import { Badge } from '~/ui/primitives/badge'
@@ -7,22 +8,25 @@ import { Checkbox } from '~/ui/primitives/checkbox'
 import { cn } from '~/utils/cn'
 import { relativeTimeFromNow } from '~/utils/time'
 
-import { refTypeMeta } from '../constants'
+import { refTypeMeta, relationMeta } from '../constants'
 
 export function DraftRow(props: {
-  actions: ReadonlyArray<ListAction<DraftModel>>
+  actions: ReadonlyArray<ListAction<DraftCard>>
   checked: boolean
   cursor?: boolean
-  draft: DraftModel
+  draft: DraftCard
   isDetailTarget: boolean
   onCheck: (id: string, checked: boolean) => void
   onSelect: (mode: ListRowSelectMode) => void
   selected: boolean
+  selectionActive: boolean
 }) {
   const { t } = useI18n()
   const meta = refTypeMeta[props.draft.document.refType]
   const Icon = meta.icon
   const title = props.draft.headRevision.title || t('drafts.row.untitled')
+  const relation = relationMeta[props.draft.relation]
+  const size = props.draft.storage.revisionBytes + props.draft.storage.crdtBytes
 
   const menuItems = () => buildMenuItemsFromActions(props.actions, props.draft)
 
@@ -44,7 +48,12 @@ export function DraftRow(props: {
         <Checkbox
           aria-label={t('drafts.list.checkboxAria', { title })}
           checked={props.checked}
-          className="mt-1"
+          className={cn(
+            'mt-1 transition-opacity',
+            !props.selectionActive &&
+              !props.checked &&
+              'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100',
+          )}
           cursor={props.cursor}
           onCheckedChange={(checked) => props.onCheck(props.draft.id, checked)}
         />
@@ -61,20 +70,28 @@ export function DraftRow(props: {
         </Badge>
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-center gap-2">
-            <h3 className="truncate text-sm font-medium text-fg">{title}</h3>
-          </div>
-          <div className="mt-1 flex flex-wrap gap-2 text-xs text-fg-muted">
-            <span>
-              {props.draft.document.refId
-                ? t('drafts.row.editing')
-                : t('drafts.row.creating')}
-            </span>
-            <span>{props.draft.headRevision.contentFormat}</span>
-            <time dateTime={props.draft.updatedAt ?? props.draft.createdAt}>
+            <h3 className="min-w-0 flex-1 truncate text-sm font-medium text-fg">
+              {title}
+            </h3>
+            <time
+              className="shrink-0 text-xs text-fg-subtle"
+              dateTime={props.draft.updatedAt ?? props.draft.createdAt}
+            >
               {relativeTimeFromNow(
                 props.draft.updatedAt ?? props.draft.createdAt,
               )}
             </time>
+          </div>
+          <div className="mt-1 flex min-w-0 items-center gap-x-2 whitespace-nowrap text-xs text-fg-muted">
+            <span className={cn('rounded-full px-1.5', relation.className)}>
+              {t(relation.labelKey)}
+            </span>
+            <span>
+              {t('drafts.row.versions', {
+                count: props.draft.storage.revisionCount,
+              })}
+            </span>
+            <span className="ml-auto tabular-nums">{formatBytes(size)}</span>
           </div>
         </div>
       </div>

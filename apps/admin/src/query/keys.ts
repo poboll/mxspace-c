@@ -143,6 +143,7 @@ export const adminQueryKeys = {
     list: () => ['dynamic-components', 'list'] as const,
     root: ['dynamic-components'] as const,
     source: (url: string) => ['dynamic-components', 'source', url] as const,
+    usage: (urls: string[]) => ['dynamic-components', 'usage', urls] as const,
   },
   enrichment: {
     cacheDetail: (id: string) => ['enrichment', 'cache', 'detail', id] as const,
@@ -164,6 +165,8 @@ export const adminQueryKeys = {
       ['files', 'comment-uploads', params] as const,
     orphans: (params: { page: number; size: number }) =>
       ['files', 'orphans', params] as const,
+    remote: (params: { page: number; size: number }) =>
+      ['files', 'remote', params] as const,
     root: ['files'] as const,
   },
   login: {
@@ -243,15 +246,24 @@ export const adminQueryKeys = {
       ['pages', 'list', params] as const,
     root: ['pages'] as const,
   },
+  collab: {
+    collaborators: (documentId: string) =>
+      ['collab', 'collaborators', documentId] as const,
+    invites: (documentId: string) => ['collab', 'invites', documentId] as const,
+  },
   drafts: {
     byRef: (params: { id: string; refType: string }) =>
       ['drafts', 'by-ref', params.refType, params.id] as const,
+    cleanupPreview: (days: number) =>
+      ['drafts', 'cleanup-preview', days] as const,
+    compactPreview: (id: string) => ['drafts', 'compact-preview', id] as const,
     detail: (id: string) => ['drafts', 'detail', id] as const,
     history: (id: string) => ['drafts', 'history', id] as const,
     historyVersion: (params: { id: string; version: number | null }) =>
       ['drafts', 'history-version', params.id, params.version] as const,
     listRoot: ['drafts', 'list'] as const,
-    list: (filterType: string) => ['drafts', 'list', filterType] as const,
+    list: (filters: { relation: string; sort: string; type: string }) =>
+      ['drafts', 'list', filters.type, filters.relation, filters.sort] as const,
     newDraft: (refType: string) => ['drafts', 'new', refType] as const,
     recoveryHistory: (id: string) =>
       ['drafts', 'recovery-history', id] as const,
@@ -259,6 +271,8 @@ export const adminQueryKeys = {
       ['drafts', 'recovery-version', params.id, params.version] as const,
     root: ['drafts'] as const,
     share: (documentId: string) => ['drafts', 'share', documentId] as const,
+    storage: (refType: string) => ['drafts', 'storage', refType] as const,
+    timeline: (id: string) => ['drafts', 'timeline', id] as const,
   },
   says: {
     list: (params: { page: number; size: number }) =>
