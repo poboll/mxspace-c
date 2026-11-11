@@ -30,13 +30,20 @@ const admin = query => {
 const dump = path.join(recoveryDirectory, 'database.dump')
 const manifestPath = path.join(recoveryDirectory, 'database-recovery.json')
 const digest = () => createHash('sha256').update(fs.readFileSync(dump)).digest('hex')
-const counts = db => JSON.parse(sql(db, "SELECT json_build_object('posts',(SELECT count(*) FROM posts),'notes',(SELECT count(*) FROM notes),'pages',(SELECT count(*) FROM pages),'agentConversations',(SELECT count(*) FROM ai_agent_conversations))"))
+const counts = db => JSON.parse(sql(db, `SELECT json_build_object(
+  'posts',(SELECT count(*) FROM posts), 'notes',(SELECT count(*) FROM notes),
+  'pages',(SELECT count(*) FROM pages), 'agentConversations',(SELECT count(*) FROM ai_agent_conversations),
+  'postContent',(SELECT md5(string_agg(md5(jsonb_build_array(id,title,slug,text,content,content_format,created_at,modified_at,is_published)::text),'' ORDER BY id)) FROM posts WHERE id <> 141099812370530325),
+  'noteContent',(SELECT md5(string_agg(md5(jsonb_build_array(id,title,slug,text,content,content_format,created_at,modified_at,is_published,public_at)::text),'' ORDER BY id)) FROM notes)
+)`))
 try {
   if (action === 'migrate') {
     const fd = fs.openSync(path.join(recoveryDirectory, 'migration.log'), 'wx', 0o600)
     try {
       run(process.execPath, ['migrate.mjs'], { cwd: appDirectory, env: { ...env, MIGRATIONS_DIR: path.join(appDirectory, 'src/database/migrations') }, stdio: ['ignore', fd, fd] })
     } finally { fs.closeSync(fd) }
+    const before = JSON.parse(fs.readFileSync(manifestPath, 'utf8')).counts
+    if (JSON.stringify(counts(database)) !== JSON.stringify(before)) throw new Error('published content or row counts changed during migration')
     console.log('migration_completed')
   } else if (action === 'prepare') {
     if (fs.existsSync(dump) || fs.existsSync(manifestPath)) throw new Error('recovery materials already exist')
