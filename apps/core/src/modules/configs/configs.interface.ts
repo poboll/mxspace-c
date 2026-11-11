@@ -11,12 +11,14 @@ import {
   type CommentOptionsSchema,
   type CommentUploadOptionsSchema,
   configSchemaMapping,
+  type DraftCleanupOptionsSchema,
   type FeatureListSchema,
   type FileUploadOptionsSchema,
   type FriendLinkOptionsSchema,
   type ImageGenerationOptionsSchema,
   type ImageStorageOptionsSchema,
   type MailOptionsSchema,
+  type MediaProcessingOptionsSchema,
   type MembershipSchema,
   type OAuthSchema,
   type SeoSchema,
@@ -47,7 +49,9 @@ export abstract class IConfig {
   imageGenerationOptions: Required<z.infer<typeof ImageGenerationOptionsSchema>>
   ttsOptions: Required<z.infer<typeof TtsOptionsSchema>>
   fileUploadOptions: Required<z.infer<typeof FileUploadOptionsSchema>>
+  mediaProcessingOptions: z.infer<typeof MediaProcessingOptionsSchema>
   commentUploadOptions: Required<z.infer<typeof CommentUploadOptionsSchema>>
+  draftCleanupOptions: Required<z.infer<typeof DraftCleanupOptionsSchema>>
   baiduSearchOptions: Required<z.infer<typeof BaiduSearchOptionsSchema>>
   bingSearchOptions: Required<z.infer<typeof BingSearchOptionsSchema>>
   featureList: Required<z.infer<typeof FeatureListSchema>>

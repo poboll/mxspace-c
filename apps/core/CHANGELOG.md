@@ -1,3 +1,179 @@
+## [17.0.4](https://github.com/mx-space/core/compare/v17.0.3...v17.0.4) (2026-11-08)
+
+### Bug Fixes
+
+* **core:** restore legacy plaintext secret storage escape hatch ([c34c664](https://github.com/mx-space/core/commit/c34c66450af33652cedcbd198edc640aad1b3e91))
+
+## [17.0.3](https://github.com/mx-space/core/compare/v17.0.2...v17.0.3) (2026-11-08)
+
+### Features
+
+* refine the write agent chat panel, add attachments and a send animation ([d436a76](https://github.com/mx-space/core/commit/d436a7629e6a262db122596f4cc071a2f95c8e61))
+
+## [17.0.2](https://github.com/mx-space/core/compare/v17.0.1...v17.0.2) (2026-11-08)
+
+### Features
+
+* add article language meta preset ([8be5b8c](https://github.com/mx-space/core/commit/8be5b8c030b71576a41b9fe864fb9986621ccdd1))
+* let the write agent edit embedded drawings, components and images through /embeds ([497c149](https://github.com/mx-space/core/commit/497c1490412027d5e4fd9a8f8c3e732568c46dba))
+
+### Bug Fixes
+
+* **core:** stop dev CORS from rejecting requests without an Origin header ([1899da8](https://github.com/mx-space/core/commit/1899da8db9ff3eaf6a9547ee8de6e8d3351c9dfa))
+
+## [17.0.1](https://github.com/mx-space/core/compare/v17.0.0...v17.0.1) (2026-11-08)
+
+### Bug Fixes
+
+* **admin:** mount editor DOM plugins inside every editing surface ([af36344](https://github.com/mx-space/core/commit/af363445175476137b640cf9d02a470cddc75a33))
+
+## [17.0.0](https://github.com/mx-space/core/compare/v16.4.1...v17.0.0) (2026-11-07)
+
+### ⚠ BREAKING CHANGES
+
+* migration 0048 drops and recreates `ai_agent_conversations`, discarding all agent conversations. Admin and server must run the same version; neither side accepts the previous agent payload shape.
+
+### Features
+
+* make the server transcript the single source of agent session state ([ad8dc5e](https://github.com/mx-space/core/commit/ad8dc5ef0d13b94c6a1c6aa2cb8c0deb3090d265))
+* **admin:** let the editor agent read and write paywall fields ([cbd5c18](https://github.com/mx-space/core/commit/cbd5c18d2a536e8c7501de95b23ba8eef73c55ac))
+
+### Bug Fixes
+
+* **auth:** upgrade Better Auth to 1.7.16 ([12a1bac](https://github.com/mx-space/core/commit/12a1bac79bde8d62d255f9f1104fc60eb43dbf10))
+* **draft:** retain public fields when rebuilding imported CRDT documents ([b7170de](https://github.com/mx-space/core/commit/b7170dead5f9b9a5f56bb24508d5662ea6e9e373))
+* **test:** wait for PostgreSQL connections before isolated database teardown ([cbf2002](https://github.com/mx-space/core/commit/cbf200246ec321e47c3f8e22a289ab554b060a07))
+
+## [16.4.1](https://github.com/mx-space/core/compare/v16.4.0...v16.4.1) (2026-11-04)
+
+### Bug Fixes
+
+* **admin:** allow inviting co-authors on unpublished drafts ([1c2f985](https://github.com/mx-space/core/commit/1c2f9854f05d8b08d30174252a4c3666b20f2186))
+
+## [16.4.0](https://github.com/mx-space/core/compare/v16.3.0...v16.4.0) (2026-11-02)
+
+### Features
+
+* **core:** content usage endpoint and suspected test draft cleanup ([6a08125](https://github.com/mx-space/core/commit/6a0812520c77a4ad3817a8a7418ed62210a63c65))
+
+## [16.3.0](https://github.com/mx-space/core/compare/v16.2.0...v16.3.0) (2026-11-01)
+
+### Features
+
+* **push:** carry banner metadata and reply excerpts to Yohaku ([dad8dd7](https://github.com/mx-space/core/commit/dad8dd7f3aba92eb9c40e712c2794a2c71867026))
+
+## [16.2.0](https://github.com/mx-space/core/compare/v16.1.0...v16.2.0) (2026-10-31)
+
+### Features
+
+* **admin:** add a persistent interactive WebGL ripple background with smooth scene transitions ([8ac2d8e](https://github.com/mx-space/core/commit/8ac2d8e9fa10c09994e8ff2490cfd8bec482e2e0))
+* **admin:** unify login, server connection, and onboarding in a shared entry experience ([d0441f2](https://github.com/mx-space/core/commit/d0441f21763f85cef81863fcf5dd80a4e46cf376))
+
+### Bug Fixes
+
+* **admin:** keep setup panels readable in dark mode and reserve text space for password controls ([370b743](https://github.com/mx-space/core/commit/370b743421355771234a792d7711407f746b0241))
+
+## [16.1.0](https://github.com/mx-space/core/compare/v16.0.1...v16.1.0) (2026-10-30)
+
+
+### Features
+
+* **draft:** sync draft fields through Loro and keep the row in step ([88045d4](https://github.com/mx-space/core/commit/88045d4e1acea853e145430a062951e2a38ad936))
+* **files:** keep-original uploads from the image dialog and optional image metadata ([bf14f3f](https://github.com/mx-space/core/commit/bf14f3fd5ea4231de1a418527a6de4ec13bc0e52))
+* **gateway:** accept bearer session tokens on /ws/admin ([8c36cec](https://github.com/mx-space/core/commit/8c36cec693a32ac2fb5cb23c0c76ce12d98f44f5))
+
+## [16.0.1](https://github.com/mx-space/core/compare/v16.0.0...v16.0.1) (2026-10-29)
+
+### Chores
+
+* **deps:** bump @haklex/* to 0.59.1 ([8afe8f5](https://github.com/mx-space/core/commit/8afe8f509526d90e59c34548a569d94f3b7a2027))
+
+# [16.0.0](https://github.com/mx-space/core/compare/v15.7.0...v16.0.0) (2026-10-29)
+
+
+### Features
+
+* **ai:** unify language codes on BCP 47 language-region tags ([#2894](https://github.com/mx-space/core/pull/2894)) ([505d011](https://github.com/mx-space/core/commit/505d01137085e207baa67f918b27ffc112dd785a))
+
+
+### Bug Fixes
+
+* **ai:** resolve regional search and TTS requests to served languages ([#2894](https://github.com/mx-space/core/pull/2894)) ([505d011](https://github.com/mx-space/core/commit/505d01137085e207baa67f918b27ffc112dd785a))
+
+
+### BREAKING CHANGES
+
+* **ai:** stored, configured and served language codes are now BCP 47 language-region tags (`zh-CN`, `zh-TW`, `en-US`) instead of bare codes (`zh`, `en`); `@mx-space/ai` removes `normalizeLanguageCode` and `normalizeTargetLang`.
+
+## [15.7.0](https://github.com/mx-space/core/compare/v15.6.1...v15.7.0) (2026-10-28)
+
+### Features
+
+* **files:** convert uploaded images to WebP and videos to WebM ([ee2ad79](https://github.com/mx-space/core/commit/ee2ad79bdd67a6885adc8abe3fc7408324943343))
+* **files:** list and delete bucket files on their own page ([1e14e4b](https://github.com/mx-space/core/commit/1e14e4ba6107fdbbea0a3f55831b31db087dcd45))
+
+### Bug Fixes
+
+* **deps:** update dependency qs to v6.16.1 [security] ([#2885](https://github.com/mx-space/core/pull/2885)) ([5f03e22](https://github.com/mx-space/core/commit/5f03e22db9aec73dc08148b73af15209cdd1c173))
+
+## [15.6.1](https://github.com/mx-space/core/compare/v15.6.0...v15.6.1) (2026-10-26)
+
+### Bug Fixes
+
+* **draft:** keep a published post in sync when it is opened without edits ([908a4e6](https://github.com/mx-space/core/commit/908a4e6d90bf702b8a16486fde1ae9f0087b9136))
+* **admin:** drop the import change from the draft timeline ([d5653a7](https://github.com/mx-space/core/commit/d5653a7fa6a0861a2a9c06779b9f6afef1669e72))
+
+## [15.6.0](https://github.com/mx-space/core/compare/v15.5.0...v15.6.0) (2026-10-26)
+
+### Features
+
+* **drafts:** add bulk organization for published articles ([ab7b755](https://github.com/mx-space/core/commit/ab7b755d337cd018139d9e02ce90dba4ab780755))
+* **admin:** single-pane email template editor ([122e056](https://github.com/mx-space/core/commit/122e0562123f2f3e7622032bcfc7909648a81a61))
+
+### Bug Fixes
+
+* **drafts:** prevent previews from recreating deleted collaborative drafts ([ab7b755](https://github.com/mx-space/core/commit/ab7b755d337cd018139d9e02ce90dba4ab780755))
+* **drafts:** protect concurrent field edits and pending publications during cleanup ([ab7b755](https://github.com/mx-space/core/commit/ab7b755d337cd018139d9e02ce90dba4ab780755))
+
+## [15.5.0](https://github.com/mx-space/core/compare/v15.4.0...v15.5.0) (2026-10-25)
+
+### Features
+
+* **admin:** inline draft diff with version picker and side-by-side dialog ([c1066b0](https://github.com/mx-space/core/commit/c1066b0953927b9d64b7ba9878dfad345711463a))
+
+### Bug Fixes
+
+* **admin:** use SelectField and align padding in drafts cleanup dialog ([756d2dc](https://github.com/mx-space/core/commit/756d2dcf3153aec2318ce0f6a0f1e2da1b10231a))
+
+## [15.4.0](https://github.com/mx-space/core/compare/v15.3.0...v15.4.0) (2026-10-25)
+
+### Features
+
+* collaborative editing on Loro — realtime room, AI peer, co-authors ([#2870](https://github.com/mx-space/core/pull/2870)) ([cfb24a0](https://github.com/mx-space/core/commit/cfb24a0d29ccd485025c1b9c0e4cf7f841f54cc1))
+* **drafts:** draft management and storage reclamation ([88c3c69](https://github.com/mx-space/core/commit/88c3c690bc2d8b07c1ef6d8c542094d91245cc30))
+
+### Bug Fixes
+
+* **ai:** allow saving LobeHub providers without an API key ([b58dc67](https://github.com/mx-space/core/commit/b58dc6746e744c2987dc8bf550e67a09d835d9da))
+
+## [15.3.0](https://github.com/mx-space/core/compare/v15.2.0...v15.3.0) (2026-10-25)
+
+### Features
+
+* **ai:** integrate LobeHub Cloud device flow and pricing ([b0878bb](https://github.com/mx-space/core/commit/b0878bb3caf420a480a47665fea19789d70f8081))
+* **ai:** run write agent loop on the server over WebSocket ([2939e48](https://github.com/mx-space/core/commit/2939e48d177977ac3351d0df5144954d515a9221))
+
+## [15.2.0](https://github.com/mx-space/core/compare/v15.1.0...v15.2.0) (2026-10-24)
+
+### Bug Fixes
+
+* **ai:** include steps in document context and search text ([c06c1a5](https://github.com/mx-space/core/commit/c06c1a5b46c316531b490defab21a075096fd957))
+* **security:** harden access and resource boundaries ([#2858](https://github.com/mx-space/core/pull/2858)) ([1e5978d](https://github.com/mx-space/core/commit/1e5978db555278d9ff2aa1e487bd41df5b654e81))
+
+### Features
+
+* **ai:** translate steps titles and nested step content ([b5f7db3](https://github.com/mx-space/core/commit/b5f7db3093a16d17071119e2ea49ea8efd1529c7))
+
 ## [15.1.0](https://github.com/mx-space/core/compare/v15.0.1...v15.1.0) (2026-10-23)
 
 ### Features

@@ -19,7 +19,7 @@ Run from the monorepo root (the workspace install is governed by the root) — s
 
 Scope checks to changed files only — never run lint/typecheck/build over the whole
 tree just to verify a small edit. One-off file typecheck:
-`pnpm -C apps/admin exec tsc --noEmit --pretty false`.
+`pnpm -C apps/admin exec tsrs --noEmit --pretty false`.
 
 Env vars live in `apps/admin/.env` (see `apps/admin/.env.example`). `VITE_APP_BASE_API`
 is the mx-core API endpoint. All vars are optional and fall back to empty/same-origin,
@@ -217,6 +217,11 @@ shells live in `apps/admin/src/ui/layout/`:
 
 - `content-layout.tsx` — list+detail pages (comments, drafts, topics)
 - `page-layout.tsx` — page shell with header
+- `master-detail-shell.tsx` — resizable list + routed detail. Pass `header` when the
+  page needs more actions, filters or a summary than a list column header can hold:
+  it spans both columns on desktop and sits above the list (covered by a pushed
+  detail) on mobile. Build it with `page-header-bar.tsx` (`PageHeaderBar`: title,
+  count, filters, actions, summary line); the list then drops its own header.
 - companion pieces in the same dir (`header-back-button.tsx`, `sidebar-*`, `resize-handle.tsx`)
 
 ## Configuration Files
@@ -283,6 +288,16 @@ See `apps/core/CLAUDE.md` for the server-side wire-format invariants.
 ### Rich Editor Integration
 
 Rich editor work is integrated as ordinary React components.
+
+### Editor Virtualization
+
+Haklex's editor recycler is enabled automatically for long documents.
+`src/vendor/rich-editor/core/RichEditor.tsx` counts the root blocks in `initialValue` and turns
+on virtualization at `VIRTUALIZATION_BLOCK_THRESHOLD` (200). Short documents keep the plain
+editor; an explicit `virtualization` prop still wins. The scroll viewport is discovered from
+the nearest scrollable ancestor, so keep the editor inside a bounded scroll container. Upstream
+limits matter: cross-block selection, collaboration carets and browser find-in-page only cover
+mounted blocks.
 
 ### Dynamic Component Catalog
 

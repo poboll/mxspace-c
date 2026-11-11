@@ -9,11 +9,8 @@
     "resolveJsonModule": true,
     "esModuleInterop": true,
     "noImplicitAny": false,
-    "baseUrl": "./",
-    "ignoreDeprecations": "6.0",
     "skipLibCheck": true,
     "noEmit": true,
-    "skipDefaultLibCheck": true,
     "lib": ["esnext", "dom", "dom.iterable"],
     "types": [],
     "paths": {
@@ -27,8 +24,7 @@
     "src/**/*.ts",
     "src/**/*.tsx",
     "src/**/*.d.ts",
-    "vite.config.mts",
-    "vite.author.config.mts"
+    "vite.config.mts"
   ],
   "exclude": ["node_modules", "assets", "dist/**"]
 }

@@ -1,24 +1,47 @@
 import type { TranslationKey } from '../types'
 
 export const enUS = {
-  'write.agent.dynamic.replace': 'Upload new version and replace',
-  'write.agent.dynamic.updated': 'Draft updated',
-  'write.agent.dynamic.versionHint':
-    'Adoption replaces the original component in this draft. Publish again to update the live article.',
-  'write.agent.dynamic.targetChanged':
-    'The original component changed. Read it again to create a new version.',
-  'write.agent.dynamic.preview': 'Preview',
-  'write.agent.dynamic.publish': 'Upload and insert',
-  'write.agent.dynamic.uploading': 'Uploading…',
-  'write.agent.dynamic.inserted': 'Inserted into article',
-  'write.agent.dynamic.hint':
-    'Preview and request changes in chat, then upload and insert when ready.',
-  'write.agent.dynamic.source': 'View source',
-  'write.agent.dynamic.busy':
-    'Another component is being uploaded. Please retry shortly.',
-  'write.agent.dynamic.contextChanged':
-    'The conversation or editor state changed. Please retry in the current conversation.',
-  'write.agent.dynamic.invalidDraft': 'Invalid component draft.',
+  'auth.entry.loginTitle': 'Welcome back to your space.',
+  'auth.entry.loginDescription': 'Keep writing. Let your next idea unfold.',
+  'auth.entry.showPassword': 'Show password',
+  'auth.entry.hidePassword': 'Hide password',
+  'auth.entry.enter': 'Enter your space',
+  'auth.entry.otherAuth': 'Or continue with',
+  'auth.entry.secure': 'Sign in to your own Mix Space service',
+  'auth.entry.connectTitle': 'Connect your space.',
+  'auth.entry.connectDescription':
+    'Enter your Mix Space service address to connect to your world.',
+  'auth.entry.apiHint':
+    'Enter the API address. Same-origin deployments usually need no changes.',
+  'auth.entry.advanced': 'Advanced connection settings',
+  'auth.entry.saveConnect': 'Save and connect',
+  'auth.entry.setupInfo': 'Setup details and preview',
+  'auth.entry.heroFirst': 'A home for your words.',
+  'auth.entry.heroSecond': 'A space for your ideas.',
+  'auth.entry.heroDescriptionFirst':
+    'Capture the everyday. Connect your ideas.',
+  'auth.entry.heroDescriptionSecond': 'Let the things worth remembering grow.',
+  'auth.entry.independent': 'Independent words. Room to grow.',
+  'auth.entry.interact': 'Move / drag',
+  'auth.entry.ripple': 'Make a ripple',
+  'auth.entry.rippleLabel': 'Create a ripple at the center',
+  'auth.entry.reducedMotion': 'Reduced motion',
+  'auth.entry.currentService': 'Current Mix Space service',
+  'auth.entry.help': 'Need help',
+  'auth.entry.lightTheme': 'Switch to light mode',
+  'auth.entry.darkTheme': 'Switch to dark mode',
+  'auth.entry.footer': 'Collect life in words.',
+  'auth.entry.switchService': 'Switch service',
+  'auth.entry.backToLogin': 'Back to sign in',
+  'auth.entry.scene.login': 'Home',
+  'auth.entry.scene.connect': 'Connection',
+  'auth.entry.scene.welcome': 'A beginning',
+  'auth.entry.scene.account': 'Identity',
+  'auth.entry.scene.site': 'Your place',
+  'auth.entry.scene.ai-providers': 'Resonance',
+  'auth.entry.scene.ai-models': 'Order',
+  'auth.entry.scene.ai-features': 'Growth',
+  'auth.entry.scene.ready': 'Ready',
   'tasks.action.cancel': 'Cancel task',
   'tasks.action.clearCompleted': 'Clear completed',
   'tasks.action.continueTts': 'Continue generation',
@@ -60,8 +83,9 @@ export const enUS = {
   'ai.overview.action.open': 'Open',
   'ai.overview.action.regenerate': 'Regenerate',
   'ai.overview.addLang': 'Add a language',
-  'ai.overview.addLangInvalid': 'Enter a valid ISO 639-1 code, e.g. en or zh',
-  'ai.overview.addLangPlaceholder': 'en',
+  'ai.overview.addLangInvalid':
+    'Enter a valid BCP 47 language tag, e.g. en-US or zh-TW',
+  'ai.overview.addLangPlaceholder': 'en-US',
   'ai.overview.assetsEmptyDescription':
     'Click an empty cell in the matrix above to generate one.',
   'ai.overview.asset.stale': 'Based on an older version',
@@ -146,7 +170,8 @@ export const enUS = {
   'ai.generate.forceLabel': 'Force regenerate',
   'ai.generate.langsCount': '{count} total',
   'ai.generate.langsHint':
-    'Comma-separated; leave empty to use the target languages from AI settings',
+    'Comma-separated BCP 47 tags (zh-CN, zh-TW, en-US); leave empty to use the target languages from AI settings',
+  'ai.generate.langsInvalid': 'Unrecognized language tags: {langs}',
   'ai.generate.langsLabel': 'Target languages',
   'ai.generate.langsTooMany': 'At most {max} languages per run',
   'ai.grouped.itemCount': '{count} items',
@@ -1145,6 +1170,19 @@ export const enUS = {
   'debug.toast.withAction.title': 'With Action',
 
   'drafts.countLabel': '{count}',
+  'drafts.compare.changesOnly': 'Changes only',
+  'drafts.compare.collapsed': '⋯ {count} unchanged blocks',
+  'drafts.compare.doomedHint': 'Dimmed versions are removed on compaction',
+  'drafts.compare.fullText': 'Full text',
+  'drafts.compare.label': 'Compare',
+  'drafts.compare.nextAria': 'Newer version',
+  'drafts.compare.openSplit': 'Side by side',
+  'drafts.compare.pickerAria': 'Choose a version to compare',
+  'drafts.compare.prevAria': 'Older version',
+  'drafts.compare.restore': 'Restore this version',
+  'drafts.compare.splitTitle': 'Side-by-side comparison',
+  'drafts.compare.versionCount': '{count} versions',
+  'drafts.compare.viewAria': 'Display mode',
   'drafts.detail.backAria': 'Back to draft list',
   'drafts.detail.confirmDelete': 'Delete "{title}"?',
   'drafts.detail.delete': 'Delete',
@@ -1166,6 +1204,7 @@ export const enUS = {
   'drafts.history.direction': 'Historical draft → current draft',
   'drafts.history.historyFile': 'historical-draft',
   'drafts.history.deltaChars': '{delta} chars',
+  'drafts.history.noEarlier': 'No earlier versions yet',
   'drafts.history.pickVersion': 'Select a historical version to view the diff',
   'drafts.history.restoreFailed': 'Restore failed',
   'drafts.history.restoreSuccess': 'Version restored',
@@ -1296,6 +1335,7 @@ export const enUS = {
   'files.empty.commentImages': 'No comment images',
   'files.empty.files': 'No files',
   'files.empty.orphans': 'No isolated files',
+  'files.empty.remoteFiles': 'No files in the bucket',
   'files.fileType.avatar': 'Avatar',
   'files.fileType.file': 'File',
   'files.fileType.icon': 'Icon',
@@ -1334,9 +1374,16 @@ export const enUS = {
   'files.orphans.selectedCount': '{count} selected',
   'files.orphans.totalCount': '{count} isolated files',
   'files.preview.title': 'Image preview',
+  'files.remote.confirmDeleteInUse':
+    'A post or setting still uses this file. Its image or link will break. Deletion cannot be undone.',
+  'files.remote.description':
+    'Files mx-core uploaded to object storage, excluding comment images. Objects added to the bucket by other tools are not listed.',
+  'files.remote.inUse': 'In use',
+  'files.remote.unused': 'Not used',
   'files.source.commentImages': 'Comment images',
-  'files.source.files': 'File library',
+  'files.source.files': 'Local files',
   'files.source.orphans': 'Isolated files',
+  'files.source.remoteFiles': 'Bucket',
   'files.toast.batchDeleteFailed': 'Batch delete failed',
   'files.toast.cleanupFailed': 'Cleanup failed',
   'files.toast.commentDeletedStorageFailed':
@@ -1382,6 +1429,7 @@ export const enUS = {
   'files.detail.field.url': 'URL',
   'files.detail.field.size': 'Size',
   'files.detail.field.mime': 'Mime type',
+  'files.detail.field.objectKey': 'Object key',
   'files.detail.field.created': 'Created',
   'files.detail.field.dimensions': 'Dimensions',
   'files.detail.field.palette': 'Palette',
@@ -1958,6 +2006,8 @@ export const enUS = {
   'routes.orphanImages.description':
     'Uploaded files not referenced by persisted content or configuration.',
   'routes.orphanImages.title': 'Isolated Files',
+  'routes.remoteFiles.description': 'Files uploaded to object storage.',
+  'routes.remoteFiles.title': 'Bucket',
   'routes.pages.description':
     'Static pages, ordering metadata, and public page links.',
   'routes.pages.title': 'Pages',
@@ -2140,12 +2190,36 @@ export const enUS = {
   'settings.ai.assignment.openModelList': 'Open model list',
   'settings.ai.assignment.providerAriaLabel': '{label} provider',
   'settings.ai.assignment.providerNone': 'Unassigned',
-  'settings.ai.pricing.charactersPerMillion': '{price} / 1M characters',
-  'settings.ai.pricing.free': 'Free',
-  'settings.ai.pricing.inputPerMillion': 'Input {price} / 1M',
-  'settings.ai.pricing.outputPerMillion': 'Output {price} / 1M',
-  'settings.ai.pricing.perImage': '{price} / image',
-  'settings.ai.pricing.perRequest': '{price} / request',
+  'settings.ai.pricing.keyboardHint':
+    'Highlight a model, then press Alt + → for pricing details',
+  'settings.ai.pricing.details': '{model} pricing details',
+  'settings.ai.pricing.price': 'Price',
+  'settings.ai.pricing.item': 'Item',
+  'settings.ai.pricing.other': 'Other',
+  'settings.ai.pricing.request': 'Request',
+  'settings.ai.pricing.inputUpTo': 'Input ≤{limit}',
+  'settings.ai.pricing.inputOver': 'Input >{limit}',
+  'settings.ai.pricing.inputBetween': 'Input >{from} to {limit}',
+  'settings.ai.pricing.allInputs': 'All inputs',
+  'settings.ai.pricing.minutes': '{count} min',
+  'settings.ai.pricing.hours': '{count} hr',
+  'settings.ai.pricing.unit.millionTokens': 'Per 1M tokens',
+  'settings.ai.pricing.unit.millionCharacters': 'Per 1M characters',
+  'settings.ai.pricing.unit.image': 'Per image',
+  'settings.ai.pricing.unit.second': 'Per second',
+  'settings.ai.pricing.unit.request': 'Per request',
+  'settings.ai.pricing.textInput': 'Input',
+  'settings.ai.pricing.textOutput': 'Output',
+  'settings.ai.pricing.textInput_cacheRead': 'Cache read',
+  'settings.ai.pricing.textInput_cacheWrite': 'Cache write',
+  'settings.ai.pricing.imageInput': 'Image input',
+  'settings.ai.pricing.imageOutput': 'Image output',
+  'settings.ai.pricing.audioInput': 'Audio input',
+  'settings.ai.pricing.audioOutput': 'Audio output',
+  'settings.ai.pricing.videoInput': 'Video input',
+  'ai.metrics.costUnknown': 'Unknown',
+  'ai.overview.costKnownPart': '{cost} (known subtotal)',
+  'ai.overview.costUnknownRuns': '{count} generations did not report a cost',
   'settings.ai.assignment.reasoningAriaLabel': '{label} thinking / reasoning',
   'settings.ai.assignment.reasoning.none': 'Thinking: Off',
   'settings.ai.assignment.reasoning.low': 'Thinking: Low',
@@ -2172,6 +2246,45 @@ export const enUS = {
     'Fast decisions for comment review. Uncertain results fall back to the comment review language model.',
   'settings.ai.capability.decision': 'Decision',
   'settings.ai.providerType.typesafe': 'TypeSafe (Jev)',
+  'settings.ai.providerType.lobehub': 'LobeHub Cloud',
+  'settings.ai.lobehub.title': 'Connect to LobeHub',
+  'settings.ai.lobehub.account': 'Account connection',
+  'settings.ai.lobehub.description':
+    'Connect your LobeHub account to choose from its available models.',
+  'settings.ai.lobehub.login': 'Log in to LobeHub',
+  'settings.ai.lobehub.reconnect': 'Reconnect',
+  'settings.ai.lobehub.refreshRequired':
+    'Your connection has expired. Log in to LobeHub again.',
+  'settings.ai.lobehub.connected': 'Connected',
+  'settings.ai.lobehub.disconnected': 'Disconnected',
+  'settings.ai.lobehub.disconnect': 'Disconnect',
+  'settings.ai.lobehub.disconnectConfirm':
+    'Disconnect this site from LobeHub? AI features using this account will be unavailable until you reconnect.',
+  'settings.ai.lobehub.preparing': 'Preparing device authorization…',
+  'settings.ai.lobehub.stepCode': 'Confirm this code on the authorization page',
+  'settings.ai.lobehub.codeHint': 'This code is only for this connection',
+  'settings.ai.lobehub.stepAuthorize': 'Authorize with your LobeHub account',
+  'settings.ai.lobehub.authorizeHint':
+    'The connection updates automatically when you finish',
+  'settings.ai.lobehub.openPage': 'Open LobeHub authorization',
+  'settings.ai.lobehub.waiting':
+    'Waiting for authorization · expires in {time}',
+  'settings.ai.lobehub.expired':
+    'This code has expired. Request a new code to continue.',
+  'settings.ai.lobehub.denied':
+    'Authorization was declined. You can request a new code.',
+  'settings.ai.lobehub.error':
+    'Unable to connect to LobeHub. Please try again later.',
+  'settings.ai.lobehub.retry': 'Request a new code',
+  'settings.ai.lobehub.cancel': 'Cancel',
+  'settings.ai.lobehub.safety':
+    'Authorize securely with LobeHub. No API key required.',
+  'settings.ai.lobehub.saved':
+    'This account is shared across this site. Connections save immediately; save model settings on the settings page.',
+  'settings.ai.lobehub.copyCode': 'Copy authorization code',
+  'settings.ai.lobehub.copied': 'Code copied',
+  'settings.ai.lobehub.copyFailed':
+    'Unable to copy. Please copy the code manually.',
   'settings.ai.capability.text': 'Text generation',
   'settings.ai.empty.providers': 'No providers',
   'settings.ai.error.fetchModelsFailed': 'Failed to fetch model list',
@@ -2284,9 +2397,9 @@ export const enUS = {
   'settings.ai.switch.translationTargetLanguages':
     'Translation target languages',
   'settings.ai.test.invalidLanguageCode':
-    'Use an ISO 639-1 language code (2 letters)',
+    'Use a BCP 47 language tag, e.g. zh-CN, zh-TW, en-US',
   'settings.ai.test.languageExists': 'Language {language} already exists',
-  'settings.ai.test.placeholder': 'e.g. en, ja, ko',
+  'settings.ai.test.placeholder': 'e.g. zh-TW, en-US, ja-JP',
   'settings.ai.toast.modelListEmpty': 'No models returned',
   'settings.ai.toast.modelListError': 'Fetch model list: {message}',
   'settings.ai.toast.modelListUpdated': 'Model list updated ({count})',
@@ -2306,6 +2419,7 @@ export const enUS = {
   'settings.common.section.unknownAction': 'Unknown action: {action}',
   'settings.fieldType.boolean': 'Switch',
   'settings.fieldType.checkbox': 'Checkbox',
+  'settings.fieldType.language': 'Language tag',
   'settings.fieldType.multiSelect': 'Multi-select',
   'settings.fieldType.number': 'Number',
   'settings.fieldType.object': 'Object',
@@ -2336,7 +2450,7 @@ export const enUS = {
   'settings.group.site.description': 'Site URL, SEO',
   'settings.group.site.title': 'Site',
   'settings.group.storage.description':
-    'Backup, image hosting, comment image uploads',
+    'Backup, image hosting, comment image uploads, media processing, draft cleanup',
   'settings.group.storage.title': 'Storage',
   'settings.group.system.description': 'Admin settings, feature toggles',
   'settings.group.system.title': 'System',
@@ -3388,6 +3502,8 @@ export const enUS = {
   'subscribe.toggle.success': 'Subscription settings updated',
 
   'templates.action.testSmtp': 'Test SMTP',
+  'templates.preview.fit': 'Fit {percent}%',
+  'templates.preview.fitHint': 'The email scales down to fit the pane',
   'templates.preview.title': 'Live preview',
   'templates.previewFailed': 'Render failed',
   'templates.props.button': 'Sample props',
@@ -3405,6 +3521,8 @@ export const enUS = {
   'templates.saveFailed': 'Save failed',
   'templates.saveSuccess': 'Template saved',
   'templates.saved': 'Saved',
+  'templates.split.aria': 'Resize the editor and preview',
+  'templates.switcher.aria': 'Switch email template',
   'templates.testSmtp.failed': 'Test email failed',
   'templates.testSmtp.success': 'Test email sent to owner',
   'templates.title': 'Templates',
@@ -3418,7 +3536,6 @@ export const enUS = {
   'templates.view.aria': 'Editor view mode',
   'templates.view.code': 'Code',
   'templates.view.preview': 'Preview',
-  'templates.view.split': 'Split',
 
   'time.daysAgo': '{count}d ago',
   'time.hoursAgo': '{count}h ago',
@@ -3594,12 +3711,29 @@ export const enUS = {
   'webhooks.toast.updated': 'Webhook updated',
 
   'write.agent.aborting': 'Abort',
+  'write.agent.attachment.add': 'Add attachment',
+  'write.agent.attachment.drop': 'Drop to attach',
+  'write.agent.attachment.dropHint': 'You can also paste a screenshot',
+  'write.agent.attachment.failed': 'Upload failed',
+  'write.agent.attachment.limit': 'Up to {count} attachments',
+  'write.agent.attachment.remove': 'Remove attachment',
+  'write.agent.attachment.retry': 'Retry',
+  'write.agent.attachment.tooLarge': 'File too large: {name}',
+  'write.agent.attachment.unsupported': 'Unsupported file type: {name}',
+  'write.agent.attachment.uploading': 'Uploading {progress}%',
   'write.agent.bubble.callingTool': 'Calling tool: {toolName}',
   'write.agent.bubble.diffSummary':
     '{accepted} applied · {rejected} rejected · {pending} pending',
-  'write.agent.bubble.thinking': 'Thinking...',
-  'write.agent.bubble.toolGroupCount': '{count} tool call(s)',
-  'write.agent.bubble.toolGroupReapply': ' · {count} reapplyable',
+  'write.agent.process.done': 'Done',
+  'write.agent.process.error': 'Error',
+  'write.agent.process.failed': '{count} failed',
+  'write.agent.process.params': 'Params',
+  'write.agent.process.reapply': 'Reapply {count}',
+  'write.agent.process.result': 'Result',
+  'write.agent.process.thinking': 'Thinking',
+  'write.agent.process.thought': 'Thought',
+  'write.agent.process.thoughts': '{count} thought(s)',
+  'write.agent.process.tools': '{count} tool call(s)',
   'write.agent.button.accept': 'Apply',
   'write.agent.button.initializing': 'Initializing',
   'write.agent.button.reapply': 'Reapply',
@@ -3610,7 +3744,8 @@ export const enUS = {
     'Ask the AI to suggest edits for the current content. Suggestions go through review before being written back.',
   'write.agent.hydrating': 'Restoring conversation',
   'write.agent.input.hintSend': 'Enter to send',
-  'write.agent.input.placeholder': 'Describe what to change...',
+  'write.agent.input.hintUploading': 'Send after uploads finish',
+  'write.agent.input.placeholder': 'Describe what to change',
   'write.agent.loadSessionsFailed': 'Failed to load sessions, click to retry',
   'write.agent.model.empty': 'No matching models',
   'write.agent.model.placeholder': 'Select model',
@@ -3625,6 +3760,15 @@ export const enUS = {
   'write.agent.review.summary':
     '{pending} pending · {accepted} applied · {rejected} rejected',
   'write.agent.selectModelFirst': 'Please pick an AI model first',
+  'write.agent.socketUnavailable':
+    'The live connection to the server is not ready. Try again in a moment.',
+  'write.agent.connectionLost':
+    'The connection to the server dropped and this turn was interrupted. Send it again to retry.',
+  'write.agent.usage.input': 'In {value}',
+  'write.agent.usage.output': 'Out {value}',
+  'write.agent.usage.cacheHit': 'Cache hit {value}',
+  'write.agent.usage.detail':
+    '{calls} model call(s) · input {input} (plus cache read {cacheRead}, cache write {cacheWrite}) · output {output}',
   'write.agent.selection.blocks': '{count} block(s) selected',
   'write.agent.selection.dismiss': 'Dismiss selection',
   'write.agent.session.deleteTitle': 'Delete session',
@@ -3641,10 +3785,6 @@ export const enUS = {
   'write.agent.session.retryLast': 'Retry last',
   'write.agent.session.titlePlaceholder': 'Session title',
   'write.agent.session.untitled': 'Untitled session',
-  'write.agent.status.callingTool': 'Calling tool…',
-  'write.agent.status.processing': 'Processing…',
-  'write.agent.status.thinking': 'Thinking…',
-  'write.agent.status.writing': 'Writing…',
   'write.agent.toast.applyAllFailed':
     'All edits failed to apply: {conflict} conflict, {error} error (likely blockId mismatch)',
   'write.agent.toast.applyFailed': 'Failed to apply suggestion',
@@ -3707,7 +3847,7 @@ export const enUS = {
   'write.format.switchUnavailable.title': 'Editor switching is unavailable',
   'write.format.switchUnavailable.description':
     'CodeMirror edits Markdown source, while Lexical stores rich-text structure. Converting an article that already has content can lose formatting, special nodes, or source syntax, so switching is disabled. Choose the editor you need before writing in a new, empty article.',
-  'write.migration.action.blocked': 'Conversion blocked ({{count}})',
+  'write.migration.action.blocked': 'Conversion blocked ({count})',
   'write.migration.action.checking': 'Checking conversion',
   'write.migration.action.committing': 'Committing conversion',
   'write.migration.action.convert': 'Convert to Lexical',
@@ -3864,6 +4004,11 @@ export const enUS = {
   'write.meta.builtin.cover.label': 'Cover image',
   'write.meta.builtin.keywords.label': 'SEO keywords',
   'write.meta.builtin.keywords.placeholder': 'Type a keyword and press Enter',
+  'write.meta.builtin.lang.description':
+    'Source language of this article (BCP 47 tag). Drives AI translation, summaries, insights, TTS and search.',
+  'write.meta.builtin.lang.label': 'Article language',
+  'write.meta.builtin.lang.placeholder':
+    'Pick a language or type a tag, e.g. en-US',
   'write.meta.builtin.style.label': 'Article style',
   'write.meta.builtin.style.placeholder': 'Enter a style name',
   'write.meta.kvList.addField': 'Add field',
@@ -3872,6 +4017,9 @@ export const enUS = {
   'write.meta.kvList.keyPlaceholder': 'Key',
   'write.meta.kvList.previewJson': 'Preview JSON',
   'write.meta.kvList.valuePlaceholder': 'Value',
+  'write.meta.language.invalid': 'Not a valid BCP 47 language tag',
+  'write.meta.language.noSuggestion':
+    'No matching suggestion — type the tag directly',
   'write.meta.multiSelect.customPlaceholder': 'Custom value...',
   'write.meta.multiSelect.removeAria': 'Remove {value}',
   'write.meta.preset.empty': 'No preset fields available',
@@ -4097,6 +4245,65 @@ export const enUS = {
   'write.share.shareRevision': 'Share this version',
   'write.share.linkedHere': 'The share link points here',
   'write.share.revoke': 'Revoke share link',
+  'write.timeline.title': 'History',
+  'write.collab.peerOtherTab': '{name} (another tab of yours)',
+  'write.collab.more': '{count} more',
+  'write.collab.editing': 'People editing',
+  'write.timeline.step.coauthor': "{name}'s edits ({count})",
+  'write.collaborators.title': 'Co-authors',
+  'write.collaborators.unknownAuthor': 'A co-author',
+  'write.collaborators.historyNotice':
+    "Co-authors receive the draft's full edit history, including text deleted before they joined.",
+  'write.collaborators.invite': 'Invite link',
+  'write.collaborators.linkCopied': 'Invite link copied',
+  'write.collaborators.linkExpires': 'Link · expires {time} · used {uses}',
+  'write.collaborators.revokeLink': 'Revoke invite link',
+  'write.collaborators.byline': 'Byline',
+  'write.collaborators.remove': 'Remove {name}',
+  'write.collaborators.removed': 'Co-author removed',
+  'write.collaborators.failed': 'Could not create the invite link',
+  'collab.join.title': 'Co-write this article',
+  'collab.join.signInHint': 'Sign in to accept the invitation.',
+  'collab.join.signInWith': 'Continue with {provider}',
+  'collab.join.noProviders': 'No sign-in method is set up on this site.',
+  'collab.join.accepting': 'Opening the document…',
+  'collab.join.invalid': 'This invite link has expired or was revoked.',
+  'collab.join.failed': 'Could not accept the invitation.',
+  'collab.document.editingAs': 'Editing as {name}',
+  'collab.document.offline': 'Offline, changes will sync later',
+  'collab.document.titleLabel': 'Title',
+  'collab.document.rejected':
+    'Your last change was refused; the document was reloaded.',
+  'collab.document.revokedTitle': 'You no longer have access',
+  'collab.document.revokedDescription':
+    'The author removed you from this document. Your earlier edits are kept.',
+  'collab.document.unavailableTitle': 'Document unavailable',
+  'collab.document.unavailableDescription':
+    'Open your invite link again to sign in.',
+  'write.timeline.emptyTitle': 'No history yet',
+  'write.timeline.emptyDescription':
+    'Every step appears here once you save or edit.',
+  'write.timeline.restore': 'Restore this version',
+  'write.timeline.restoreTitle': 'Restore this version?',
+  'write.timeline.restoreDescription':
+    'Restoring is written as a new change; later history is kept.',
+  'write.timeline.restored': 'Restored',
+  'write.timeline.undo': 'Undo this step',
+  'write.timeline.undone': 'Step undone',
+  'write.timeline.failed': 'Action failed',
+  'write.timeline.published': 'Live',
+  'write.timeline.checkpoint.save': 'Saved',
+  'write.timeline.checkpoint.publish': 'Published',
+  'write.timeline.checkpoint.restore': 'Restored',
+  'write.timeline.checkpoint.undo': 'Undone',
+  'write.timeline.checkpoint.import': 'Collaborative editing started',
+  'write.timeline.checkpoint.legacySave': 'Saved elsewhere',
+  'write.timeline.checkpoint.legacy': 'Earlier version',
+  'write.timeline.step.human': 'Your edits ({count})',
+  'write.timeline.step.agent': 'AI: {summary}',
+  'write.timeline.step.restore': 'Restore',
+  'write.timeline.step.undo': 'Undo',
+  'write.timeline.step.other': 'System',
   'write.share.revoked': 'Share link revoked',
   'write.branch.compare': 'Compare',
   'write.branch.history': 'View branch history',
@@ -4280,6 +4487,10 @@ export const enUS = {
   'write.toast.publishedDraftSaved':
     'Changes saved as a draft and not yet applied to the online article',
   'write.toast.unpublishedSaved': 'Unpublished content saved',
+  'write.toast.draftResynced':
+    'Sync was rejected; your content was saved again',
+  'write.toast.draftSyncPending':
+    'The shared document is still loading; try saving again shortly',
   'write.toast.draftSaveFailed': 'Failed to save draft',
   'write.toast.draftTypeMismatch':
     'Draft type does not match current writing page',
@@ -4308,6 +4519,58 @@ export const enUS = {
   'dynamicComponents.refreshAria': 'Refresh catalog',
   'dynamicComponents.searchPlaceholder': 'Search name or URL',
   'dynamicComponents.noMatch': 'No component matches the search',
+  'dynamicComponents.usage.filter.all': 'All',
+  'dynamicComponents.usage.filter.used': 'In use',
+  'dynamicComponents.usage.filter.draftOnly': 'Drafts only',
+  'dynamicComponents.usage.filter.unused': 'Unused',
+  'dynamicComponents.usage.status.used': 'In use · {count}',
+  'dynamicComponents.usage.status.draftOnly': 'Drafts only',
+  'dynamicComponents.usage.status.otherOnly': 'Snippets, topics or moments',
+  'dynamicComponents.usage.status.historyOnly': 'Old revisions only',
+  'dynamicComponents.usage.status.unused': 'Unused',
+  'dynamicComponents.usage.versions': '{count} versions',
+  'dynamicComponents.usage.summary':
+    '{components} components · {files} version files · {total} used · {reclaimable} reclaimable',
+  'dynamicComponents.usage.loading': 'Checking references…',
+  'dynamicComponents.usage.failed': 'Could not check references',
+  'dynamicComponents.cleanup.open': 'Clean up · {size}',
+  'dynamicComponents.cleanup.title': 'Clean up dynamic components',
+  'dynamicComponents.cleanup.subtitle':
+    'Only items no published content uses are listed. The catalog itself does not count. Checked items are safe to delete.',
+  'dynamicComponents.cleanup.group.unusedEntries': 'Unused components',
+  'dynamicComponents.cleanup.group.unusedVersions': 'Old versions nobody uses',
+  'dynamicComponents.cleanup.group.unregisteredFiles':
+    'Unregistered component files',
+  'dynamicComponents.cleanup.group.draftOnly': 'Used only by drafts',
+  'dynamicComponents.cleanup.draftOnlyHint': 'For review only',
+  'dynamicComponents.cleanup.draftWarning':
+    'Draft “{titles}” still references it, so the server keeps the file; delete or edit that draft first',
+  'dynamicComponents.cleanup.oldVersion': 'old version',
+  'dynamicComponents.cleanup.empty': 'Nothing to clean up',
+  'dynamicComponents.cleanup.selected': '{count} selected · {size}',
+  'dynamicComponents.cleanup.run': 'Delete {count}',
+  'dynamicComponents.cleanup.done': 'Deleted {count}',
+  'dynamicComponents.cleanup.restored': '{count} still in use, restored',
+  'dynamicComponents.cleanup.dropped':
+    '{count} became used before confirming and were skipped',
+  'dynamicComponents.cleanup.failed': 'Cleanup failed',
+  'dynamicComponents.timeline.title': 'Versions and usage',
+  'dynamicComponents.timeline.current': 'current',
+  'dynamicComponents.timeline.noUsers': 'Not used',
+  'dynamicComponents.timeline.deleteVersion': 'Delete this version',
+  'dynamicComponents.timeline.republishHint':
+    'This content still uses the old version; republish it to free this version',
+  'dynamicComponents.timeline.historyOnly': 'Only in old revisions',
+  'dynamicComponents.timeline.draft': 'Draft',
+  'dynamicComponents.timeline.live': 'editing',
+  'dynamicComponents.timeline.type.post': 'Post',
+  'dynamicComponents.timeline.type.note': 'Note',
+  'dynamicComponents.timeline.type.page': 'Page',
+  'dynamicComponents.timeline.type.translation': 'Translation',
+  'dynamicComponents.timeline.type.share': 'Share',
+  'dynamicComponents.timeline.type.snippet': 'Snippet',
+  'dynamicComponents.timeline.type.topic': 'Topic',
+  'dynamicComponents.timeline.type.recently': 'Moment',
   'dynamicComponents.empty.title': 'No dynamic components',
   'dynamicComponents.empty.description':
     'Register an ES module, or publish one from the write agent.',
@@ -4393,4 +4656,283 @@ export const enUS = {
   'dynamicNode.outdatedHint':
     "This block uses an older version of the component. The form follows the current version's schema.",
   'dynamicComponents.detail.previousUrls': 'Earlier versions',
+  'drafts.storage.title': 'Draft storage',
+  'drafts.storage.total': 'Drafts use',
+  'drafts.storage.reclaimable': 'Reclaimable',
+  'drafts.storage.revisions': 'Versions',
+  'drafts.storage.crdt': 'Collaboration data',
+  'drafts.storage.updates': 'Pending updates',
+  'drafts.autoCleanup.on': 'Auto cleanup: on',
+  'drafts.autoCleanup.off': 'Auto cleanup: off',
+  'drafts.cleanup.open': 'Free up space',
+  'drafts.summary.title': 'Changes since published',
+  'drafts.summary.freshTitle': 'New draft, not published yet',
+  'drafts.summary.counts':
+    '{changed} changed · {added} added · {removed} removed',
+  'drafts.summary.words': '{delta} words',
+  'drafts.summary.same': 'Same as published',
+  'drafts.summary.otherChanges':
+    'Body text unchanged; edits are in formatting, attributes, title or metadata',
+  'drafts.summary.openCompare': 'Open full comparison',
+  'drafts.summary.more': '{count} more changes',
+  'drafts.summary.kind.added': 'Added',
+  'drafts.summary.kind.changed': 'Changed',
+  'drafts.summary.kind.removed': 'Removed',
+  'drafts.summary.kind.fresh': 'Opening',
+  'drafts.summary.snapshots': '{count} snapshots · {size}',
+  'drafts.summary.compact': 'Clean up',
+  'drafts.summary.viewAll': 'View all',
+  'drafts.summary.back': 'Back to summary',
+  'drafts.overview.suggestions': 'Suggestions',
+  'drafts.overview.B.title': '{count} snapshots older than {days} days',
+  'drafts.overview.B.description':
+    'Keeps the latest and published versions; frees {size}',
+  'drafts.overview.A.title': '{count} drafts match their published version',
+  'drafts.overview.A.description':
+    'Deleting them leaves published content intact; frees {size}',
+  'drafts.overview.E.title': '{count} drafts look like tests',
+  'drafts.overview.E.description': '{samples} and more, idle for {days} days',
+  'drafts.overview.auto.title': 'Auto cleanup is off',
+  'drafts.overview.auto.description':
+    'Turn it on to prune old snapshots on a schedule',
+  'drafts.overview.clean': 'Clean up',
+  'drafts.overview.view': 'Review',
+  'drafts.overview.enable': 'Turn on',
+  'drafts.overview.allClean': 'Nothing to clean up',
+  'drafts.cleanup.test.title': 'Suspected test drafts',
+  'drafts.cleanup.test.description':
+    'Judged by name and idle time: never published, and untitled or named with e2e / test / tmp / demo',
+  'drafts.cleanup.more': '+{count} more',
+  'drafts.relationFilter.ahead': 'Changed',
+  'drafts.relationFilter.fresh': 'New',
+  'drafts.relationFilter.inSync': 'Same as published',
+  'drafts.cleanup.openWithSize': 'Clean up · {size}',
+  'drafts.header.summary':
+    '{total} used · snapshots {revisions} · collab data {crdt} · pending updates {updates}',
+  'drafts.cleanup.title': 'Free up space',
+  'drafts.cleanup.subtitle':
+    'Pick what to clean up. It runs right away and cannot be undone.',
+  'drafts.cleanup.olderThanPrefix': 'Only touch content idle for more than',
+  'drafts.cleanup.olderThanSuffix': '',
+  'drafts.cleanup.days': '{count} days',
+  'drafts.cleanup.count': '{count} items',
+  'drafts.cleanup.inSync.title':
+    'Delete drafts identical to the published version',
+  'drafts.cleanup.inSync.description':
+    'Everything is published; the draft goes with its versions and collaboration data. Editing again starts a new draft from the published version.',
+  'drafts.cleanup.revisions.title': 'Delete old intermediate versions',
+  'drafts.cleanup.revisions.description':
+    'Only old saved snapshots are removed. The current content of each draft stays.',
+  'drafts.cleanup.crdt.title': 'Compact idle collaboration data',
+  'drafts.cleanup.crdt.description':
+    'Documents nobody edited for a while are rebuilt from their current content. Step-by-step undo and history are dropped.',
+  'drafts.cleanup.orphans.title': 'Delete orphaned collaboration data',
+  'drafts.cleanup.orphans.description':
+    'Collaboration data left behind by drafts that no longer exist.',
+  'drafts.cleanup.archived.title': 'Archived drafts',
+  'drafts.cleanup.archived.description':
+    '{count} drafts. They may hold unpublished content; tick the ones to delete.',
+  'drafts.cleanup.keptTitle': 'No cleanup ever touches',
+  'drafts.cleanup.kept.ahead':
+    'The current content of drafts with unpublished changes',
+  'drafts.cleanup.kept.published': 'Every published version',
+  'drafts.cleanup.kept.shared': 'Versions behind share links',
+  'drafts.cleanup.kept.base': 'Each draft base version, used for comparison',
+  'drafts.cleanup.total': 'Frees about {size}',
+  'drafts.cleanup.run': 'Clean up now',
+  'drafts.cleanup.done': 'Freed {size}',
+  'drafts.cleanup.failed': 'Cleanup failed',
+  'drafts.deleteDialog.titleOne': 'Delete the draft “{title}”?',
+  'drafts.deleteDialog.titleMany': 'Delete {count} drafts?',
+  'drafts.deleteDialog.subtitle':
+    'Deleted right away and cannot be undone. Published articles are not affected.',
+  'drafts.deleteDialog.collabWarning':
+    'This has collaboration data. Co-authors editing it now are removed immediately.',
+  'drafts.deleteDialog.removed': 'Will be deleted',
+  'drafts.deleteDialog.removedRevisions':
+    'The draft and the versions only it uses (of {count})',
+  'drafts.deleteDialog.removedCrdt':
+    'Collaboration data, with step-by-step history',
+  'drafts.deleteDialog.kept': 'Kept',
+  'drafts.deleteDialog.keptPublished':
+    'Published versions and publication history',
+  'drafts.deleteDialog.keptShare':
+    'Share links point to the latest published version',
+  'drafts.deleteDialog.keptNothing':
+    'This was never published; nothing remains after deleting',
+  'drafts.deleteDialog.reopen':
+    'Editing again starts a new draft from the published version. Co-authors need a new invite link to rejoin.',
+  'drafts.deleteDialog.confirm': 'Delete and free about {size}',
+  'drafts.relation.inSync': 'Same as published',
+  'drafts.relation.ahead': 'Unpublished changes',
+  'drafts.relation.fresh': 'Never published',
+  'drafts.sort.label': 'Sort',
+  'drafts.sort.updated': 'Recently updated',
+  'drafts.sort.size': 'Largest first',
+  'drafts.row.versions': '{count} versions',
+  'drafts.row.hasCrdt': 'Has collaboration data',
+  'drafts.list.selectedBytes': 'about {size}',
+  'drafts.compact.action': 'Compact history',
+  'drafts.compact.actionWithSize': 'Compact history · free {size}',
+  'drafts.compact.title': 'Compact the history of {count} drafts?',
+  'drafts.compact.description':
+    'Keeps the current content, published and shared versions; deletes intermediate versions and step-by-step history. Cannot be undone. Open editors reload.',
+  'drafts.compact.confirm': 'Compact',
+  'drafts.compact.done': 'Compacted, freed {size}',
+  'drafts.compact.failed': 'Compaction failed',
+  'drafts.toast.deletePartial':
+    'Skipped {count} drafts with a publish task in progress',
+  'drafts.toast.deletedFreed': 'Draft deleted, freed {size}',
+  'drafts.storagePanel.revisionsValue': '{count} · {size}',
+  'drafts.version.doomed': 'Removed on compaction',
+  'write.toast.draftCompacted': 'Draft history was compacted; reloaded',
+  'write.toast.draftDeleted': 'This draft was deleted; changes no longer sync',
+  'settings.schema.mediaProcessingOptions.title': 'Media processing',
+  'settings.schema.mediaProcessingOptions.imageToWebp.title':
+    'Convert images to WebP',
+  'settings.schema.mediaProcessingOptions.imageToWebp.description':
+    'Re-encode uploaded images as WebP. SVG and WebP are kept as-is.',
+  'settings.schema.mediaProcessingOptions.imageQuality.title': 'WebP quality',
+  'settings.schema.mediaProcessingOptions.imageQuality.description':
+    '1–100, default 80. Ignored in lossless mode.',
+  'settings.schema.mediaProcessingOptions.imageEffort.title': 'WebP effort',
+  'settings.schema.mediaProcessingOptions.imageEffort.description':
+    '0–6, default 4. Higher is smaller but slower.',
+  'settings.schema.mediaProcessingOptions.imageLossless.title': 'Lossless WebP',
+  'settings.schema.mediaProcessingOptions.imageLossless.description':
+    'Encode without quality loss; quality is ignored.',
+  'settings.schema.mediaProcessingOptions.imageKeepMetadata.title':
+    'Keep image metadata',
+  'settings.schema.mediaProcessingOptions.imageKeepMetadata.description':
+    'Carry EXIF (camera, lens, capture time, GPS) and the color profile into the WebP. Comment uploads are always stripped.',
+  'settings.schema.mediaProcessingOptions.imageMaxDimension.title':
+    'Max image edge (px)',
+  'settings.schema.mediaProcessingOptions.imageMaxDimension.description':
+    'Scale down so the longest edge fits; empty keeps the size.',
+  'settings.schema.mediaProcessingOptions.videoToWebm.title':
+    'Convert videos to WebM',
+  'settings.schema.mediaProcessingOptions.videoToWebm.description':
+    'Transcode uploaded videos to WebM (VP9 + Opus) with ffmpeg. The upload waits for the transcode, and S3 video uploads are then capped by the video size limit.',
+  'settings.schema.mediaProcessingOptions.videoCrf.title': 'VP9 CRF',
+  'settings.schema.mediaProcessingOptions.videoCrf.description':
+    '0–63, default 32. Lower is better quality and larger.',
+  'settings.schema.mediaProcessingOptions.videoCpuUsed.title':
+    'VP9 speed (cpu-used)',
+  'settings.schema.mediaProcessingOptions.videoCpuUsed.description':
+    '0–8, default 4. Higher is faster with lower quality.',
+  'settings.schema.mediaProcessingOptions.videoAudioBitrate.title':
+    'Opus bitrate (kbps)',
+  'settings.schema.mediaProcessingOptions.videoAudioBitrate.description':
+    'Default 128 kbps.',
+  'settings.schema.mediaProcessingOptions.videoMaxHeight.title':
+    'Max video height (px)',
+  'settings.schema.mediaProcessingOptions.videoMaxHeight.description':
+    'Scale down taller videos; empty keeps the size.',
+  'settings.schema.draftCleanupOptions.title': 'Draft cleanup',
+  'settings.schema.draftCleanupOptions.enable.title':
+    'Clean up drafts automatically',
+  'settings.schema.draftCleanupOptions.enable.description':
+    'Runs daily at 04:30 with the same rules as “Free up space” on the drafts page. Drafts with unpublished changes are never deleted.',
+  'settings.schema.draftCleanupOptions.olderThanDays.title':
+    'Only touch content idle for (days)',
+  'settings.schema.draftCleanupOptions.olderThanDays.description':
+    'Minimum 7. Default 30',
+  'settings.schema.draftCleanupOptions.deleteInSyncDrafts.title':
+    'Delete drafts identical to the published version',
+  'settings.schema.draftCleanupOptions.pruneRevisions.title':
+    'Delete old intermediate versions',
+  'settings.schema.draftCleanupOptions.pruneRevisions.description':
+    'Keeps the current content, published versions, shared versions and each draft base',
+  'settings.schema.draftCleanupOptions.compactCrdt.title':
+    'Compact idle collaboration data',
+  'settings.schema.draftCleanupOptions.compactCrdt.description':
+    'Rebuilds from the current content; step-by-step history is dropped',
+  'settings.schema.draftCleanupOptions.removeOrphanCrdt.title':
+    'Remove orphaned collaboration data',
+  'settings.maintenance.draftCleanup.label': 'Draft storage',
+  'settings.maintenance.draftCleanup.value': '{size} reclaimable',
+  'settings.maintenance.draftCleanup.description':
+    'Delete published drafts, old versions and idle collaboration data',
+  'settings.maintenance.draftCleanup.action': 'Preview and clean up',
+  'drafts.organizer.open': 'Organize drafts',
+  'drafts.organizer.title': 'Organize drafts',
+  'drafts.organizer.description':
+    'Discard drafts and old history for articles you no longer plan to edit.',
+  'drafts.organizer.published': 'Published content',
+  'drafts.organizer.ageFilter': 'Last edited',
+  'drafts.organizer.typeFilter': 'Content type',
+  'drafts.organizer.days': 'Unedited for {count} days',
+  'drafts.organizer.anyTime': 'Any time',
+  'drafts.organizer.includeChanges':
+    'Includes unpublished changes · Unpublished articles are excluded',
+  'drafts.organizer.search': 'Search article titles',
+  'drafts.organizer.oldest': 'Oldest edits first',
+  'drafts.organizer.matching': '{count} matching articles',
+  'drafts.organizer.selected': '{count} articles selected',
+  'drafts.organizer.allSelected': 'All {count} matching articles selected',
+  'drafts.organizer.selectAll': 'Select all {count} articles',
+  'drafts.organizer.clear': 'Clear selection',
+  'drafts.organizer.selectPage': 'Select all articles on this page',
+  'drafts.organizer.selectArticle': 'Select {title}',
+  'drafts.organizer.article': 'Article',
+  'drafts.organizer.history': 'Drafts and history',
+  'drafts.organizer.bytes': 'Reclaimable',
+  'drafts.organizer.lastEdited': 'Last edited',
+  'drafts.organizer.changed': 'Unpublished changes',
+  'drafts.organizer.inSync': 'Same as published',
+  'drafts.organizer.summary': 'Selected for organizing',
+  'drafts.organizer.estimated': 'Estimated space to reclaim',
+  'drafts.organizer.draftCount': '{count} drafts',
+  'drafts.organizer.revisionCount': '{count} historical versions',
+  'drafts.organizer.collab': 'Associated collaboration history is also removed',
+  'drafts.organizer.changedNotice': '{count} articles have unpublished changes',
+  'drafts.organizer.changedHint':
+    'These changes will also be discarded. Review the selection before continuing.',
+  'drafts.organizer.kept': 'Published content and comments stay unchanged',
+  'drafts.organizer.keptShared':
+    'Versions referenced by publication records or shared links are kept.',
+  'drafts.organizer.review': 'Review selection',
+  'drafts.organizer.nextHint': 'Review next; nothing is deleted yet',
+  'drafts.organizer.skipHint':
+    'Articles being edited, being published, or changed since the preview are skipped. Actual reclaimed space is reported after completion.',
+  'drafts.organizer.loadFailed': 'Could not load the preview',
+  'drafts.organizer.empty': 'No matching drafts',
+  'drafts.organizer.emptyHint':
+    'Try a different age, content type, or search term.',
+  'drafts.organizer.confirmTitle': 'Discard drafts for {count} articles?',
+  'drafts.organizer.confirmIntro':
+    'Keep published content and discard all drafts and reclaimable history for these articles.',
+  'drafts.organizer.selection': '{count} articles · {drafts} drafts',
+  'drafts.organizer.removed': 'Will be discarded',
+  'drafts.organizer.irreversible':
+    'These changes differ from the published content and cannot be restored after organizing.',
+  'drafts.organizer.ack':
+    'I no longer need the unpublished changes in these {count} articles',
+  'drafts.organizer.back': 'Back to review',
+  'drafts.organizer.discard': 'Discard {count} drafts',
+  'drafts.organizer.progress': 'Organizing {count}/{total}',
+  'drafts.organizer.mobileSelection':
+    '{count} selected · {changed} with changes',
+  'drafts.organizer.doneTitle': 'Drafts organized.',
+  'drafts.organizer.interrupted': 'Organizing interrupted',
+  'drafts.organizer.doneDescription':
+    '{count} articles organized; {skipped} skipped.',
+  'drafts.organizer.actualBytes': 'Space reclaimed',
+  'drafts.organizer.removedDrafts': 'Drafts discarded',
+  'drafts.organizer.removedRevisions': 'Versions removed',
+  'drafts.organizer.skippedTitle': 'Drafts for {count} articles were kept',
+  'drafts.organizer.skippedHint':
+    'These drafts were not discarded. Review them later before organizing again.',
+  'drafts.organizer.reason.changed': 'Changed since the preview',
+  'drafts.organizer.reason.editing': 'Being edited',
+  'drafts.organizer.reason.publishing': 'Publication queued or running',
+  'drafts.organizer.reason.unconfirmed':
+    'Discarding changes was not acknowledged',
+  'drafts.organizer.reason.failed': 'Could not complete; try again later',
+  'drafts.organizer.unverifiedTitle':
+    '{count} articles are unfinished or have unconfirmed results',
+  'drafts.organizer.unverifiedHint':
+    'The connection was interrupted. Some operations may have completed. Refresh and check the remaining drafts before continuing.',
+  'drafts.organizer.reviewRemaining': 'Review remaining drafts',
+  'drafts.organizer.backDrafts': 'Back to drafts',
 } satisfies Record<TranslationKey, string>

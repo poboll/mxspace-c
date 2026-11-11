@@ -3,13 +3,17 @@ import { forwardRef, Module } from '@nestjs/common'
 import { DraftModule } from '../draft/draft.module'
 import { MembershipModule } from '../membership/membership.module'
 import { NoteModule } from '../note/note.module'
+import { PageModule } from '../page/page.module'
+import { SearchModule } from '../search/search.module'
 import { TopicModule } from '../topic/topic.module'
 import { AiController } from './ai.controller'
 import { AiService } from './ai.service'
 import { AiAgentController } from './ai-agent/ai-agent.controller'
-import { AiAgentChatService } from './ai-agent/ai-agent-chat.service'
+import { AiAgentWsHandler } from './ai-agent/ai-agent.ws'
+import { AiAgentArticleSource } from './ai-agent/ai-agent-article.source'
 import { AiAgentConversationRepository } from './ai-agent/ai-agent-conversation.repository'
 import { AiAgentConversationService } from './ai-agent/ai-agent-conversation.service'
+import { AiAgentRunService } from './ai-agent/ai-agent-run.service'
 import { AiGenerationMetricsRepository } from './ai-generation-metrics/ai-generation-metrics.repository'
 import { AiGenerationMetricsService } from './ai-generation-metrics/ai-generation-metrics.service'
 import { AiImageController } from './ai-image/ai-image.controller'
@@ -55,6 +59,8 @@ import { TtsVoiceCatalogService } from './ai-tts/tts-voice-catalog.service'
 import { AiSlugBackfillService } from './ai-writer/ai-slug-backfill.service'
 import { AiWriterController } from './ai-writer/ai-writer.controller'
 import { AiWriterService } from './ai-writer/ai-writer.service'
+import { LobeHubController } from './lobehub/lobehub.controller'
+import { LobeHubService } from './lobehub/lobehub.service'
 
 @Module({
   imports: [
@@ -63,8 +69,11 @@ import { AiWriterService } from './ai-writer/ai-writer.service'
     DraftModule,
     MembershipModule,
     forwardRef(() => NoteModule),
+    forwardRef(() => PageModule),
+    forwardRef(() => SearchModule),
   ],
   providers: [
+    LobeHubService,
     MultilangGenerationService,
     AiSummaryService,
     AiSummaryRepository,
@@ -98,7 +107,9 @@ import { AiWriterService } from './ai-writer/ai-writer.service'
     TranslationEntryRepository,
     AiTranslationEventHandlerService,
     TranslationEntryService,
-    AiAgentChatService,
+    AiAgentArticleSource,
+    AiAgentRunService,
+    AiAgentWsHandler,
     AiAgentConversationService,
     AiAgentConversationRepository,
     AiTtsService,
@@ -107,6 +118,7 @@ import { AiWriterService } from './ai-writer/ai-writer.service'
     TtsVoiceCatalogService,
   ],
   controllers: [
+    LobeHubController,
     AiController,
     AiImageController,
     AiSummaryController,

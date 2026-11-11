@@ -11,6 +11,10 @@ cp ./apps/core/ecosystem.config.cjs out
 mkdir -p out/src/database
 cp -R ./apps/core/src/database/migrations out/src/database/migrations
 
+# External runtime dependencies must travel with the Linux release. Do not
+# install packages or reuse an older release's shared node_modules in production.
+node scripts/package-caiths-runtime.mjs out
+
 # Build the admin SPA locally and place it under out/admin.
 # The layout contract is: index.html sits at the root of the admin asset dir
 # (out/admin/index.html, out/admin/assets/..., out/admin/js/...), NOT under a dist/ subdir.

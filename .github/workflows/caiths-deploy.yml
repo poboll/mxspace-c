@@ -2,6 +2,11 @@ name: Caiths Safe Deploy
 
 on:
   workflow_dispatch:
+    inputs:
+      validate_only:
+        description: Build and test without production deployment
+        type: boolean
+        default: true
   push:
     branches:
       - master
@@ -46,7 +51,19 @@ jobs:
       - name: Setup Node.js and pnpm
         uses: ./.github/actions/setup-node
         with:
-          node-version: '22.x'
+          node-version: '26.x'
+
+      - name: Deployment recovery regression tests
+        run: python3 -m unittest discover -s scripts/tests -p 'test_caiths_deploy.py' -v
+
+      - name: Migration and API contract gates
+        env:
+          PG_VERIFY_URL: postgres://mx:mx@127.0.0.1:5432/mx_verify
+        run: |
+          PGPASSWORD=mx createdb -h 127.0.0.1 -U mx mx_verify
+          pnpm -C apps/core run lint:migrations
+          pnpm check:controller-response-envelope
+          pnpm -C apps/core exec vitest run test/src/contracts/admin/aggregate-stats-admin.contract.spec.ts
 
       - name: Build bundle
         run: pnpm run bundle
@@ -70,6 +87,7 @@ jobs:
           sh apps/core/zip-asset.sh
           mv release.zip release-linux.zip
           unzip -l release-linux.zip | grep 'src/database/migrations/meta/_journal.json'
+          unzip -l release-linux.zip | grep 'node_modules/loro-crdt/package.json'
 
       - name: Upload release artifact
         uses: actions/upload-artifact@v7
@@ -80,6 +98,7 @@ jobs:
           retention-days: 7
 
       - name: Deploy to 8.218
+        if: ${{ github.ref == 'refs/heads/master' && !inputs.validate_only }}
         env:
           DEPLOY_HOST: ${{ secrets.CAITHS_DEPLOY_HOST }}
           DEPLOY_PORT: ${{ secrets.CAITHS_DEPLOY_PORT }}
@@ -95,5 +114,5 @@ jobs:
           ssh-keyscan -p "$DEPLOY_PORT" "$DEPLOY_HOST" >> ~/.ssh/known_hosts
           remote_zip="/tmp/mx-core-${GITHUB_SHA}.zip"
           scp -P "$DEPLOY_PORT" -i ~/.ssh/caiths_deploy release-linux.zip "${DEPLOY_USER}@${DEPLOY_HOST}:${remote_zip}"
-          scp -P "$DEPLOY_PORT" -i ~/.ssh/caiths_deploy scripts/caiths-safe-deploy.sh "${DEPLOY_USER}@${DEPLOY_HOST}:/root/mx-space/caiths-safe-deploy.sh"
-          ssh -p "$DEPLOY_PORT" -i ~/.ssh/caiths_deploy "${DEPLOY_USER}@${DEPLOY_HOST}" "chmod 700 /root/mx-space/caiths-safe-deploy.sh && /root/mx-space/caiths-safe-deploy.sh '${remote_zip}'"
+          scp -P "$DEPLOY_PORT" -i ~/.ssh/caiths_deploy scripts/caiths-controlled-deploy.sh scripts/caiths-db-snapshot.mjs "${DEPLOY_USER}@${DEPLOY_HOST}:/root/mx-space/"
+          ssh -p "$DEPLOY_PORT" -i ~/.ssh/caiths_deploy "${DEPLOY_USER}@${DEPLOY_HOST}" "chmod 700 /root/mx-space/caiths-controlled-deploy.sh /root/mx-space/caiths-db-snapshot.mjs && /root/mx-space/caiths-controlled-deploy.sh '${remote_zip}'"

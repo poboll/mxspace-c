@@ -24,7 +24,7 @@ RUN node -p "require('./apps/admin/package.json').version" > ./out/admin/version
 
 FROM node:26-alpine AS runner
 
-RUN apk add zip unzip postgresql-client bash fish rsync jq curl openrc tini --no-cache
+RUN apk add zip unzip postgresql-client bash fish rsync jq curl openrc tini ffmpeg --no-cache
 
 # Chromium + fonts/nss for the agent-browser headless fallback used by the
 # Open Graph enrichment provider (fetchMode = "browser"). Alpine's chromium
@@ -47,9 +47,9 @@ COPY --from=builder /app/out .
 
 RUN npm i sharp -g
 RUN npm i sharp
-# Nest 12 WsAdapter loads `ws` at runtime via createRequire(import.meta.url).
+# WsAdapter, sandbox workers and loro-crdt (reads its wasm next to itself) load outside the Vite bundle.
 # The production image only copies the Vite bundle, so install it next to sharp.
-RUN npm i ws@8.21.3
+RUN npm i ws@8.21.3 undici@8.11.2 loro-crdt@1.16.4
 
 COPY --chmod=755 docker-entrypoint.sh .
 COPY docker-browser-watchdog.mjs .

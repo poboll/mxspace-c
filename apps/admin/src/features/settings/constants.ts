@@ -61,6 +61,7 @@ export const aiProviderTypeOptions: Array<{
   labelKey: TranslationKey
   value: AIProviderType
 }> = [
+  { labelKey: 'settings.ai.providerType.lobehub', value: 'lobehub' },
   { labelKey: 'settings.ai.providerType.typesafe', value: 'typesafe' },
   {
     labelKey: 'settings.ai.providerType.openaiCompatible',
@@ -181,6 +182,7 @@ export const oauthProviders: Array<{
 export const fieldTypeLabelKeys: Record<MetaFieldType, TranslationKey> = {
   boolean: 'settings.fieldType.boolean',
   checkbox: 'settings.fieldType.checkbox',
+  language: 'settings.fieldType.language',
   'multi-select': 'settings.fieldType.multiSelect',
   number: 'settings.fieldType.number',
   object: 'settings.fieldType.object',
@@ -211,6 +213,7 @@ export const fieldTypeOptionKeys: Array<{
   { labelKey: 'settings.fieldType.tags', value: 'tags' },
   { labelKey: 'settings.fieldType.boolean', value: 'boolean' },
   { labelKey: 'settings.fieldType.object', value: 'object' },
+  { labelKey: 'settings.fieldType.language', value: 'language' },
 ]
 
 export const scopeOptionKeys: Array<{
@@ -226,4 +229,5 @@ export const typesWithOptions: MetaFieldType[] = [
   'checkbox',
   'multi-select',
   'select',
+  'language',
 ]

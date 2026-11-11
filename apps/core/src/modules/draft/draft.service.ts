@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto'
 
 import { Injectable } from '@nestjs/common'
+import type { OpId } from 'loro-crdt'
 
 import { AppErrorCode, createAppException } from '~/common/errors'
 import { BusinessEvents, EventScope } from '~/constants/business-event.constant'
@@ -14,6 +15,7 @@ import { DraftRefType } from './draft.enum'
 import { DraftRepository } from './draft.repository'
 import type {
   CreateDraftDto,
+  DraftCheckpointDto,
   SetDraftShareDto,
   UpdateDraftDto,
 } from './draft.schema'
@@ -21,9 +23,11 @@ import type {
   ContentDocumentRow,
   ContentPublicationEventRow,
   ContentRevisionRow,
+  CrdtFieldsPatch,
   DocumentShareRow,
   DraftBranchRow,
   DraftBranchView,
+  DraftCardFilter,
   DraftListFilter,
   DraftUpdateEventPayload,
   RevisionComparison,
@@ -32,7 +36,10 @@ import type {
   VersionContext,
   VersionTreeNode,
 } from './draft.types'
+import { DraftCleanupService } from './draft-cleanup.service'
 import { canonicalSnapshot, sameRevisionContent } from './draft-content'
+import { type CheckpointResult, DraftCrdtService } from './draft-crdt.service'
+import { DraftStorageRepository } from './draft-storage.repository'
 
 const projectVersionTree = (
   document: ContentDocumentRow,
@@ -142,6 +149,9 @@ export class DraftService {
     private readonly fileReferenceService: FileReferenceService,
     private readonly databaseService: DatabaseService,
     private readonly eventManager: EventManagerService,
+    private readonly crdtService: DraftCrdtService,
+    private readonly cleanupService: DraftCleanupService,
+    private readonly storageRepository: DraftStorageRepository,
   ) {}
 
   get repository() {
@@ -156,6 +166,10 @@ export class DraftService {
         result.data.map((branch) => this.hydrate(branch)),
       ),
     }
+  }
+
+  listCards(page: number, size: number, filter: DraftCardFilter = {}) {
+    return this.storageRepository.cards(page, size, filter)
   }
 
   count(filter: DraftListFilter = {}) {
@@ -229,6 +243,17 @@ export class DraftService {
       base = created.revision
     }
 
+    if (dto.baseRevisionId || dto.refId) {
+      const workingCopy = await this.crdtService.workingCopyOfDocument(
+        document.id,
+      )
+      if (workingCopy) {
+        return this.legacyView(
+          await this.crdtService.legacyWrite(workingCopy.id, base.id, snapshot),
+        )
+      }
+    }
+
     const created = await this.draftRepository.createBranch(
       document.id,
       base.id,
@@ -257,6 +282,15 @@ export class DraftService {
       throw createAppException(AppErrorCode.DRAFT_NOT_FOUND, { id })
     }
     const snapshot = canonicalSnapshot(document.refType, dto.data)
+    if (await this.crdtService.usesCrdt(id)) {
+      return this.legacyView(
+        await this.crdtService.legacyWrite(
+          id,
+          dto.expectedHeadRevisionId,
+          snapshot,
+        ),
+      )
+    }
     const result = await this.draftRepository.saveBranch(
       id,
       dto.expectedHeadRevisionId,
@@ -288,14 +322,18 @@ export class DraftService {
    * as a failed request — the client still gets the new head in the response.
    */
   private broadcastUpdate(view: DraftBranchView) {
+    this.broadcast(view, view.document)
+  }
+
+  private broadcast(branch: DraftBranchRow, document: ContentDocumentRow) {
     void this.eventManager.emit(
       BusinessEvents.DRAFT_UPDATE,
       {
-        branchId: view.id,
-        documentId: view.documentId,
-        headRevisionId: view.headRevisionId,
-        refId: view.document.refId,
-        refType: view.document.refType,
+        branchId: branch.id,
+        documentId: branch.documentId,
+        headRevisionId: branch.headRevisionId,
+        refId: document.refId,
+        refType: document.refType,
       } satisfies DraftUpdateEventPayload,
       { scope: EventScope.TO_ADMIN },
     )
@@ -304,6 +342,105 @@ export class DraftService {
   async findById(id: string): Promise<DraftBranchView | null> {
     const branch = await this.draftRepository.findBranchById(id)
     return branch ? this.hydrate(branch) : null
+  }
+
+  async mergeArticleFields(
+    refType: DraftRefType,
+    refId: string,
+    typeSpecificData: Record<string, unknown>,
+  ): Promise<void> {
+    if (!Object.keys(typeSpecificData).length) return
+    const document = await this.draftRepository.findDocumentByRef(
+      refType,
+      refId,
+    )
+    if (document) {
+      await this.crdtService.mergeDocumentFields(document.id, typeSpecificData)
+    }
+  }
+
+  async findForEditing(id: string): Promise<DraftBranchView | null> {
+    if (await this.crdtService.usesCrdt(id)) {
+      return this.createCheckpoint(id, 'save')
+    }
+    return this.findById(id)
+  }
+
+  usesCrdt(id: string): Promise<boolean> {
+    return this.crdtService.usesCrdt(id)
+  }
+
+  exportCrdt(id: string, since?: Uint8Array): Promise<Uint8Array> {
+    return this.crdtService.exportUpdates(id, since)
+  }
+
+  async documentIdOf(id: string): Promise<string> {
+    const branch = await this.draftRepository.findBranchById(id)
+    if (!branch) {
+      throw createAppException(AppErrorCode.DRAFT_NOT_FOUND, { id })
+    }
+    return String(branch.documentId)
+  }
+
+  exportCrdtFor(id: string, since?: Uint8Array) {
+    return this.crdtService.exportFor(id, since)
+  }
+
+  async importCrdt(
+    id: string,
+    bytes: Uint8Array,
+    origin?: string,
+    author?: string,
+  ): Promise<void> {
+    const { branch, document } = await this.crdtService.importUpdate(
+      id,
+      bytes,
+      origin,
+      author,
+    )
+    this.broadcast(branch, document)
+  }
+
+  async createCheckpoint(
+    id: string,
+    kind: DraftCheckpointDto['kind'],
+  ): Promise<DraftBranchView> {
+    return this.checkpointView(
+      await this.crdtService.createCheckpoint(id, kind),
+    )
+  }
+
+  updateFields(id: string, patch: CrdtFieldsPatch) {
+    return this.crdtService.updateFields(id, patch)
+  }
+
+  history(id: string) {
+    return this.crdtService.history(id)
+  }
+
+  async restore(id: string, revisionId: string): Promise<DraftBranchView> {
+    return this.checkpointView(await this.crdtService.restore(id, revisionId))
+  }
+
+  async undo(id: string, change: OpId, before: OpId[]) {
+    return this.checkpointView(await this.crdtService.undo(id, change, before))
+  }
+
+  private async checkpointView(
+    result: CheckpointResult,
+  ): Promise<DraftBranchView> {
+    const view = await this.hydrate(result.branch)
+    this.broadcastUpdate(view)
+    return view
+  }
+
+  private async legacyView(result: CheckpointResult): Promise<DraftBranchView> {
+    const view = await this.checkpointView(result)
+    return {
+      ...view,
+      headRevision: result.revision,
+      headRevisionId: result.revision.id,
+    }
   }
 
   async findRevisionById(id: string): Promise<ContentRevisionRow> {
@@ -459,15 +596,8 @@ export class DraftService {
     }
   }
 
-  async delete(id: string): Promise<void> {
-    const branch = await this.draftRepository.archiveBranch(id)
-    if (!branch) {
-      throw createAppException(AppErrorCode.DRAFT_NOT_FOUND, { id })
-    }
-    await this.fileReferenceService.removeReferencesForDocument(
-      id,
-      FileReferenceType.Draft,
-    )
+  delete(id: string) {
+    return this.cleanupService.deleteDraft(id)
   }
 
   async deleteByRef(refType: DraftRefType, refId: string): Promise<void> {
@@ -584,9 +714,15 @@ export class DraftService {
     if (!baseRevision || !headRevision) {
       throw createAppException(AppErrorCode.DRAFT_NOT_FOUND, { id: branch.id })
     }
-    const comparison = publishedRevision
-      ? await this.compare(publishedRevision.id, headRevision.id)
-      : null
+    const [comparison, untouched] = publishedRevision
+      ? await Promise.all([
+          this.compare(publishedRevision.id, headRevision.id),
+          this.crdtService.isUntouchedImport(
+            headRevision,
+            publishedRevision.id,
+          ),
+        ])
+      : [null, false]
     return {
       ...branch,
       baseRevision,
@@ -594,7 +730,7 @@ export class DraftService {
       document,
       headRevision,
       publishedRevision,
-      relationToPublished: comparison?.relation ?? null,
+      relationToPublished: untouched ? 'same' : (comparison?.relation ?? null),
     }
   }
 

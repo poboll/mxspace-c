@@ -1,5 +1,12 @@
-import { createAbortError, throwIfAborted } from '@mx-space/ai'
-import type { IModelRuntime } from '@mx-space/ai/runtime'
+import {
+  canonicalizeLanguageTag,
+  createAbortError,
+  matchLanguage,
+  throwIfAborted,
+  toScriptLevelTag,
+} from '@mx-space/ai'
+import type { IModelRuntime, RuntimeConfig } from '@mx-space/ai/runtime'
+import { runtimeUsageToGenerationUsage } from '@mx-space/ai/runtime'
 import { buildSourceMetaHashes } from '@mx-space/ai/translation'
 import { Inject, Injectable, Logger, type OnModuleInit } from '@nestjs/common'
 import pLimit from 'p-limit'
@@ -44,6 +51,7 @@ import { AiInFlightService } from '../ai-inflight/ai-inflight.service'
 import type { AiStreamEvent } from '../ai-inflight/ai-inflight.types'
 import {
   normalizeTargetLangs,
+  resolveServedLanguage,
   resolveTargetLanguages,
 } from '../ai-language.util'
 import { AiTaskService } from '../ai-task/ai-task.service'
@@ -175,13 +183,9 @@ export class AiTranslationService
       const result = task.result as {
         translations?: Array<{ lang: string }>
       }
-      // result.translations[].lang is already normalized (executeTranslationTask
-      // generates against the normalized language list) — normalize
-      // payload.targetLanguages the same way before diffing, or a target like
-      // zh-CN never matches a successful zh and gets retried for no reason.
       const targetLangs = normalizeTargetLangs(payload.targetLanguages)
       const successLangs = new Set(
-        result?.translations?.map((t) => t.lang) || [],
+        normalizeTargetLangs(result?.translations?.map((t) => t.lang)),
       )
       const failedLangs = targetLangs.filter((lang) => !successLangs.has(lang))
 
@@ -707,15 +711,18 @@ export class AiTranslationService
     existing?: AITranslationModel | null,
     onCost?: (usd: number) => Promise<void>,
     refType?: CollectionRefTypes,
+    onUsage?: RuntimeConfig['onUsage'],
   ) {
-    const { runtime, info } = await this.aiService.getTranslationModelWithInfo()
+    const { runtime, info } =
+      await this.aiService.getTranslationModelWithInfo(onUsage)
     const strategy = this.getStrategy(content.contentFormat)
     const aiConfig = await this.configService.get('ai')
 
     let reviewerRuntime: IModelRuntime | undefined
     if (aiConfig.enableTranslationReview) {
       try {
-        reviewerRuntime = await this.aiService.getTranslationReviewModel()
+        reviewerRuntime =
+          await this.aiService.getTranslationReviewModel(onUsage)
       } catch (error) {
         this.logger.warn(
           `Translation reviewer runtime resolution failed; review disabled for this run: ${error instanceof Error ? error.message : String(error)}`,
@@ -833,9 +840,13 @@ export class AiTranslationService
           : push
 
         let usage: GenerationUsage = emptyUsage()
-        const trackCost = async (usd: number) => {
-          usage = mergeUsage(usage, { cost: { total: usd } })
-          if (onCost) await onCost(usd)
+        const trackUsage: NonNullable<RuntimeConfig['onUsage']> = (
+          reported,
+        ) => {
+          usage = mergeUsage(
+            usage,
+            runtimeUsageToGenerationUsage(reported) ?? { cost: null },
+          )
         }
 
         const translated = await this.translateContentStream(
@@ -845,10 +856,14 @@ export class AiTranslationService
           onToken,
           signal,
           force ? undefined : existing,
-          trackCost,
+          onCost,
           refType,
+          trackUsage,
         )
-        const { sourceLang } = translated
+        const sourceLang =
+          canonicalizeLanguageTag(this.getMetaLang(document)) ??
+          canonicalizeLanguageTag(translated.sourceLang) ??
+          translated.sourceLang
         const hash = this.computeContentHash(content, sourceLang)
 
         // Build source snapshots for future incremental translations
@@ -937,21 +952,32 @@ export class AiTranslationService
     )
     const { type } = article
 
+    const existingLangs = (
+      await this.aiTranslationRepository.listByRefId(articleId)
+    ).map((t) => t.lang)
+    const lang =
+      matchLanguage(targetLang, existingLangs) ?? toScriptLevelTag(targetLang)
+    if (!lang) {
+      throw createAppException(AppErrorCode.AI_INVALID_PARAMETER, {
+        message: `Invalid language tag: ${targetLang}`,
+      })
+    }
+
     // Check whether a valid translation (matching hash) already exists in the database.
     const existingTranslation = await this.findValidTranslation(
       articleId,
-      targetLang,
+      lang,
       document,
     )
 
     if (existingTranslation) {
       this.logger.debug(
-        `Translation cache hit: article=${articleId} lang=${targetLang}`,
+        `Translation cache hit: article=${articleId} lang=${lang}`,
       )
       return this.wrapAsImmediateStream(existingTranslation)
     }
 
-    return this.runTranslationGeneration(articleId, targetLang, type, document)
+    return this.runTranslationGeneration(articleId, lang, type, document)
   }
 
   private emitTranslationEvent(
@@ -1017,6 +1043,12 @@ export class AiTranslationService
     )
 
     return settled.filter((t): t is AITranslationModel => t !== null)
+  }
+
+  async resolveServedLanguage(lang?: string): Promise<string | undefined> {
+    if (!canonicalizeLanguageTag(lang)) return undefined
+    const aiConfig = await this.configService.get('ai')
+    return resolveServedLanguage(lang, aiConfig?.translationTargetLanguages)
   }
 
   async findCachedTitlesByRefIds(
@@ -1211,13 +1243,14 @@ export class AiTranslationService
     targetLang: string,
     options?: { ignoreVisibility?: boolean },
   ): Promise<AITranslationModel | null> {
-    const [{ document }, translation] = await Promise.all([
+    const [{ document }, translations] = await Promise.all([
       this.loadVisibleArticleOrThrow(articleId, {
         ...options,
         blockPremium: true,
       }),
-      this.aiTranslationRepository.findByRefAndLang(articleId, targetLang),
+      this.aiTranslationRepository.listByRefId(articleId),
     ])
+    const translation = this.matchTranslation(translations, targetLang)
 
     if (!translation) {
       return null
@@ -1244,6 +1277,22 @@ export class AiTranslationService
     )
 
     return partial?.translation ?? null
+  }
+
+  private matchTranslation<T extends { lang: string; sourceLang: string }>(
+    translations: T[],
+    targetLang: string,
+  ): T | null {
+    const sourceLang = canonicalizeLanguageTag(translations[0]?.sourceLang)
+    const matched = matchLanguage(targetLang, [
+      ...(sourceLang ? [sourceLang] : []),
+      ...translations.map((t) => t.lang),
+    ])
+    if (!matched || matched === sourceLang) return null
+    return (
+      translations.find((t) => canonicalizeLanguageTag(t.lang) === matched) ??
+      null
+    )
   }
 
   async getValidTranslationsForArticles(
@@ -1357,12 +1406,15 @@ export class AiTranslationService
       return { availableTranslations: [], sourceLang: null, translation: null }
     }
 
-    const sourceLang = translations[0]?.sourceLang ?? null
+    const rawSourceLang = translations[0]?.sourceLang ?? null
+    const sourceLang = canonicalizeLanguageTag(rawSourceLang) ?? rawSourceLang
 
     const snapshot = this.buildSnapshotFromDocument(articleId, document)
     const validLangs: string[] = []
-    const staleLangs: string[] = []
-    let matchedTranslation: AITranslationModel | null = null
+    const servable = new Map<
+      string,
+      { translation: AITranslationModel; stale: boolean }
+    >()
 
     for (const t of translations) {
       const status =
@@ -1370,22 +1422,30 @@ export class AiTranslationService
           snapshot,
           t,
         )
-      if (status === 'valid') {
-        validLangs.push(t.lang)
-        if (targetLang === t.lang) {
-          matchedTranslation = t
-        }
-      } else if (status === 'stale') {
-        staleLangs.push(t.lang)
-        if (targetLang === t.lang) {
-          matchedTranslation =
-            this.lexicalPartialTranslationBuilder.build(
-              this.toArticleContent(document),
-              t,
-            )?.translation ?? null
-        }
+      if (status !== 'valid' && status !== 'stale') continue
+      const lang = canonicalizeLanguageTag(t.lang) ?? t.lang
+      if (status === 'valid') validLangs.push(lang)
+      if (!servable.has(lang)) {
+        servable.set(lang, { translation: t, stale: status === 'stale' })
       }
     }
+
+    const matchedLang = matchLanguage(targetLang, [
+      ...(sourceLang ? [sourceLang] : []),
+      ...servable.keys(),
+    ])
+    const matched =
+      matchedLang && matchedLang !== sourceLang
+        ? servable.get(matchedLang)
+        : undefined
+    const matchedTranslation = !matched
+      ? null
+      : matched.stale
+        ? (this.lexicalPartialTranslationBuilder.build(
+            this.toArticleContent(document),
+            matched.translation,
+          )?.translation ?? null)
+        : matched.translation
 
     return {
       availableTranslations: validLangs,

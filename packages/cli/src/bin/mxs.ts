@@ -1,17 +1,13 @@
 #!/usr/bin/env node
 import { createRequire } from 'node:module'
 
-import {
-  NodeHttpClient,
-  NodeRuntime,
-  NodeServices,
-} from '@effect/platform-node'
+import { NodeRuntime, NodeServices } from '@effect/platform-node'
 import { Effect, Layer } from 'effect'
 import { Command } from 'effect/cli'
+import { FetchHttpClient } from 'effect/http'
 
 import { aiCmd } from '../cli/ai'
 import { authCmd } from '../cli/auth'
-import { authorCmd } from '../cli/author'
 import { categoryCmd } from '../cli/category'
 import { commentCmd } from '../cli/comment'
 import { configCmd } from '../cli/config'
@@ -156,7 +152,6 @@ const rootCmd = Command.make('mxs', {}, () =>
     configCmd,
     fileCmd,
     skillCmd,
-    authorCmd,
     updateCmd,
   ]),
 )
@@ -286,7 +281,7 @@ type HelpTarget =
 // Top-level commands that are leafs (have their own handler) rather than
 // subcommand groups. Bare `mxs <leaf>` MUST execute the handler — only
 // `mxs <leaf> --help` should render our custom group/leaf help page.
-const LEAF_COMMANDS = new Set<string>(['update', 'skill', 'author'])
+const LEAF_COMMANDS = new Set<string>(['update', 'skill'])
 
 const detectHelpTarget = (rest: readonly string[]): HelpTarget => {
   // `rest` includes argv[0] (node) and argv[1] (script).
@@ -333,8 +328,9 @@ export const run = (argv: readonly string[]): Promise<void> => {
 
   // The HttpClient layer used by Api + Auth. NodeServices.layer brings FS,
   // Path, Terminal, ChildProcessSpawner but NOT HttpClient — that's a separate
-  // export.
-  const httpLayer = NodeHttpClient.layerNodeHttp
+  // export. NodeHttpClient.layerNodeHttp aborts large response bodies midway
+  // (`DecodeError: aborted`), so the fetch-based client is used instead.
+  const httpLayer = FetchHttpClient.layer
 
   // Build the flag-aware Api layer. Resolver depends on Api, so we provide
   // its dependencies first and let `Layer.provide` resolve the rest.

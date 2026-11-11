@@ -22,6 +22,10 @@ export const FileUploadSchema = z
   .object({
     type: z.enum(FileTypeEnum).optional(),
     immutable: z.literal('true').optional(),
+    raw: z.literal('true').optional(),
+    assetKey: z.string().trim().min(1).max(100).optional(),
+    draftId: z.string().regex(/^\d+$/).optional(),
+    parentUrl: z.url().optional(),
   })
   .refine((value) => !value.immutable || !value.type || value.type === 'file', {
     error: 'Immutable uploads require type=file',

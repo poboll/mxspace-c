@@ -35,6 +35,22 @@ export interface OrphanFile {
   uploadedBy?: null | string
 }
 
+export interface RemoteFile {
+  byteSize?: null | number
+  createdAt: string
+  fileName: string
+  fileUrl: string
+  id: string
+  inUse: boolean
+  mimeType?: null | string
+  objectKey: string
+}
+
+export interface RemoteListResponse {
+  data: RemoteFile[]
+  pagination: FileListPagination
+}
+
 export interface FileListPagination {
   currentPage: number
   hasNextPage: boolean
@@ -95,13 +111,35 @@ export function getFilesByType(type: FileType) {
   return getJson<FileItem[]>(`/files/${type}`)
 }
 
-export function uploadFile(file: File, type?: FileType, immutable = false) {
+interface UploadQueryOptions {
+  assetKey?: string
+  draftId?: string
+  immutable?: boolean
+  parentUrl?: string
+  raw?: boolean
+  type?: FileType
+}
+
+function buildUploadQuery(options: UploadQueryOptions) {
+  const query = new URLSearchParams()
+  if (options.type) query.set('type', options.type)
+  if (options.immutable) query.set('immutable', 'true')
+  if (options.raw) query.set('raw', 'true')
+  if (options.assetKey) query.set('assetKey', options.assetKey)
+  if (options.draftId) query.set('draftId', options.draftId)
+  if (options.parentUrl) query.set('parentUrl', options.parentUrl)
+  return query
+}
+
+export function uploadFile(
+  file: File,
+  type?: FileType,
+  options: Omit<UploadQueryOptions, 'type'> = {},
+) {
   const formData = new FormData()
   formData.append('file', file)
 
-  const query = new URLSearchParams()
-  if (type) query.set('type', type)
-  if (immutable) query.set('immutable', 'true')
+  const query = buildUploadQuery({ ...options, type })
 
   return requestJson<UploadResponse>(`/files/upload?${query}`, {
     body: formData,
@@ -112,14 +150,17 @@ export function uploadFile(file: File, type?: FileType, immutable = false) {
 export function uploadFileWithProgress(
   file: File,
   options: {
+    draftId?: string
     onProgress: (progress: number) => void
+    raw?: boolean
     type?: FileType
   },
 ) {
   const formData = new FormData()
   formData.append('file', file)
 
-  const query = options.type ? `?type=${encodeURIComponent(options.type)}` : ''
+  const params = buildUploadQuery(options).toString()
+  const query = params ? `?${params}` : ''
 
   return new Promise<UploadResponse>((resolve, reject) => {
     const xhr = new XMLHttpRequest()
@@ -159,6 +200,14 @@ export function renameFile(type: FileType, name: string, newName: string) {
     `/files/${type}/${encodeURIComponent(name)}/rename`,
     { name: newName },
   )
+}
+
+export function getRemoteFiles(page = 1, size = 24) {
+  return getJson<RemoteListResponse>('/files/remote/list', { page, size })
+}
+
+export function deleteRemoteFile(id: string) {
+  return deleteJson<void>(`/files/remote/${encodeURIComponent(id)}`)
 }
 
 export function getOrphanFiles(page = 1, size = 24) {

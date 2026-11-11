@@ -1,6 +1,6 @@
 {
   "name": "@mx-space/cli",
-  "version": "0.21.5",
+  "version": "0.23.0",
   "description": "Command line interface for mx-space (mx-core) — auth, content, configuration",
   "keywords": [
     "mx-space",
@@ -48,7 +48,7 @@
     "access": "public"
   },
   "scripts": {
-    "package": "pnpm -C ../../apps/admin run build:author && tsdown && node scripts/vendor-author.mjs",
+    "package": "tsdown",
     "build": "npm run package",
     "prepackage": "rm -rf dist",
     "clean": "rm -rf dist",
@@ -57,34 +57,37 @@
     "setup:local-bin": "node scripts/setup-local-bin.cjs",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsrs -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@haklex/rich-litexml": "0.54.3",
-    "loro-crdt": "^1.16.4"
+    "@haklex/rich-litexml": "0.64.0",
+    "loro-crdt": "^1.17.1"
   },
   "devDependencies": {
     "@clack/prompts": "^1.8.1",
-    "@effect/platform-node": "4.0.1",
-    "@effect/vitest": "4.0.1",
-    "@haklex/rich-collab-loro": "0.54.3",
-    "@haklex/rich-headless": "0.54.3",
-    "@lexical/headless": "^0.52.0",
+    "@effect/platform-node": "4.0.7",
+    "@effect/vitest": "4.0.7",
+    "@haklex/rich-collab-loro": "0.64.0",
+    "@haklex/rich-headless": "0.64.0",
+    "@lexical/headless": "^0.53.0",
     "@mx-space/api-client": "workspace:*",
     "@mx-space/editor": "workspace:*",
-    "@types/node": "26.6.5",
+    "@types/node": "26.6.6",
     "@types/semver": "7.8.0",
-    "better-auth": "^1.6.27",
-    "effect": "4.0.1",
+    "@types/ws": "8.18.2",
+    "better-auth": "^1.7.16",
+    "effect": "4.0.7",
     "fast-xml-parser": "5.11.2",
     "get-east-asian-width": "^1.7.0",
-    "lexical": "^0.52.0",
+    "lexical": "^0.53.0",
     "minisearch": "^7.2.0",
     "open": "^11.0.4",
+    "ryugi-detect-agent": "^0.1.0",
     "semver": "7.8.5",
-    "tsdown": "0.23.0",
+    "tsdown": "0.23.3",
+    "tsrs": "0.20.1-ts7.1.0-beta",
     "tsx": "^4.23.15",
-    "typescript": "6.0.3",
-    "vitest": "5.0.5"
+    "vitest": "5.0.5",
+    "ws": "8.22.0"
   }
 }

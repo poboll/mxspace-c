@@ -1,6 +1,6 @@
 {
   "name": "@mx-space/editor",
-  "version": "0.4.0",
+  "version": "0.5.1",
   "type": "module",
   "description": "Mx-space business editor contracts and projection utilities built on Lexical",
   "license": "MIT",
@@ -21,6 +21,10 @@
       "types": "./src/core/index.ts",
       "import": "./src/core/index.ts"
     },
+    "./loro": {
+      "types": "./src/loro/index.ts",
+      "import": "./src/loro/index.ts"
+    },
     "./package.json": "./package.json"
   },
   "publishConfig": {
@@ -36,6 +40,10 @@
       "./core": {
         "types": "./dist/core/index.d.ts",
         "import": "./dist/core/index.js"
+      },
+      "./loro": {
+        "types": "./dist/loro/index.d.ts",
+        "import": "./dist/loro/index.js"
       },
       "./package.json": "./package.json"
     }
@@ -57,19 +65,33 @@
     "clean": "rm -rf dist",
     "prepublishOnly": "tsdown",
     "test": "vitest run",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsrs -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@haklex/rich-headless": "0.54.3",
-    "@haklex/rich-litexml": "0.54.3",
-    "@lexical/headless": "^0.52.0",
-    "@lexical/markdown": "^0.52.0",
+    "@haklex/rich-headless": "0.64.0",
+    "@haklex/rich-litexml": "0.64.0",
+    "@lexical/headless": "^0.53.0",
+    "@lexical/markdown": "^0.53.0",
     "@noble/hashes": "2.4.0",
-    "lexical": "^0.52.0"
+    "lexical": "^0.53.0"
   },
   "devDependencies": {
-    "tsdown": "0.23.0",
-    "typescript": "6.0.3",
+    "@haklex/rich-collab-loro": "0.64.0",
+    "loro-crdt": "^1.17.1",
+    "tsdown": "0.23.3",
+    "tsrs": "0.20.1-ts7.1.0-beta",
     "vitest": "5.0.5"
+  },
+  "peerDependencies": {
+    "@haklex/rich-collab-loro": "0.64.0",
+    "loro-crdt": "^1.16.4"
+  },
+  "peerDependenciesMeta": {
+    "@haklex/rich-collab-loro": {
+      "optional": true
+    },
+    "loro-crdt": {
+      "optional": true
+    }
   }
 }
