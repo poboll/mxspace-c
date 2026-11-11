@@ -47,7 +47,7 @@ try {
     console.log('migration_completed')
   } else if (action === 'prepare') {
     if (fs.existsSync(dump) || fs.existsSync(manifestPath)) throw new Error('recovery materials already exist')
-    const meta = JSON.parse(sql(database, "SELECT json_build_object('owner',pg_get_userbyid(datdba),'encoding',pg_encoding_to_char(encoding),'collate',datcollate,'ctype',datctype,'provider',datlocprovider,'user',current_user) FROM pg_database WHERE datname=current_database()"))
+    const meta = JSON.parse(sql(database, "SELECT json_build_object('owner',pg_get_userbyid(datdba),'encoding',pg_encoding_to_char(encoding),'collate',datcollate,'ctype',datctype,'provider',datlocprovider,'user',current_user,'acl',(SELECT json_agg(json_build_object('grantee',CASE WHEN a.grantee=0 THEN NULL ELSE pg_get_userbyid(a.grantee) END,'privilege',a.privilege_type,'grantable',a.is_grantable)) FROM aclexplode(coalesce(d.datacl,acldefault('d',d.datdba))) a)) FROM pg_database d WHERE datname=current_database()"))
     if (meta.provider !== 'c' || meta.owner !== meta.user) throw new Error('unsupported locale provider or non-owner connection')
     const before = counts(database)
     if (before.agentConversations !== 0) throw new Error('nonempty legacy conversations: destructive migration refused')
@@ -60,6 +60,14 @@ try {
     const restoreDatabase = database.slice(0, 30) + '_restore_' + suffix
     const failedDatabase = database.slice(0, 30) + '_failed_' + suffix
     admin(`CREATE DATABASE ${qi(restoreDatabase)} WITH TEMPLATE template0 OWNER ${qi(meta.owner)} ENCODING ${ql(meta.encoding)} LC_COLLATE ${ql(meta.collate)} LC_CTYPE ${ql(meta.ctype)}`)
+    // CREATE DATABASE starts with PUBLIC CONNECT/TEMP; preserve the source's
+    // restricted database grants instead of accidentally broadening access.
+    admin(`REVOKE ALL ON DATABASE ${qi(restoreDatabase)} FROM PUBLIC`)
+    for (const acl of meta.acl) {
+      if (!['CONNECT', 'CREATE', 'TEMPORARY'].includes(acl.privilege)) throw new Error('unexpected database privilege')
+      const role = acl.grantee === null ? 'PUBLIC' : qi(acl.grantee)
+      admin(`GRANT ${acl.privilege} ON DATABASE ${qi(restoreDatabase)} TO ${role}${acl.grantable ? ' WITH GRANT OPTION' : ''}`)
+    }
     run('pg_restore', [...base, '-d', restoreDatabase, '--exit-on-error', '--single-transaction', dump])
     if (JSON.stringify(counts(restoreDatabase)) !== JSON.stringify(before)) throw new Error('restored counts differ')
     fs.writeFileSync(manifestPath, JSON.stringify({ database, restoreDatabase, failedDatabase, digest: digest(), counts: before, restored: true }, null, 2), { mode: 0o600, flag: 'wx' })
