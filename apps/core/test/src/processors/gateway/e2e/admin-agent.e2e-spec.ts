@@ -1,11 +1,12 @@
 import { randomUUID } from 'node:crypto'
 
-import type { AgentRunPayload } from '@mx-space/ai'
+import { type AgentRunPayload, hashAgentValue } from '@mx-space/ai'
 import { redisHelper } from 'test/helper/redis-mock.helper'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 
 import { BusinessEvents } from '~/constants/business-event.constant'
 import { AiAgentWsHandler } from '~/modules/ai/ai-agent/ai-agent.ws'
+import { AiAgentConversationRepository } from '~/modules/ai/ai-agent/ai-agent-conversation.repository'
 import type { AgentRunOptions } from '~/modules/ai/ai-agent/ai-agent-run.service'
 import { AiAgentRunService } from '~/modules/ai/ai-agent/ai-agent-run.service'
 
@@ -23,8 +24,11 @@ type FakeRun = (
 ) => Promise<{ status: 'complete' | 'aborted' | 'failed'; error?: string }>
 
 const runService = { run: vi.fn<FakeRun>() }
+const conversationRepository = {
+  create: vi.fn(async () => ({ id: randomUUID() })),
+}
 
-function runPayload(runId: string): AgentRunPayload {
+async function runPayload(runId: string): Promise<AgentRunPayload> {
   return {
     runId,
     sessionId: `post:${runId}`,
@@ -32,8 +36,10 @@ function runPayload(runId: string): AgentRunPayload {
     model: 'm',
     providerId: 'p',
     system: [],
+    systemHash: await hashAgentValue([]),
     user: 'hello',
     tools: [],
+    toolsHash: await hashAgentValue([]),
     files: [],
   }
 }
@@ -46,12 +52,19 @@ describe('admin gateway agent.* frames', () => {
     const opts = helper.CacheService.getClient().options
     testApp = await createGatewayApp(
       { port: opts.port as number, host: opts.host as string },
-      [AiAgentWsHandler, { provide: AiAgentRunService, useValue: runService }],
+      [
+        AiAgentWsHandler,
+        { provide: AiAgentRunService, useValue: runService },
+        {
+          provide: AiAgentConversationRepository,
+          useValue: conversationRepository,
+        },
+      ],
     )
   })
 
   afterAll(async () => {
-    await testApp.close()
+    await testApp?.close()
   })
 
   async function connectOwner() {
@@ -80,9 +93,14 @@ describe('admin gateway agent.* frames', () => {
     const client = await connectOwner()
     try {
       const ackId = randomUUID()
-      client.send('agent.run', runPayload('r1'), ackId)
+      client.send('agent.run', await runPayload('r1'), ackId)
       expect((await client.waitForAck(ackId)).payload).toMatchObject({
         ok: true,
+      })
+      expect(conversationRepository.create).toHaveBeenCalledWith({
+        sessionId: 'post:r1',
+        model: 'm',
+        providerId: 'p',
       })
 
       const call = await client.waitFor((e) => e.event === 'agent.tool.call')
@@ -121,12 +139,12 @@ describe('admin gateway agent.* frames', () => {
     const client = await connectOwner()
     try {
       const first = randomUUID()
-      client.send('agent.run', runPayload('r2'), first)
+      client.send('agent.run', await runPayload('r2'), first)
       await client.waitForAck(first)
       const second = randomUUID()
       client.send(
         'agent.run',
-        { ...runPayload('r3'), sessionId: 'post:r2' },
+        { ...(await runPayload('r3')), sessionId: 'post:r2' },
         second,
       )
       expect((await client.waitForAck(second)).payload).toMatchObject({
@@ -152,7 +170,7 @@ describe('admin gateway agent.* frames', () => {
     const client = await connectOwner()
     try {
       const ackId = randomUUID()
-      client.send('agent.run', runPayload('r4'), ackId)
+      client.send('agent.run', await runPayload('r4'), ackId)
       await client.waitForAck(ackId)
       client.send('agent.cancel', { runId: 'r4' })
       const done = await client.waitFor((e) => e.event === 'agent.done')
@@ -179,7 +197,7 @@ describe('admin gateway agent.* frames', () => {
     })
     const client = await connectOwner()
     const ackId = randomUUID()
-    client.send('agent.run', runPayload('r5'), ackId)
+    client.send('agent.run', await runPayload('r5'), ackId)
     await client.waitForAck(ackId)
     await client.closeAndWait()
     await ended
@@ -193,7 +211,7 @@ describe('admin gateway agent.* frames', () => {
     const client = await connectOwner()
     try {
       const ackId = randomUUID()
-      client.send('agent.run', runPayload('r6'), ackId)
+      client.send('agent.run', await runPayload('r6'), ackId)
       await client.waitForAck(ackId)
       const done = await client.waitFor((e) => e.event === 'agent.done')
       expect(done.payload).toEqual({
@@ -220,11 +238,19 @@ describe('admin gateway agent.* frames', () => {
     const conversationId = `conv-${randomUUID()}`
     try {
       const a = randomUUID()
-      first.send('agent.run', { ...runPayload('r7'), conversationId }, a)
+      first.send(
+        'agent.run',
+        { ...(await runPayload('r7')), conversationId },
+        a,
+      )
       expect((await first.waitForAck(a)).payload).toMatchObject({ ok: true })
 
       const b = randomUUID()
-      second.send('agent.run', { ...runPayload('r8'), conversationId }, b)
+      second.send(
+        'agent.run',
+        { ...(await runPayload('r8')), conversationId },
+        b,
+      )
       expect((await second.waitForAck(b)).payload).toMatchObject({
         ok: false,
         code: 'AGENT_BUSY',
@@ -233,7 +259,11 @@ describe('admin gateway agent.* frames', () => {
       release()
       await first.waitFor((e) => e.event === 'agent.done')
       const c = randomUUID()
-      second.send('agent.run', { ...runPayload('r9'), conversationId }, c)
+      second.send(
+        'agent.run',
+        { ...(await runPayload('r9')), conversationId },
+        c,
+      )
       expect((await second.waitForAck(c)).payload).toMatchObject({ ok: true })
       await second.waitFor((e) => e.event === 'agent.done')
     } finally {
@@ -257,7 +287,7 @@ describe('admin gateway agent.* frames', () => {
     const client = await connectOwner()
     try {
       const runAck = randomUUID()
-      client.send('agent.run', runPayload('r10'), runAck)
+      client.send('agent.run', await runPayload('r10'), runAck)
       expect((await client.waitForAck(runAck)).payload).toMatchObject({
         ok: true,
       })
