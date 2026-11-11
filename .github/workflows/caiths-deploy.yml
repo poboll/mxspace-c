@@ -56,9 +56,16 @@ jobs:
       - name: Deployment recovery regression tests
         run: python3 -m unittest discover -s scripts/tests -p 'test_caiths_deploy.py' -v
 
+      - name: Install test Redis binary
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y redis-server
+
       - name: Migration and API contract gates
         env:
           PG_VERIFY_URL: postgres://mx:mx@127.0.0.1:5432/mx_verify
+          REDIS_BINARY_PATH: /usr/bin/redis-server
+          REDISMS_SYSTEM_BINARY: /usr/bin/redis-server
         run: |
           PGPASSWORD=mx createdb -h 127.0.0.1 -U mx mx_verify
           pnpm -C apps/core run lint:migrations
